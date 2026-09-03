@@ -99,6 +99,16 @@ ok(html.includes("app.js") && html.includes("api/plan") === false, "index.html l
 const appJs = fs.readFileSync("public/app.js", "utf8");
 ok(appJs.includes("/api/plan"), "app.js calls /api/plan");
 ok(!/catalogOnly\s*:\s*true/.test(appJs), "frontend planning requests do not bypass the text model");
+const photoInputTag = html.match(/<input[^>]*id="photoInput"[^>]*>/)?.[0] || "";
+ok(
+  photoInputTag.includes('accept="image/*"') && !photoInputTag.includes("capture"),
+  "photo input lets the mobile OS offer camera, gallery, and file sources"
+);
+ok(
+  appJs.includes('$("photoButton").addEventListener("click", () => $("photoInput").click())') &&
+    appJs.includes('$("drawerPhotoButton").addEventListener("click", () => $("photoInput").click())'),
+  "chat and pantry photo buttons open the native image picker directly"
+);
 
 function aiEnvelope(plan) {
   return {
