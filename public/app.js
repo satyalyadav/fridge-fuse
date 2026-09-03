@@ -29,8 +29,17 @@ const DEFAULT_STATE = {
     diet: ""
   },
   excludedTitles: [],
-  plan: null
+  plan: null,
+  messages: []
 };
+
+const MAX_EXCLUDED = 20;
+const MAX_MESSAGES = 30;
+
+function addExclusion(title) {
+  if (!title) return;
+  state.excludedTitles = [...new Set([...state.excludedTitles, title])].slice(-MAX_EXCLUDED);
+}
 
 let state = loadState();
 let activeMobileView = state.plan ? "plan" : "chat";
@@ -43,11 +52,18 @@ function loadState() {
       ...structuredClone(DEFAULT_STATE),
       ...stored,
       constraints: { ...DEFAULT_STATE.constraints, ...(stored.constraints || {}) },
-      pantry: Array.isArray(stored.pantry) ? stored.pantry : []
+      pantry: Array.isArray(stored.pantry) ? stored.pantry : [],
+      excludedTitles: Array.isArray(stored.excludedTitles) ? stored.excludedTitles.slice(-MAX_EXCLUDED) : [],
+      messages: Array.isArray(stored.messages) ? stored.messages.slice(-MAX_MESSAGES) : []
     };
   } catch {
     return structuredClone(DEFAULT_STATE);
   }
+}
+
+function recordMessage(entry) {
+  state.messages = [...(state.messages || []), entry].slice(-MAX_MESSAGES);
+  saveState();
 }
 
 function saveState() {
@@ -80,15 +96,17 @@ function toast(message, type = "") {
   window.setTimeout(() => node.remove(), 4200);
 }
 
-function addUserMessage(text) {
+function addUserMessage(text, { record = true } = {}) {
   const article = document.createElement("article");
   article.className = "message user-message";
   article.innerHTML = `<div class="message-copy"><p>${escapeHtml(text)}</p></div>`;
   $("messages").append(article);
   scrollMessages();
+  if (record) recordMessage({ role: "user", text });
 }
 
-function addAssistantMessage(text, supportingText = "") {
+function addAssistantMessage(text, supportingText = "", options = {}) {
+  const { record = true } = typeof options === "boolean" ? { record: options } : options;
   const article = document.createElement("article");
   article.className = "message assistant-message";
   article.innerHTML = `
@@ -99,6 +117,7 @@ function addAssistantMessage(text, supportingText = "") {
     </div>`;
   $("messages").append(article);
   scrollMessages();
+  if (record) recordMessage({ role: "assistant", text, supportingText });
 }
 
 function showThinking() {
@@ -129,7 +148,8 @@ function getIngredientMentions(message) {
   const found = new Set();
 
   for (const ingredient of KNOWN_INGREDIENTS) {
-    if (lower.includes(ingredient)) found.add(ingredient);
+    const pattern = new RegExp(`\\b${ingredient.replaceAll(" ", "\\s+")}\\b`);
+    if (pattern.test(lower)) found.add(ingredient);
   }
   for (const [alias, ingredient] of Object.entries(ALIASES)) {
     if (new RegExp(`\\b${alias.replace(" ", "\\s+")}\\b`).test(lower)) found.add(ingredient);
@@ -137,9 +157,23 @@ function getIngredientMentions(message) {
   return [...found];
 }
 
+function mentionIndex(lower, ingredient) {
+  let idx = lower.indexOf(ingredient);
+  if (idx !== -1) return idx;
+  for (const [alias, target] of Object.entries(ALIASES)) {
+    if (target === ingredient) {
+      idx = lower.indexOf(alias);
+      if (idx !== -1) return idx;
+    }
+  }
+  return -1;
+}
+
 function roughAmount(message, ingredient) {
   const lower = message.toLowerCase();
-  const near = lower.slice(Math.max(0, lower.indexOf(ingredient) - 18), lower.indexOf(ingredient) + ingredient.length + 18);
+  const idx = mentionIndex(lower, ingredient);
+  if (idx === -1) return "some";
+  const near = lower.slice(Math.max(0, idx - 18), idx + ingredient.length + 18);
   if (/half|1\/2/.test(near)) return "about half left";
   if (/almost (?:gone|empty)|little|tiny bit/.test(near)) return "almost gone";
   if (/full|unopened|whole/.test(near)) return "plenty";
@@ -167,15 +201,54 @@ function ingredientNeedsUsing(message, ingredient) {
   return message.split(/[.!?;\n]+/).some((sentence) => item.test(sentence) && urgency.test(sentence));
 }
 
+const CLAUSE_BOUNDARY = /\bbut\b|\bhowever\b|\balthough\b|\bthough\b|\bexcept\b|[,;]+/;
+function clausesOf(text) {
+  return text.split(/[.!?;\n]+/).flatMap((s) => s.split(CLAUSE_BOUNDARY));
+}
+const HAVE_NEG = /\b(dont|doesnt|didnt|never) have\b|\bdo not have\b|\bno longer have\b/i;
+const NEG_WORD = /\b(dont|doesnt|didnt|cant|cannot|not|no|without|lacking|never|neither|nor)\b|\brid of\b/i;
+const AFFIRM_WORD = /\bhave\b|\bve\b|\bgot\b|\bwith\b|\bkeep\b|\bkept\b|\bbought\b|\bonly\b|\bjust\b|\bstill\b/i;
+
+function wordsBefore(text, index, n) {
+  // Normalize apostrophes first so "don't" becomes one "dont" token.
+  return text.slice(Math.max(0, index - 40), index).toLowerCase().replace(/['’]/g, "").split(/[^a-z]+/).filter(Boolean).slice(-n).join(" ");
+}
+// A mention is negated when a negation word sits right before it ("no stove")
+// or a have-negation scopes over it ("don't have a stove and microwave").
+function negatedBefore(clause, matchIndex) {
+  if (NEG_WORD.test(wordsBefore(clause, matchIndex, 3))) return true;
+  return HAVE_NEG.test(clause.slice(0, matchIndex).toLowerCase());
+}
+function affirmedBefore(clause, matchIndex) {
+  return AFFIRM_WORD.test(wordsBefore(clause, matchIndex, 2));
+}
+function clauseMentionIndex(clause, name) {
+  const m = clause.match(new RegExp(`\\b${name.replaceAll(" ", "\\s+")}\\b`, "i"));
+  return m ? m.index : -1;
+}
+
 function parseMessage(message) {
   const lower = message.toLowerCase();
   const ingredients = getIngredientMentions(message);
-  const removal = /\b(?:out of|no more|used up|remove|don't have|do not have)\b/.test(lower);
+  const removalPattern = /\b(?:out of|no more|used up|remov(?:e|ing)|don't have|do not have|dont have|all gone|no (?:more )?left)\b/;
+  const removalTargets = new Set();
+  for (const sentence of message.split(/[.!?;\n]+/)) {
+    if (!removalPattern.test(sentence.toLowerCase())) continue;
+    for (const name of getIngredientMentions(sentence)) {
+      const clause = clausesOf(sentence).find((c) => clauseMentionIndex(c, name) !== -1) || sentence;
+      const idx = clauseMentionIndex(clause, name);
+      // "I have eggs, but I'm out of milk" must only remove milk: an affirmed
+      // mention without its own negation is exempt.
+      if (idx !== -1 && affirmedBefore(clause, idx) && !negatedBefore(clause, idx)) continue;
+      removalTargets.add(name);
+    }
+  }
+  const removal = removalTargets.size > 0;
   const urgency = /\b(?:use|using|used|going bad|expir|wilting|old)\b/.test(lower);
   let pantryChanged = false;
 
   if (removal) {
-    for (const ingredient of ingredients) {
+    for (const ingredient of removalTargets) {
       const before = state.pantry.length;
       state.pantry = state.pantry.filter((item) => item.name !== ingredient);
       pantryChanged ||= before !== state.pantry.length;
@@ -190,23 +263,39 @@ function parseMessage(message) {
   const budget = lower.match(/\$(\d+(?:\.\d{1,2})?)|(\d+(?:\.\d{1,2})?)\s*(?:dollars|bucks)/);
   if (budget) state.constraints.budget = Number(budget[1] || budget[2]);
 
-  const dinners = lower.match(/\b([1-7])\s+(?:easy\s+)?(?:dinners?|meals?|nights?)\b/);
-  if (dinners) state.constraints.dinners = Number(dinners[1]);
+  const NUMBER_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7 };
+  const dinners = lower.match(/\b([1-7]|one|two|three|four|five|six|seven)\s+(?:easy\s+)?(?:dinners?|meals?|nights?)\b/);
+  if (dinners) state.constraints.dinners = NUMBER_WORDS[dinners[1]] ?? Number(dinners[1]);
 
   const time = lower.match(/\b(\d{1,3})\s*(?:minutes?|mins?)\b/);
   if (time) state.constraints.maxTimeMin = Number(time[1]);
 
   const equipment = [];
-  if (lower.includes("microwave")) equipment.push("microwave");
+  if (/\bmicrowave\b/.test(lower)) equipment.push("microwave");
   if (/\b(?:stove|hot plate|burner)\b/.test(lower)) equipment.push("stove");
-  if (lower.includes("oven")) equipment.push("oven");
+  if (/\boven\b/.test(lower)) equipment.push("oven");
   if (lower.includes("air fryer")) equipment.push("air fryer");
-  if (equipment.length && /\b(?:only|just)\b/.test(lower)) state.constraints.equipment = [...new Set(equipment)];
-  else if (equipment.length) state.constraints.equipment = [...new Set([...state.constraints.equipment, ...equipment])];
+  const removedEquipment = equipment.filter((item) =>
+    clausesOf(message).some((clause) => {
+      const idx = clauseMentionIndex(clause, item);
+      return idx !== -1 && negatedBefore(clause, idx);
+    })
+  );
+  const addedEquipment = equipment.filter((item) => !removedEquipment.includes(item));
+  if (removedEquipment.length) {
+    state.constraints.equipment = state.constraints.equipment.filter((item) => !removedEquipment.includes(item));
+    if (!state.constraints.equipment.length) state.constraints.equipment = ["microwave"];
+  }
+  if (addedEquipment.length && /\b(?:only|just)\b/.test(lower)) state.constraints.equipment = [...new Set(addedEquipment)];
+  else if (addedEquipment.length) state.constraints.equipment = [...new Set([...state.constraints.equipment, ...addedEquipment])];
 
-  const dietTerms = ["vegetarian", "vegan", "gluten-free", "dairy-free", "no peanuts", "peanut allergy"];
-  const diets = dietTerms.filter((term) => lower.includes(term));
-  if (diets.length) state.constraints.diet = diets.join(", ");
+  if (/\b(?:no (?:diet|diets|restrictions?)|not (?:vegetarian|vegan|gluten-free|dairy-free)(?: anymore)?|eat (?:everything|anything)|clear (?:my )?diet|regular diet)\b/.test(lower)) {
+    state.constraints.diet = "";
+  } else {
+    const dietTerms = ["vegetarian", "vegan", "gluten-free", "dairy-free", "no peanuts", "peanut allergy"];
+    const diets = dietTerms.filter((term) => lower.includes(term));
+    if (diets.length) state.constraints.diet = diets.join(", ");
+  }
 
   saveState();
   renderPantry();
@@ -219,11 +308,11 @@ async function handleMessage(message) {
 
   addUserMessage(clean);
   $("starterPrompts").hidden = true;
-  const swapMatch = clean.toLowerCase().match(/\bswap\s+(?:dinner|meal)?\s*(one|two|three|1|2|3)\b/);
+  const swapMatch = clean.toLowerCase().match(/\bswap\b.*?\b(one|two|three|four|five|six|seven|first|second|third|fourth|fifth|sixth|seventh|[1-7])\b/);
   if (swapMatch && state.plan?.dinners?.length) {
-    const positions = { one: 0, two: 1, three: 2, 1: 0, 2: 1, 3: 2 };
+    const positions = { one: 0, two: 1, three: 2, four: 3, five: 4, six: 5, seven: 6, first: 0, second: 1, third: 2, fourth: 3, fifth: 4, sixth: 5, seventh: 6, 1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6 };
     const meal = state.plan.dinners[positions[swapMatch[1]]];
-    if (meal) state.excludedTitles = [...new Set([...state.excludedTitles, meal.title])];
+    if (meal) addExclusion(meal.title);
   }
   const parsed = parseMessage(clean);
 
@@ -269,6 +358,14 @@ async function buildPlan(request = "") {
     renderPlan();
     hideThinking();
 
+    if (!result.dinners?.length) {
+      addAssistantMessage(
+        "I couldn't find any recipes for that combination.",
+        result.note || "Try more time, more equipment, or fewer restrictions."
+      );
+      setMobileView("plan");
+      return;
+    }
     const budgetStatus = result.totalCost <= state.constraints.budget
       ? `The checkout total is ${formatMoney(result.totalCost)}, under your ${formatMoney(state.constraints.budget)} limit.`
       : `The cheapest full-package version is ${formatMoney(result.totalCost)}, which is over your ${formatMoney(state.constraints.budget)} limit.`;
@@ -337,7 +434,7 @@ function renderPlan() {
         <div class="meal-day">${dayLabels[index] || `DAY ${index + 1}`}</div>
         <div class="meal-main">
           <h3>${escapeHtml(meal.title)}</h3>
-          <p class="meal-meta">${Number(meal.timeMin) || "—"} min · beginner · ${escapeHtml(state.constraints.equipment[0] || "simple equipment")}</p>
+          <p class="meal-meta">${Number(meal.timeMin) || "—"} min · beginner · ${escapeHtml((meal.equip || []).join(" + ") || state.constraints.equipment[0] || "simple equipment")}</p>
           <p class="meal-reason">${escapeHtml(reason)}</p>
         </div>
         <div class="meal-actions">
@@ -352,15 +449,14 @@ function renderPlan() {
   }).join("");
 
   const shopping = plan.shoppingList || [];
-  $("shoppingList").innerHTML = shopping.map((item, index) => `
-    <label class="receipt-row">
-      <input type="checkbox" aria-label="Mark ${escapeHtml(item.item)} purchased" data-shopping-index="${index}">
+  $("shoppingList").innerHTML = shopping.map((item) => `
+    <div class="receipt-row">
       <span class="receipt-item">
         <strong>${escapeHtml(item.item)}</strong>
         <small>${escapeHtml(item.pack || "1 package")} · ${escapeHtml(titleCase(item.store || "mock store"))}${(item.sharedBy || []).length > 1 ? ` · covers ${item.sharedBy.length} dinners` : ""}</small>
       </span>
       <span class="receipt-price">${formatMoney(Number(item.packPrice || 0) * Number(item.qty || 1))}</span>
-    </label>
+    </div>
   `).join("") + `
     <div class="receipt-total"><span>ESTIMATED TOTAL</span><strong>${formatMoney(plan.totalCost)}</strong></div>`;
 
@@ -430,6 +526,7 @@ function setMobileView(view) {
 }
 
 function loadSamplePantry() {
+  if (state.pantry.length && !window.confirm("Replace your current pantry with the sample mini-fridge?")) return;
   state.pantry = [
     { name: "eggs", amount: "4 left", soon: true },
     { name: "spinach", amount: "half a bag", soon: true },
@@ -555,7 +652,7 @@ $("mealList").addEventListener("click", async (event) => {
   }
 
   if (button.dataset.action === "swap") {
-    state.excludedTitles = [...new Set([...state.excludedTitles, meal.title])];
+    addExclusion(meal.title);
     saveState();
     setMobileView("chat");
     addUserMessage(`Swap ${meal.title}. Keep the same budget and equipment.`);
@@ -583,15 +680,18 @@ $("resetDemoButton").addEventListener("click", () => {
   window.location.reload();
 });
 
-document.querySelector(".avatar-button").addEventListener("click", () => {
-  toast("Profiles are outside this hackathon prototype.");
-});
-
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closePantry();
 });
 
-if (state.plan) {
+if (state.messages?.length) {
+  $("starterPrompts").hidden = true;
+  $("messages").innerHTML = "";
+  for (const entry of state.messages) {
+    if (entry.role === "user") addUserMessage(entry.text, { record: false });
+    else addAssistantMessage(entry.text, entry.supportingText || "", { record: false });
+  }
+} else if (state.plan) {
   $("starterPrompts").hidden = true;
   const firstMessage = document.querySelector(".assistant-message .message-copy");
   firstMessage.innerHTML = "<p>Your last plan and pantry are still here. Tell me what changed.</p><p class=\"message-example\">Try \"lower my budget to $15\" or swap a meal from the plan.</p>";

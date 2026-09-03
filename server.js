@@ -3,6 +3,12 @@
 // calls ASU AIR Voyager (OpenAI-compatible) and serves Tempe 85281 mock prices.
 // Every external call failure is logged AND surfaced to the client.
 
+try {
+  require("dotenv").config();
+} catch {
+  // dotenv is optional — without it, env vars must be exported manually.
+}
+
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
@@ -13,11 +19,60 @@ const AIR_KEY = process.env.VOYAGER_KEY || "";
 const AIR_MODEL = process.env.ASU_AIR_MODEL || "glm-5-3-flash";
 const AIR_VISION_MODEL = process.env.ASU_AIR_VISION_MODEL || "qwen3-vl-32b-instruct";
 
+// Fallback pack price for items outside the mock catalog (e.g. free-form AI
+// output). Named so a made-up price is easy to find and replace with live data.
+const FALLBACK_PACK_PRICE = 3.99;
+const FALLBACK_STORE = "walmart";
+
+function asStringArray(value, fallback = []) {
+  if (!Array.isArray(value)) return fallback;
+  return value.map((item) => String(item)).filter((item) => item.length > 0);
+}
+
+function asDinners(value, fallback = 3) {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(Math.max(1, n), 7);
+}
+
+function asPositiveNumber(value, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  return n;
+}
+
 const app = express();
+app.disable("x-powered-by");
 app.use(express.json({ limit: "12mb" }));
+
+// Basic hygiene headers (no extra dependency). Skips CSP on purpose: the UI
+// loads Google Fonts, and a strict policy would break them on stage.
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("X-DNS-Prefetch-Control", "off");
+  res.setHeader("Permissions-Policy", "microphone=(), geolocation=()");
+  next();
+});
 
 // ---------- failure reporting (user requirement: report API failures) ----------
 const failures = [];
+// Local file backup so history survives restarts. Best-effort on purpose:
+// Netlify functions have an ephemeral filesystem, so a failed write just
+// falls back to the in-memory list + console.error (captured in Netlify logs).
+const FAILURE_LOG_PATH = path.join(__dirname, "failures.log");
+function appendFailureLog(entry) {
+  try {
+    if (fs.existsSync(FAILURE_LOG_PATH) && fs.statSync(FAILURE_LOG_PATH).size > 512 * 1024) {
+      const lines = fs.readFileSync(FAILURE_LOG_PATH, "utf8").split("\n").slice(-200);
+      fs.writeFileSync(FAILURE_LOG_PATH, lines.join("\n"));
+    }
+    fs.appendFileSync(FAILURE_LOG_PATH, JSON.stringify(entry) + "\n");
+  } catch {
+    // Ephemeral/read-only FS (e.g. Netlify) — memory + console carry it.
+  }
+}
 function reportFailure(provider, operation, details) {
   const entry = {
     time: new Date().toISOString(),
@@ -27,6 +82,7 @@ function reportFailure(provider, operation, details) {
   };
   failures.push(entry);
   if (failures.length > 100) failures.shift();
+  appendFailureLog(entry);
   console.error(`[FAIL] ${entry.time} ${provider}/${operation}:`, JSON.stringify(details));
   return entry;
 }
@@ -210,6 +266,26 @@ const RECIPES = [
     ]
   },
   {
+    title: "Black bean salsa rice bowl",
+    needs: ["rice", "black beans", "salsa", "onion"],
+    timeMin: 10, protein: 12, carbs: 62, fiber: 13, equip: ["microwave"],
+    steps: [
+      "Combine cooked rice and drained beans in a microwave-safe bowl.",
+      "Microwave for 90 seconds, stir, and heat until steaming.",
+      "Top with salsa and diced onion."
+    ]
+  },
+  {
+    title: "Marinara veggie pasta cup",
+    needs: ["pasta", "marinara", "onion"],
+    timeMin: 15, protein: 10, carbs: 64, fiber: 7, equip: ["microwave"],
+    steps: [
+      "Put pasta in a large microwave-safe bowl and cover it with water by 1 inch.",
+      "Microwave in 2-minute bursts, stirring each time, until tender. Drain carefully.",
+      "Stir in marinara and diced onion, then heat for 60 seconds."
+    ]
+  },
+  {
     title: "Chicken fried rice",
     needs: ["chicken breast", "rice", "eggs", "soy sauce", "frozen peas", "onion"],
     timeMin: 25, protein: 32, carbs: 48, fiber: 4, equip: ["stove"],
@@ -265,20 +341,34 @@ function localPlan({
   pantry = [], dinners = 3, maxTimeMin = 30, equipment = ["stove"], diet = "",
   budget = 30, useSoon = [], exclude = []
 }) {
-  const have = new Set(pantry.map((item) => String(item).toLowerCase()));
-  const urgent = new Set(useSoon.map((item) => String(item).toLowerCase()));
-  const excluded = new Set(exclude.map((title) => String(title).toLowerCase()));
-  const dietQ = diet.toLowerCase();
+  const pantryList = asStringArray(pantry, []);
+  const useSoonList = asStringArray(useSoon, []);
+  const excludeList = asStringArray(exclude, []);
+  const equipmentList = asStringArray(equipment, []).map((item) => item.toLowerCase());
+  const safeEquipment = equipmentList.length ? equipmentList : ["stove"];
+  const safeDinners = asDinners(dinners, 3);
+  const safeMaxTime = asPositiveNumber(maxTimeMin, 30) || 30;
+  const safeBudget = asPositiveNumber(budget, 30);
+  const dietStr = typeof diet === "string" ? diet : "";
+
+  const have = new Set(pantryList.map((item) => item.toLowerCase()));
+  const urgent = new Set(useSoonList.map((item) => item.toLowerCase()));
+  const excluded = new Set(excludeList.map((title) => title.toLowerCase()));
+  const dietQ = dietStr.toLowerCase();
   const blockedForVegetarian = new Set(["chicken breast", "ground beef"]);
   const blockedForVegan = new Set([...blockedForVegetarian, "eggs", "milk", "cheddar", "butter", "yogurt"]);
+  const blockedForDairyFree = new Set(["milk", "cheddar", "butter", "yogurt"]);
+  const blockedForGlutenFree = new Set(["bread", "pasta", "tortillas"]);
 
   const candidates = RECIPES
-    .filter((recipe) => recipe.timeMin <= maxTimeMin)
-    .filter((recipe) => recipe.equip.every((item) => equipment.includes(item)))
+    .filter((recipe) => recipe.timeMin <= safeMaxTime)
+    .filter((recipe) => recipe.equip.every((item) => safeEquipment.includes(item)))
     .filter((recipe) => !excluded.has(recipe.title.toLowerCase()))
     .filter((recipe) => {
       if (dietQ.includes("vegan") && recipe.needs.some((item) => blockedForVegan.has(item))) return false;
       if (dietQ.includes("vegetarian") && recipe.needs.some((item) => blockedForVegetarian.has(item))) return false;
+      if (dietQ.includes("dairy-free") && recipe.needs.some((item) => blockedForDairyFree.has(item))) return false;
+      if ((dietQ.includes("gluten-free") || dietQ.includes("gluten free")) && recipe.needs.some((item) => blockedForGlutenFree.has(item))) return false;
       if (dietQ.includes("peanut") && recipe.needs.includes("peanut butter")) return false;
       return true;
     })
@@ -288,16 +378,25 @@ function localPlan({
       urgentUsed: recipe.needs.filter((item) => urgent.has(item))
     }));
 
-  const planSize = Math.min(Math.max(1, dinners), candidates.length);
+  const planSize = Math.min(safeDinners, candidates.length);
+  if (candidates.length === 0 || planSize === 0) {
+    return {
+      dinners: [],
+      shoppingList: [],
+      leftovers: [],
+      totalCost: 0,
+      note: "No recipes match that combination of equipment, time, and diet. Try more time, more equipment, or fewer restrictions.",
+    };
+  }
   const possiblePlans = combinations(candidates, planSize);
   const evaluated = possiblePlans.map((group) => {
     const missingReferences = group.flatMap((item) => item.missing);
     const uniqueMissing = [...new Set(missingReferences)];
-    const cost = uniqueMissing.reduce((total, item) => total + (cheapestPack(item)?.packPrice || 3.99), 0);
+    const cost = uniqueMissing.reduce((total, item) => total + (cheapestPack(item)?.packPrice ?? FALLBACK_PACK_PRICE), 0);
     const urgentCovered = new Set(group.flatMap((item) => item.urgentUsed)).size;
     const sharedUses = missingReferences.length - uniqueMissing.length;
     const pantryUses = group.reduce((total, item) => total + item.recipe.needs.length - item.missing.length, 0);
-    const overBudget = Math.max(0, cost - budget);
+    const overBudget = Math.max(0, cost - safeBudget);
     const score = overBudget * 1000 + uniqueMissing.length * 18 + cost - urgentCovered * 60 - sharedUses * 12 - pantryUses * 4;
     return { group, cost, score };
   }).sort((a, b) => a.score - b.score);
@@ -309,7 +408,7 @@ function localPlan({
   for (const selection of picked) {
     for (const missing of selection.missing) {
       if (!listMap[missing]) {
-        const pack = cheapestPack(missing) || { item: missing, store: "walmart", pack: "1 package", packPrice: 3.99 };
+        const pack = cheapestPack(missing) || { item: missing, store: FALLBACK_STORE, pack: "1 package", packPrice: FALLBACK_PACK_PRICE, estimated: true };
         listMap[missing] = { ...pack, qty: 1, sharedBy: [] };
       }
       if (!listMap[missing].sharedBy.includes(selection.recipe.title)) {
@@ -332,6 +431,7 @@ function localPlan({
       protein: selection.recipe.protein,
       carbs: selection.recipe.carbs,
       fiber: selection.recipe.fiber,
+      equip: selection.recipe.equip,
       usesPantry: selection.recipe.needs.filter((item) => !selection.missing.includes(item)),
       needs: selection.missing,
       steps: selection.recipe.steps
@@ -348,7 +448,7 @@ function groundShoppingPlan(plan) {
     for (const item of dinner.needs || []) {
       const name = String(item).toLowerCase();
       if (!listMap[name]) {
-        const pack = cheapestPack(name) || { item: name, store: "walmart", pack: "1 package", packPrice: 3.99 };
+        const pack = cheapestPack(name) || { item: name, store: FALLBACK_STORE, pack: "1 package", packPrice: FALLBACK_PACK_PRICE, estimated: true };
         listMap[name] = { ...pack, qty: 1, sharedBy: [] };
       }
       if (!listMap[name].sharedBy.includes(dinner.title)) listMap[name].sharedBy.push(dinner.title);
@@ -444,12 +544,32 @@ app.post("/api/plan", async (req, res) => {
   const { pantry = [], budget = 30, dinners = 3, maxTimeMin = 30,
           equipment = ["stove"], diet = "", useSoon = [], request = "", exclude = [],
           catalogOnly = false } = req.body || {};
+  if (pantry !== undefined && !Array.isArray(pantry)) {
+    return res.status(400).json({ ok: false, failure: { message: "pantry must be an array of strings" } });
+  }
+  if (equipment !== undefined && !Array.isArray(equipment)) {
+    return res.status(400).json({ ok: false, failure: { message: "equipment must be an array of strings" } });
+  }
+  if (useSoon !== undefined && !Array.isArray(useSoon)) {
+    return res.status(400).json({ ok: false, failure: { message: "useSoon must be an array of strings" } });
+  }
+  if (exclude !== undefined && !Array.isArray(exclude)) {
+    return res.status(400).json({ ok: false, failure: { message: "exclude must be an array of meal titles" } });
+  }
+  if (diet !== undefined && typeof diet !== "string") {
+    return res.status(400).json({ ok: false, failure: { message: "diet must be a string" } });
+  }
+  const safePantry = asStringArray(pantry, []);
+  const safeEquipment = asStringArray(equipment, ["stove"]);
+  const safeUseSoon = asStringArray(useSoon, []);
+  const safeExclude = asStringArray(exclude, []);
+  const safeDiet = typeof diet === "string" ? diet : "";
   if (catalogOnly) {
     return res.json({
       ok: true,
       mock: true,
       model: "grounded-catalog",
-      ...localPlan({ pantry, dinners, maxTimeMin, equipment, diet, budget, useSoon, exclude })
+      ...localPlan({ pantry: safePantry, dinners, maxTimeMin, equipment: safeEquipment, diet: safeDiet, budget, useSoon: safeUseSoon, exclude: safeExclude })
     });
   }
   const priceCtx = PRICES.items.map((i) => {
@@ -462,16 +582,16 @@ app.post("/api/plan", async (req, res) => {
 "shoppingList":[{"item":"...","pack":"...","packPrice":0.0,"store":"...","qty":1,"sharedBy":["..."]}],
 "totalCost":0.0,"notes":"..."}
 Rules: plan EXACTLY the requested number of dinners. The user is a freshman cook, so give concrete beginner-safe steps and only use the listed equipment. First use food marked use-soon, then minimize unique purchases, stay within budget, and keep cooking easy. Prefer purchases shared across dinners. Put only missing ingredients in needs; pantry items cost $0. The server will ground final prices against its catalog. Respect time, equipment, and dietary restrictions. Price context: ${priceCtx}.` },
-    { role: "user", content: `Pantry: ${pantry.join(", ") || "(empty)"}. Use soon: ${useSoon.join(", ") || "none"}. Budget total $${budget} for the whole plan. Dinners: ${dinners}. Max ${maxTimeMin} min each. Equipment: ${equipment.join(", ")}. Diet/notes: ${diet || "none"}. Avoid these meals: ${exclude.join(", ") || "none"}. Latest request: ${request || "build the best plan"}.` },
+    { role: "user", content: `Pantry: ${safePantry.join(", ") || "(empty)"}. Use soon: ${safeUseSoon.join(", ") || "none"}. Budget total $${budget} for the whole plan. Dinners: ${dinners}. Max ${maxTimeMin} min each. Equipment: ${safeEquipment.join(", ")}. Diet/notes: ${safeDiet || "none"}. Avoid these meals: ${safeExclude.join(", ") || "none"}. Latest request: ${request || "build the best plan"}.` },
   ], { maxTokens: 1800 });
   if (!out.ok) {
     if (out.mock) {
-      return res.json({ ok: true, mock: true, ...localPlan({ pantry, dinners, maxTimeMin, equipment, diet, budget, useSoon, exclude }),
+      return res.json({ ok: true, mock: true, ...localPlan({ pantry: safePantry, dinners, maxTimeMin, equipment: safeEquipment, diet: safeDiet, budget, useSoon: safeUseSoon, exclude: safeExclude }),
         note: "MOCK planner — set VOYAGER_KEY for live AI planning." });
     }
     // Live AI failed: still return local plan AND the failure (demo never dies, failure visible).
     return res.json({ ok: true, fallback: true, failure: out.failure,
-      ...localPlan({ pantry, dinners, maxTimeMin, equipment, diet, budget, useSoon, exclude }) });
+      ...localPlan({ pantry: safePantry, dinners, maxTimeMin, equipment: safeEquipment, diet: safeDiet, budget, useSoon: safeUseSoon, exclude: safeExclude }) });
   }
   try {
     const content = out.data.choices[0].message.content;
@@ -480,7 +600,7 @@ Rules: plan EXACTLY the requested number of dinners. The user is a freshman cook
   } catch (e) {
     res.json({ ok: true, fallback: true,
       failure: reportFailure("asu-air", "plan-parse", { status: "parse-error", message: e.message }),
-      ...localPlan({ pantry, dinners, maxTimeMin, equipment, diet, budget, useSoon, exclude }) });
+      ...localPlan({ pantry: safePantry, dinners, maxTimeMin, equipment: safeEquipment, diet: safeDiet, budget, useSoon: safeUseSoon, exclude: safeExclude }) });
   }
 });
 
@@ -543,7 +663,7 @@ app.get("/api/failures", (req, res) => res.json({ ok: true, count: failures.leng
 
 // Exported for in-process tests (require without side effects).
 module.exports = {
-  app, localPlan, cheapestPack, findPrice, extractJson, PRICES, STORES,
+  app, localPlan, cheapestPack, findPrice, extractJson, PRICES, STORES, RECIPES,
   reportFailure, resolveDataPath, AIR_MODEL, AIR_VISION_MODEL
 };
 

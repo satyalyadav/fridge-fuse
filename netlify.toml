@@ -1,4 +1,5 @@
 [build]
+  # Static site (public/) — tests gate the deploy so a broken planner never ships.
   command = "npm test"
   publish = "public"
   functions = "netlify/functions"
@@ -8,7 +9,7 @@
 
 [functions]
   node_bundler = "esbuild"
-  external_node_modules = ["express", "serverless-http"]
+  external_node_modules = ["express", "serverless-http", "dotenv"]
   included_files = ["data/prices.json"]
 
 [[redirects]]
@@ -16,3 +17,14 @@
   to = "/.netlify/functions/api/:splat"
   status = 200
   force = true
+
+# Same hygiene headers as the Express middleware (static assets are served
+# by Netlify directly and never hit the function).
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "no-referrer"
+    X-DNS-Prefetch-Control = "off"
+    Permissions-Policy = "microphone=(), geolocation=()"

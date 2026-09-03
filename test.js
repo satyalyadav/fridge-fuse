@@ -42,8 +42,23 @@ ok(shared.length >= 1, `shared packs merged (${shared.map((s) => s.item).join(",
 const veg = localPlan({ pantry: [], dinners: 2, maxTimeMin: 30, equipment: ["stove"], diet: "vegetarian" });
 ok(veg.dinners.every((d) => !d.needs.includes("chicken breast")), "vegetarian filter respected");
 
-const micro = localPlan({ pantry: [], dinners: 2, maxTimeMin: 30, equipment: ["microwave"], diet: "" });
-ok(micro.dinners.every((d) => d.timeMin <= 30), "time filter respected");
+const micro = localPlan({ pantry: [], dinners: 2, maxTimeMin: 10, equipment: ["microwave", "stove"], diet: "" });
+ok(micro.dinners.length === 2 && micro.dinners.every((d) => d.timeMin <= 10), "time filter respected (max 10 min)");
+ok(require("./server.js").RECIPES.some((r) => r.timeMin > 10), "bank contains slower recipes so the time test is meaningful");
+ok(cheapestPack("spinach") && cheapestPack("spinach").packPrice > 0, "spinach is in the mock catalog");
+
+const vegan = localPlan({ pantry: [], dinners: 2, maxTimeMin: 30, equipment: ["microwave"], diet: "vegan" });
+ok(vegan.dinners.length === 2, "vegan microwave plan is non-empty");
+ok(vegan.dinners.every((d) => !d.needs.concat(d.usesPantry || []).some((x) => ["eggs", "milk", "cheddar"].includes(x))), "vegan filter respected");
+
+const dairyFree = localPlan({ pantry: [], dinners: 2, maxTimeMin: 30, equipment: ["microwave", "stove"], diet: "dairy-free" });
+ok(dairyFree.dinners.every((d) => !d.needs.concat(d.usesPantry || []).some((x) => ["milk", "cheddar"].includes(x))), "dairy-free filter respected");
+
+const glutenFree = localPlan({ pantry: [], dinners: 2, maxTimeMin: 30, equipment: ["microwave", "stove"], diet: "gluten-free" });
+ok(glutenFree.dinners.every((d) => !d.needs.concat(d.usesPantry || []).some((x) => ["bread", "pasta", "tortillas"].includes(x))), "gluten-free filter respected");
+
+ok(localPlan({ pantry: [], dinners: 2.5, maxTimeMin: 30, equipment: ["microwave", "stove"], diet: "" }).dinners.length >= 1, "fractional dinners do not crash");
+ok(localPlan({ pantry: null, dinners: 2, maxTimeMin: 30, equipment: null, diet: "" }).dinners.length >= 0, "null pantry/equipment do not throw");
 
 const dorm = localPlan({
   pantry: ["eggs", "spinach", "rice", "tortillas", "cheddar", "salsa"],

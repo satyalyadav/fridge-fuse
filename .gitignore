@@ -5,5 +5,6 @@ node_modules/
 .netlify/
 deno.lock
 server.log
+failures.log
 .DS_Store
 npm-debug.log*
