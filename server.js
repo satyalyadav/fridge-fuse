@@ -75,8 +75,8 @@ app.use((req, res, next) => {
 // ---------- failure reporting (user requirement: report API failures) ----------
 const failures = [];
 // Local file backup so history survives restarts. Best-effort on purpose:
-// Netlify functions have an ephemeral filesystem, so a failed write just
-// falls back to the in-memory list + console.error (captured in Netlify logs).
+// serverless functions have an ephemeral filesystem, so a failed write just
+// falls back to the in-memory list + console.error (captured in provider logs).
 const FAILURE_LOG_PATH = path.join(__dirname, "failures.log");
 function appendFailureLog(entry) {
   try {
@@ -1362,8 +1362,11 @@ app.get("/api/prices/live", async (req, res) => {
 
 app.get("/api/failures", (req, res) => res.json({ ok: true, count: failures.length, failures: failures.slice(-20) }));
 
-// Exported for in-process tests (require without side effects).
-module.exports = {
+// Export the Express app itself so Vercel can detect this file as an Express
+// deployment. Attach the named helpers as properties so the in-process tests
+// and the Netlify wrapper can keep using the existing module API.
+module.exports = app;
+Object.assign(module.exports, {
   app, localPlan, cheapestPack, findPrice, extractJson, PRICES, STORES, RECIPES,
   RECIPE_SOURCES, buildPlanSystemPrompt, reportFailure, resolveDataPath, AIR_MODEL, AIR_VISION_MODEL
   reportFailure, resolveDataPath, handlePlanRequest, handleVisionRequest, normalizeVisionResult,
@@ -1371,7 +1374,7 @@ module.exports = {
   haversineMiles, isValidCoordinate, resolveCatalogItem, normalizeCartItems, optimizeCart,
   describeLocation, reverseGeocode, handleGeoDescribe, geocodePostalCode, handleGeoPostal,
   STORE_DATA, BRANCHES, DEFAULT_ORIGIN, ITEM_ALIASES
-};
+});
 
 if (require.main === module) {
   // 0.0.0.0 so a phone on the same WiFi can reach the demo.

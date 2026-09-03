@@ -10,7 +10,7 @@ Live demo: [fridgefuse.netlify.app](https://fridgefuse.netlify.app)
 
 ## Prerequisites
 
-- Node.js 20+ (`netlify.toml` pins `NODE_VERSION = "20"`) and npm
+- Node.js 20+ (`package.json` pins the runtime family) and npm
 - git
 
 Check with `node --version` / `npm --version`.
@@ -204,21 +204,54 @@ prices and does not present them as live store quotes.
 - `npm test` fails: make sure you ran `npm install` first and did not edit `data/prices.json`.
 - Phone on same WiFi can't reach demo: server binds `0.0.0.0`, use your laptop's LAN IP, e.g. `http://192.168.1.x:3000`.
 
-## Deploy to Netlify
+## Deploy to Vercel
 
-The repository includes a Netlify Function wrapper for the Express API and a
-redirect that keeps the browser-facing `/api/*` URLs unchanged. Netlify serves
-the static interface from `public/`. `netlify.toml` `included_files` ships both
-`data/prices.json` and `data/recipe-sources.json` so the function can read them
-at runtime.
+The repository is configured as an Express deployment. Vercel serves the
+interface from `public/` and runs the Express API from `server.js`, so the
+browser-facing `/api/*` URLs stay the same. `npm test` runs during each build,
+and both local catalog files are included with the function.
+
+### Option 1: import the GitHub repository
+
+1. Open [vercel.com/new](https://vercel.com/new) and import
+   `satyalyadav/fridge-fuse`.
+2. Leave the root directory as `/` and the framework preset as `Express`.
+3. Add the environment variables below under Settings > Environment Variables.
+4. Deploy. Vercel will create a preview URL first, then production when you
+   merge or deploy the production branch.
+
+### Option 2: deploy from the terminal
 
 ```bash
-npx netlify-cli deploy --prod
+npx vercel@latest login
+npx vercel@latest link
+npx vercel@latest env add VOYAGER_KEY
+npx vercel@latest env add ASU_AIR_BASE_URL
+npx vercel@latest env add ASU_AIR_MODEL
+npx vercel@latest env add ASU_AIR_VISION_MODEL
+npx vercel@latest env add ASU_AIR_VISION_VERIFY_MODEL
+npx vercel@latest --prod
 ```
 
-Set `VOYAGER_KEY`, `ASU_AIR_BASE_URL`, `ASU_AIR_MODEL`, and
-`ASU_AIR_VISION_MODEL` under Site settings > Environment variables to enable
-live planning and photo recognition. `ASU_AIR_VISION_VERIFY_MODEL` is optional
-and defaults to `ASU_AIR_MODEL`. Use `llama4-scout-17b` for
-`ASU_AIR_MODEL`. Without the key, the app keeps working in deterministic demo
-mode.
+When prompted for an environment, add the variables to `production`. You can
+skip `VOYAGER_KEY` while testing. The deployed app then uses deterministic
+mock planning and photo responses.
+
+Set these values to enable live AI:
+
+```text
+VOYAGER_KEY=your-asu-air-key
+ASU_AIR_BASE_URL=https://openai.rc.asu.edu/v1
+ASU_AIR_MODEL=llama4-scout-17b
+ASU_AIR_VISION_MODEL=qwen3-vl-32b-instruct
+ASU_AIR_VISION_VERIFY_MODEL=llama4-scout-17b
+```
+
+After deployment, check `https://your-project.vercel.app/api/health` and open
+the project URL in a browser. Confirm the sample mini-fridge flow, photo
+review, Shop tab, and browser-location prompt on the preview before switching
+the domain from Netlify. Vercel Functions have an ephemeral filesystem, so
+`/api/failures` is an in-memory/log view and is not durable storage.
+
+The existing `netlify.toml` and Netlify Function wrapper remain in the repo, so
+Netlify can still deploy the same commit if needed.

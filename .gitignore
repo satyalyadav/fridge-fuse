@@ -3,6 +3,7 @@ node_modules/
 .env.*
 !.env.example
 .netlify/
+.vercel/
 deno.lock
 server.log
 failures.log
