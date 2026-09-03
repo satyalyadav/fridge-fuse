@@ -103,10 +103,8 @@ const vercelFunction = vercelConfig.functions?.["server.js"] || {};
 ok(vercelConfig.framework === "express", "Vercel uses the Express framework preset");
 ok(vercelConfig.buildCommand === "npm test", "Vercel runs the contract checks during builds");
 ok(
-  Array.isArray(vercelFunction.includeFiles) &&
-    vercelFunction.includeFiles.includes("data/prices.json") &&
-    vercelFunction.includeFiles.includes("data/stores.json"),
-  "Vercel bundles both catalog data files with the API"
+  vercelFunction.includeFiles === "data/*.json",
+  "Vercel bundles the catalog JSON files with the API"
 );
 ok(/geolocation=\(self\)/.test(JSON.stringify(vercelConfig)), "Vercel allows browser geolocation");
 ok(typeof vercelServer === "function" && vercelServer === vercelServer.app, "Vercel receives the Express app export");

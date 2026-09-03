@@ -6,7 +6,7 @@ FridgeFuse is a chat-first meal planner for a freshman cooking in a dorm. It
 turns a rough pantry, a grocery limit, and limited equipment into three simple
 dinners, one full-package shopping list, and a view of what will remain.
 
-Live demo: [fridgefuse.netlify.app](https://fridgefuse.netlify.app)
+Live deployment: Vercel will provide the project URL after the first deploy.
 
 ## Prerequisites
 
@@ -233,8 +233,8 @@ ASU_AIR_VISION_VERIFY_MODEL=llama4-scout-17b
 After deployment, check `https://your-project.vercel.app/api/health` and open
 the project URL in a browser. Confirm the sample mini-fridge flow, photo
 review, Shop tab, and browser-location prompt on the preview before switching
-the domain from Netlify. Vercel Functions have an ephemeral filesystem, so
+to the production URL. Vercel Functions have an ephemeral filesystem, so
 `/api/failures` is an in-memory/log view and is not durable storage.
 
-The existing `netlify.toml` and Netlify Function wrapper remain in the repo, so
-Netlify can still deploy the same commit if needed.
+The default `vercel.app` URL is enough for a live app. You do not need to buy
+or connect a custom domain.
