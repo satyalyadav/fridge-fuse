@@ -99,7 +99,13 @@ function extractJson(content) {
 }
 
 // ---------- mock price DB (Tempe 85281, dev-harvested mock) ----------
-const PRICES = JSON.parse(fs.readFileSync(path.join(__dirname, "data", "prices.json"), "utf8"));
+function resolveDataPath(runtimeDir = __dirname, taskRoot = process.env.LAMBDA_TASK_ROOT, exists = fs.existsSync) {
+  const candidates = [path.join(runtimeDir, "data", "prices.json")];
+  if (taskRoot) candidates.push(path.join(taskRoot, "data", "prices.json"));
+  return candidates.find((candidate) => exists(candidate)) || candidates[0];
+}
+
+const PRICES = JSON.parse(fs.readFileSync(resolveDataPath(), "utf8"));
 const STORES = Object.keys(PRICES.stores);
 
 function findPrice(itemName) {
@@ -538,7 +544,7 @@ app.get("/api/failures", (req, res) => res.json({ ok: true, count: failures.leng
 // Exported for in-process tests (require without side effects).
 module.exports = {
   app, localPlan, cheapestPack, findPrice, extractJson, PRICES, STORES,
-  reportFailure, AIR_MODEL, AIR_VISION_MODEL
+  reportFailure, resolveDataPath, AIR_MODEL, AIR_VISION_MODEL
 };
 
 if (require.main === module) {

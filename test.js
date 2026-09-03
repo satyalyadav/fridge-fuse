@@ -3,7 +3,7 @@
 const assert = require("assert");
 const {
   localPlan, cheapestPack, findPrice, extractJson, PRICES,
-  AIR_MODEL, AIR_VISION_MODEL
+  AIR_MODEL, AIR_VISION_MODEL, resolveDataPath
 } = require("./server.js");
 
 let n = 0;
@@ -12,6 +12,11 @@ const ok = (cond, msg) => { n++; assert(cond, msg); console.log(`ok ${n} - ${msg
 ok(PRICES.zip === "85281", "prices scoped to 85281");
 ok(PRICES.items.length >= 20, `price DB has ${PRICES.items.length} items`);
 ok(Object.keys(PRICES.stores).length === 4, "4 stores");
+ok(
+  typeof resolveDataPath === "function" &&
+    resolveDataPath("/var/task/netlify/functions", "/var/task", (candidate) => candidate === "/var/task/data/prices.json") === "/var/task/data/prices.json",
+  "price data resolves from the Netlify task root"
+);
 ok(AIR_VISION_MODEL === "qwen3-vl-32b-instruct", "photo requests use the dedicated vision model");
 ok(AIR_VISION_MODEL !== AIR_MODEL, "text and photo requests do not silently share a model");
 
