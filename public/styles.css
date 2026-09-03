@@ -665,6 +665,7 @@ body[data-view="grocery"] .grocery-panel { display: block; }
   border-radius: 12px;
   background: var(--tape);
 }
+.location-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .location-bar button {
   flex: 0 0 auto;
   padding: 8px 12px;

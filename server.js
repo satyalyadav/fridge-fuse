@@ -329,18 +329,16 @@ function describeLocation(lat, lng) {
 const NOMINATIM_MIN_INTERVAL_MS = 1100; // their policy allows ~1 request/second
 let lastNominatimAt = 0;
 
-async function reverseGeocode(lat, lng) {
+// Shared plumbing for every Nominatim call: the policy throttle, the required
+// User-Agent, a timeout, and the same failure reporting as other externals.
+async function nominatimRequest(operation, query) {
   const wait = NOMINATIM_MIN_INTERVAL_MS - (Date.now() - lastNominatimAt);
   if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
   lastNominatimAt = Date.now();
-  // 3 decimals is ~110m: enough for a neighbourhood name, coarser than the fix.
-  const roundedLat = Number(lat).toFixed(3);
-  const roundedLng = Number(lng).toFixed(3);
-  const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=14&lat=${roundedLat}&lon=${roundedLng}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 6000);
   try {
-    const response = await fetch(url, {
+    const response = await fetch(`https://nominatim.openstreetmap.org/${query}`, {
       signal: controller.signal,
       headers: {
         "User-Agent": "FridgeFuse/0.1 (ASU AIR Spark Challenge student prototype)",
@@ -350,12 +348,30 @@ async function reverseGeocode(lat, lng) {
     });
     const text = await response.text();
     if (!response.ok) {
-      return { ok: false, failure: reportFailure("nominatim", "reverse", {
-        status: response.status, message: `Reverse geocode failed: HTTP ${response.status}`,
+      return { ok: false, failure: reportFailure("nominatim", operation, {
+        status: response.status, message: `Nominatim ${operation} failed: HTTP ${response.status}`,
         responseSnippet: text.slice(0, 200),
       }) };
     }
-    const data = JSON.parse(text);
+    return { ok: true, data: JSON.parse(text) };
+  } catch (e) {
+    return { ok: false, failure: reportFailure("nominatim", operation, {
+      status: e.name === "AbortError" ? "timeout" : "network-error",
+      message: `Nominatim ${operation} failed: ${e.message}`,
+    }) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function reverseGeocode(lat, lng) {
+  // 3 decimals is ~110m: enough for a neighbourhood name, coarser than the fix.
+  const roundedLat = Number(lat).toFixed(3);
+  const roundedLng = Number(lng).toFixed(3);
+  const result = await nominatimRequest("reverse", `reverse?format=jsonv2&zoom=14&lat=${roundedLat}&lon=${roundedLng}`);
+  if (!result.ok) return result;
+  try {
+    const data = result.data;
     const a = data.address || {};
     const locality = a.neighbourhood || a.suburb || a.city || a.town || a.village || a.hamlet || a.county;
     const parts = [locality, a.state_code || a.state, a.postcode].filter(Boolean);
@@ -368,12 +384,34 @@ async function reverseGeocode(lat, lng) {
     return { ok: true, placeName, precisionNote: "rounded to ~110 m before lookup" };
   } catch (e) {
     return { ok: false, failure: reportFailure("nominatim", "reverse", {
-      status: e.name === "AbortError" ? "timeout" : "network-error",
-      message: `Reverse geocode failed: ${e.message}`,
+      status: "parse-error", message: `Reverse geocode returned unusable JSON: ${e.message}`,
     }) };
-  } finally {
-    clearTimeout(timer);
   }
+}
+
+// The postal-code counterpart: turns a ZIP into a point to measure from, for a
+// user who would rather type five digits than share a live GPS fix. This is the
+// network path only — the catalog's own ZIP is short-circuited by the route
+// before it ever gets here.
+async function geocodePostalCode(postalCode) {
+  const zip = String(postalCode ?? "").trim();
+  if (!/^\d{5}$/.test(zip)) {
+    return { ok: false, failure: { message: "Enter a five-digit ZIP code." } };
+  }
+  const result = await nominatimRequest("postalcode", `search?format=jsonv2&country=us&limit=1&postalcode=${zip}`);
+  if (!result.ok) return result;
+  const hit = Array.isArray(result.data) ? result.data[0] : null;
+  const lat = Number(hit?.lat);
+  const lng = Number(hit?.lon);
+  if (!isValidCoordinate(lat, lng)) {
+    return { ok: false, failure: reportFailure("nominatim", "postalcode", {
+      status: "not-found", message: `No US location found for ZIP ${zip}.`,
+    }) };
+  }
+  return {
+    ok: true, lat, lng, source: "nominatim", lookupUsed: true,
+    label: (hit.display_name || `ZIP ${zip}`).split(",").slice(0, 2).join(",").trim(),
+  };
 }
 
 function optimizeCart({ items = [], lat, lng, maxDistanceMi } = {}) {
@@ -1174,6 +1212,40 @@ async function handleGeoDescribe(req, res, { geocode = reverseGeocode } = {}) {
 
 app.post("/api/geo/describe", handleGeoDescribe);
 
+// Resolves a saved profile ZIP into a point to shop from. The catalog's own ZIP
+// resolves locally; any other ZIP needs the same consent as a place-name lookup.
+async function handleGeoPostal(req, res, { geocode = geocodePostalCode } = {}) {
+  const body = req.body || {};
+  const zip = String(body.postalCode ?? "").trim();
+  if (!/^\d{5}$/.test(zip)) {
+    return res.status(400).json({ ok: false, failure: { message: "Enter a five-digit ZIP code." } });
+  }
+  // The catalog's own ZIP is already a known point, so it resolves with no
+  // third-party call and no consent question at all.
+  if (zip === String(STORE_DATA.zip)) {
+    return res.json({
+      ok: true, resolved: true,
+      lat: DEFAULT_ORIGIN.lat, lng: DEFAULT_ORIGIN.lng,
+      label: DEFAULT_ORIGIN.label, source: "local-store-data", lookupUsed: false,
+    });
+  }
+  if (body.allowLookup !== true) {
+    return res.json({
+      ok: true,
+      resolved: false,
+      needsConsent: true,
+      note: `Finding ZIP ${zip} needs a lookup outside this app. ZIP ${STORE_DATA.zip} resolves without one.`,
+    });
+  }
+  const result = await geocode(zip);
+  if (!result.ok) {
+    return res.json({ ok: false, resolved: false, failure: result.failure });
+  }
+  return res.json({ ok: true, resolved: true, ...result });
+}
+
+app.post("/api/geo/postal", handleGeoPostal);
+
 // Prices a basket at every nearby branch and ranks them cheapest-first.
 app.post("/api/grocery/optimize", (req, res) => {
   const body = req.body || {};
@@ -1253,7 +1325,7 @@ module.exports = {
   reportFailure, resolveDataPath, handlePlanRequest, handleVisionRequest, normalizeVisionResult,
   DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL,
   haversineMiles, isValidCoordinate, resolveCatalogItem, normalizeCartItems, optimizeCart,
-  describeLocation, reverseGeocode, handleGeoDescribe,
+  describeLocation, reverseGeocode, handleGeoDescribe, geocodePostalCode, handleGeoPostal,
   STORE_DATA, BRANCHES, DEFAULT_ORIGIN, ITEM_ALIASES
 };
 

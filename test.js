@@ -4,7 +4,7 @@ const assert = require("assert");
 const {
   localPlan, cheapestPack, findPrice, extractJson, PRICES,
   DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL, resolveDataPath,
-  handlePlanRequest, handleVisionRequest, normalizeVisionResult,
+  handlePlanRequest, handleVisionRequest, normalizeVisionResult, handleGeoPostal,
   haversineMiles, isValidCoordinate, resolveCatalogItem, optimizeCart,
   describeLocation, handleGeoDescribe,
   STORE_DATA, BRANCHES, DEFAULT_ORIGIN, ITEM_ALIASES
@@ -231,6 +231,54 @@ async function runGeoConsentChecks() {
   ok((await callGeo({ lat: 999, lng: "x" }, fakeGeocode)).status === 400, "invalid coordinates are rejected with 400");
 }
 
+// The profile's saved ZIP is the non-geolocation way into the Shop tab.
+async function runPostalCodeChecks() {
+  async function callPostal(body, geocode) {
+    let payload = null;
+    let status = 200;
+    const res = {
+      status(code) { status = code; return this; },
+      json(value) { payload = value; return this; },
+    };
+    await handleGeoPostal({ body }, res, geocode ? { geocode } : undefined);
+    return { status, payload };
+  }
+
+  let postalCalls = 0;
+  const fakePostal = async (zip) => {
+    postalCalls++;
+    return { ok: true, lat: 41.88, lng: -87.63, label: `ZIP ${zip}`, source: "nominatim", lookupUsed: true };
+  };
+
+  // The catalog's own ZIP must resolve with no third-party call at all.
+  const local = await callPostal({ postalCode: STORE_DATA.zip }, fakePostal);
+  ok(local.payload.resolved && local.payload.lat === DEFAULT_ORIGIN.lat, "the catalog ZIP resolves to the store-data origin");
+  ok(postalCalls === 0, "the catalog ZIP never triggers a third-party lookup");
+  ok(local.payload.source === "local-store-data" && local.payload.lookupUsed === false, "the catalog ZIP reports itself as locally resolved");
+
+  const foreignNoConsent = await callPostal({ postalCode: "60601" }, fakePostal);
+  ok(foreignNoConsent.payload.needsConsent === true && postalCalls === 0, "a ZIP outside the catalog asks for consent before any lookup");
+  ok(foreignNoConsent.payload.resolved === false, "an unconsented ZIP is not silently resolved");
+
+  for (const value of [false, "true", 1, null]) {
+    await callPostal({ postalCode: "60601", allowLookup: value }, fakePostal);
+  }
+  ok(postalCalls === 0, "only a literal true unlocks the ZIP lookup");
+
+  const consented = await callPostal({ postalCode: "60601", allowLookup: true }, fakePostal);
+  ok(postalCalls === 1 && consented.payload.resolved === true, "explicit consent resolves a ZIP outside the catalog");
+
+  for (const bad of ["", "abc", "1234", "123456", "8528a", null, undefined]) {
+    ok((await callPostal({ postalCode: bad }, fakePostal)).status === 400, `malformed ZIP ${JSON.stringify(bad)} is rejected with 400`);
+  }
+
+  const failed = await callPostal({ postalCode: "60601", allowLookup: true }, async () => ({ ok: false, failure: { message: "down" } }));
+  ok(failed.payload.ok === false && failed.payload.resolved === false, "a failed ZIP lookup reports rather than inventing a location");
+
+  ok(/useProfileZipButton/.test(appJs) && html.includes('id="useProfileZipButton"'), "the Shop tab exposes the saved ZIP as a location source");
+  ok(/allowLookup:\s*state\.allowPlaceLookup === true/.test(appJs), "the client never asserts consent it does not have");
+}
+
 ok(/allowPlaceLookup:\s*null/.test(appJs), "the client defaults to never sending coordinates");
 ok(html.includes('id="lookupConsent"'), "the consent disclaimer exists in the markup");
 ok(/nominatim/i.test(serverSrc) && !/nominatim/i.test(appJs), "the third-party call is proxied by the server, not the browser");
@@ -418,6 +466,7 @@ async function runRouteChecks() {
   ok(/MAX_VISION_IMAGE_EDGE\s*=\s*1024/.test(updatedAppJs) && /resizeImageForVision\(file\)/.test(updatedAppJs), "frontend caps large vision uploads at the tested 1024-pixel edge");
 
   await runGeoConsentChecks();
+  await runPostalCodeChecks();
 
   console.log(`\nALL ${n} CHECKS PASSED`);
 }

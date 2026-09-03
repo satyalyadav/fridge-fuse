@@ -114,9 +114,20 @@ actually costs, with distance and a per-item breakdown.
 1. Open **Shop** and add items (`eggs, milk, cheese`), or pull the missing
    ingredients straight from the current meal plan.
 2. Adjust quantities; the list is saved on the device like the pantry.
-3. Choose “Use my location,” or skip it and let distances run from ASU Tempe.
+3. Choose “Use my location,” press **Shop near &lt;ZIP&gt;** to use the ZIP saved in
+   your profile, or skip both and let distances run from the catalog origin.
 4. Compare — stores that stock the whole list rank first, then price, then
    distance. The cheapest is flagged and the saving is spelled out.
+
+### Shopping from a saved ZIP
+
+The profile drawer already stores an optional ZIP code. The Shop tab uses it as a
+second way to set the point distances are measured from, for anyone who would
+rather not share a live GPS fix. The catalog's own ZIP (`data/stores.json`
+`zip`) resolves straight to the stored origin — no network call and no consent
+question, because that point is already in the data. Any other ZIP needs the
+same third-party lookup, and the same consent, as a place name; declining leaves
+the ZIP unresolved rather than guessing at it.
 
 This path is fully deterministic: no model call, no third-party location service,
 no API key. Store branches live in `data/stores.json` and inherit their chain's
@@ -161,6 +172,8 @@ stands and the failure is logged like any other external call.
 - `POST /api/grocery/optimize {items,lat,lng}` ranks stores by what the basket costs.
 - `POST /api/geo/describe {lat,lng,allowLookup}` names a location; the third-party
   lookup runs only when `allowLookup` is exactly `true`.
+- `POST /api/geo/postal {postalCode,allowLookup}` resolves a ZIP to a point to
+  shop from; the catalog's own ZIP resolves locally without any lookup.
 - `GET /api/failures` returns recent external-service failures.
 
 Mock prices are development estimates. The interface labels them as mock Tempe
