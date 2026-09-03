@@ -345,8 +345,7 @@ async function buildPlan(request = "") {
         equipment: state.constraints.equipment,
         diet: state.constraints.diet,
         request,
-        exclude: state.excludedTitles,
-        catalogOnly: true
+        exclude: state.excludedTitles
       })
     });
     if (!response.ok) throw new Error(`Planning returned HTTP ${response.status}`);

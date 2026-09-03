@@ -23,7 +23,7 @@ cd fridge-fuse
 npm install
 ```
 
-Optional — live AI mode (photo recognition + AI planning):
+Optional, live AI mode for photo recognition and meal planning:
 
 ```bash
 cp .env.example .env
@@ -31,7 +31,8 @@ cp .env.example .env
 
 Then edit `.env` and set `VOYAGER_KEY` to your ASU AIR (Voyager) API key.
 `ASU_AIR_BASE_URL`, `ASU_AIR_MODEL`, and `ASU_AIR_VISION_MODEL` already have
-working defaults — leave them unless told otherwise.
+working defaults. Text planning uses `llama4-scout-17b`, while photo recognition
+uses `qwen3-vl-32b-instruct`.
 
 Without `VOYAGER_KEY` the app runs in deterministic MOCK demo mode using the
 grounded Tempe 85281 catalog in `data/prices.json`. This is expected and fine
@@ -68,7 +69,12 @@ their food, budget, time, and equipment in one message or add a fridge photo.
 FridgeFuse keeps a rough pantry in local browser storage and renders the evolving
 plan beside the chat.
 
-The stable stage path uses the grounded mock catalog so it responds immediately:
+With `VOYAGER_KEY` configured, the planning flow sends the pantry, constraints,
+and latest request to ASU AIR. Voyager creates the dinners and cooking steps.
+The server replaces its shopping prices with packages from the local Tempe 85281
+catalog before returning the plan.
+
+The demo flow is:
 
 1. Choose “Try a sample mini-fridge.”
 2. See three microwave-safe dinners with use-soon food scheduled first.
@@ -77,9 +83,11 @@ The stable stage path uses the grounded mock catalog so it responds immediately:
 5. Swap a meal without resetting the pantry or budget.
 6. Open the pantry to edit rough amounts or mark another item “use soon.”
 
-ASU AIR remains available for photo recognition. The text demo uses deterministic
-constraint extraction and a catalog optimizer so a slow model cannot stall the
-stage presentation.
+Without `VOYAGER_KEY`, planning and photo recognition use deterministic mock
+responses. If a live planning call fails, the server returns a local plan so the
+demo can continue. If Voyager returns malformed plan JSON, the server asks the
+model to repair it once. A failed repair is reported to the interface instead of
+silently replacing the response with a local plan.
 
 ## API
 
@@ -96,6 +104,7 @@ prices and does not present them as live store quotes.
 
 - `EADDRINUSE :::3000`: something already uses port 3000 — run `PORT=4000 npm start`.
 - `key=MISSING (mock mode)`: normal without `VOYAGER_KEY`. Add it to `.env` and restart for live AI.
+- Slow live plans: check `/api/health` and confirm `airModel` is `llama4-scout-17b`.
 - `npm test` fails: make sure you ran `npm install` first and did not edit `data/prices.json`.
 - Phone on same WiFi can't reach demo: server binds `0.0.0.0`, use your laptop's LAN IP, e.g. `http://192.168.1.x:3000`.
 
@@ -109,5 +118,8 @@ the static interface from `public/`.
 npx netlify-cli deploy --prod
 ```
 
-Set `VOYAGER_KEY` under Site settings > Environment variables to enable live
-photo recognition. Without it, the app keeps working in deterministic demo mode.
+Set `VOYAGER_KEY`, `ASU_AIR_BASE_URL`, `ASU_AIR_MODEL`, and
+`ASU_AIR_VISION_MODEL` under Site settings > Environment variables to enable
+live planning and photo recognition. Use `llama4-scout-17b` for
+`ASU_AIR_MODEL`. Without the key, the app keeps working in deterministic demo
+mode.

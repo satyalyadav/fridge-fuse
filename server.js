@@ -16,7 +16,8 @@ const path = require("path");
 const PORT = process.env.PORT || 3000;
 const AIR_BASE = (process.env.ASU_AIR_BASE_URL || "https://openai.rc.asu.edu/v1").replace(/\/$/, "");
 const AIR_KEY = process.env.VOYAGER_KEY || "";
-const AIR_MODEL = process.env.ASU_AIR_MODEL || "glm-5-3-flash";
+const DEFAULT_AIR_MODEL = "llama4-scout-17b";
+const AIR_MODEL = process.env.ASU_AIR_MODEL || DEFAULT_AIR_MODEL;
 const AIR_VISION_MODEL = process.env.ASU_AIR_VISION_MODEL || "qwen3-vl-32b-instruct";
 
 // Fallback pack price for items outside the mock catalog (e.g. free-form AI
@@ -466,6 +467,39 @@ function groundShoppingPlan(plan) {
   };
 }
 
+function parseAiPlan(content, expectedDinners) {
+  const plan = extractJson(String(content || ""));
+  if (!plan || typeof plan !== "object" || !Array.isArray(plan.dinners)) {
+    throw new Error("AI plan must contain a dinners array");
+  }
+  if (plan.dinners.length !== expectedDinners) {
+    throw new Error(`AI plan returned ${plan.dinners.length} dinners; expected ${expectedDinners}`);
+  }
+  for (const [index, dinner] of plan.dinners.entries()) {
+    if (!dinner || typeof dinner !== "object") throw new Error(`Dinner ${index + 1} must be an object`);
+    if (typeof dinner.title !== "string" || !dinner.title.trim()) throw new Error(`Dinner ${index + 1} needs a title`);
+    if (!Number.isFinite(Number(dinner.timeMin))) throw new Error(`Dinner ${index + 1} needs a numeric timeMin`);
+    for (const field of ["usesPantry", "needs", "steps"]) {
+      if (!Array.isArray(dinner[field])) throw new Error(`Dinner ${index + 1} needs a ${field} array`);
+    }
+    if (dinner.steps.length === 0) throw new Error(`Dinner ${index + 1} needs at least one cooking step`);
+  }
+  return plan;
+}
+
+async function repairAiPlan(chat, content, expectedDinners, initialError, requirements) {
+  return chat([
+    {
+      role: "system",
+      content: `Repair a malformed FridgeFuse meal-plan response. Reply ONLY with valid JSON containing exactly ${expectedDinners} dinners. Each dinner must have a non-empty title, numeric timeMin, and arrays named usesPantry, needs, and steps. Preserve the original meal ideas when possible. Do not add commentary or Markdown fences.`
+    },
+    {
+      role: "user",
+      content: `Original requirements:\n${requirements}\n\nValidation problem: ${initialError.message}\n\nMalformed response:\n${String(content || "").slice(0, 12000)}`
+    }
+  ], { maxTokens: 1800 });
+}
+
 // ---------- routes ----------
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -540,7 +574,7 @@ app.post("/api/vision", async (req, res) => {
   }
 });
 
-app.post("/api/plan", async (req, res) => {
+async function handlePlanRequest(req, res, { chat = airChat } = {}) {
   const { pantry = [], budget = 30, dinners = 3, maxTimeMin = 30,
           equipment = ["stove"], diet = "", useSoon = [], request = "", exclude = [],
           catalogOnly = false } = req.body || {};
@@ -576,14 +610,15 @@ app.post("/api/plan", async (req, res) => {
     const c = cheapestPack(i.name);
     return `${i.name} (~${c.pack} @ ${c.store} $${c.packPrice})`;
   }).join("; ");
-  const out = await airChat([
+  const planningMessages = [
     { role: "system", content: `You are FridgeFuse, a student meal planner for Tempe AZ 85281. Reply ONLY with JSON:
 {"dinners":[{"title":"...","timeMin":20,"protein":25,"carbs":50,"fiber":6,"usesPantry":["..."],"needs":["..."],"steps":["..."]}],
 "shoppingList":[{"item":"...","pack":"...","packPrice":0.0,"store":"...","qty":1,"sharedBy":["..."]}],
 "totalCost":0.0,"notes":"..."}
 Rules: plan EXACTLY the requested number of dinners. The user is a freshman cook, so give concrete beginner-safe steps and only use the listed equipment. First use food marked use-soon, then minimize unique purchases, stay within budget, and keep cooking easy. Prefer purchases shared across dinners. Put only missing ingredients in needs; pantry items cost $0. The server will ground final prices against its catalog. Respect time, equipment, and dietary restrictions. Price context: ${priceCtx}.` },
     { role: "user", content: `Pantry: ${safePantry.join(", ") || "(empty)"}. Use soon: ${safeUseSoon.join(", ") || "none"}. Budget total $${budget} for the whole plan. Dinners: ${dinners}. Max ${maxTimeMin} min each. Equipment: ${safeEquipment.join(", ")}. Diet/notes: ${safeDiet || "none"}. Avoid these meals: ${safeExclude.join(", ") || "none"}. Latest request: ${request || "build the best plan"}.` },
-  ], { maxTokens: 1800 });
+  ];
+  const out = await chat(planningMessages, { maxTokens: 1800 });
   if (!out.ok) {
     if (out.mock) {
       return res.json({ ok: true, mock: true, ...localPlan({ pantry: safePantry, dinners, maxTimeMin, equipment: safeEquipment, diet: safeDiet, budget, useSoon: safeUseSoon, exclude: safeExclude }),
@@ -593,16 +628,34 @@ Rules: plan EXACTLY the requested number of dinners. The user is a freshman cook
     return res.json({ ok: true, fallback: true, failure: out.failure,
       ...localPlan({ pantry: safePantry, dinners, maxTimeMin, equipment: safeEquipment, diet: safeDiet, budget, useSoon: safeUseSoon, exclude: safeExclude }) });
   }
+  const expectedDinners = asDinners(dinners, 3);
+  const content = out.data?.choices?.[0]?.message?.content;
   try {
-    const content = out.data.choices[0].message.content;
-    const plan = groundShoppingPlan(extractJson(content));
-    res.json({ ok: true, model: AIR_MODEL, ...plan });
-  } catch (e) {
-    res.json({ ok: true, fallback: true,
-      failure: reportFailure("asu-air", "plan-parse", { status: "parse-error", message: e.message }),
-      ...localPlan({ pantry: safePantry, dinners, maxTimeMin, equipment: safeEquipment, diet: safeDiet, budget, useSoon: safeUseSoon, exclude: safeExclude }) });
+    const plan = groundShoppingPlan(parseAiPlan(content, expectedDinners));
+    return res.json({ ok: true, model: AIR_MODEL, ...plan });
+  } catch (initialError) {
+    const repaired = await repairAiPlan(chat, content, expectedDinners, initialError, planningMessages[1].content);
+    if (!repaired.ok) {
+      return res.json({ ok: false, failure: repaired.failure || reportFailure("asu-air", "plan-repair", {
+        status: "repair-failed",
+        message: `Could not repair AI plan: ${initialError.message}`,
+      }) });
+    }
+    try {
+      const repairedContent = repaired.data?.choices?.[0]?.message?.content;
+      const plan = groundShoppingPlan(parseAiPlan(repairedContent, expectedDinners));
+      return res.json({ ok: true, model: AIR_MODEL, repaired: true, ...plan });
+    } catch (repairError) {
+      return res.json({ ok: false, failure: reportFailure("asu-air", "plan-repair", {
+        status: "parse-error",
+        message: `Could not repair AI plan: ${repairError.message}`,
+        initialMessage: initialError.message,
+      }) });
+    }
   }
-});
+}
+
+app.post("/api/plan", handlePlanRequest);
 
 app.get("/api/prices", (req, res) => {
   const q = (req.query.item || "").toLowerCase();
@@ -664,7 +717,7 @@ app.get("/api/failures", (req, res) => res.json({ ok: true, count: failures.leng
 // Exported for in-process tests (require without side effects).
 module.exports = {
   app, localPlan, cheapestPack, findPrice, extractJson, PRICES, STORES, RECIPES,
-  reportFailure, resolveDataPath, AIR_MODEL, AIR_VISION_MODEL
+  reportFailure, resolveDataPath, handlePlanRequest, DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL
 };
 
 if (require.main === module) {

@@ -3,7 +3,7 @@
 const assert = require("assert");
 const {
   localPlan, cheapestPack, findPrice, extractJson, PRICES,
-  AIR_MODEL, AIR_VISION_MODEL, resolveDataPath
+  DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, resolveDataPath, handlePlanRequest
 } = require("./server.js");
 
 let n = 0;
@@ -18,6 +18,7 @@ ok(
   "price data resolves from the Netlify task root"
 );
 ok(AIR_VISION_MODEL === "qwen3-vl-32b-instruct", "photo requests use the dedicated vision model");
+ok(DEFAULT_AIR_MODEL === "llama4-scout-17b", "tracked text-model default uses the verified fast model");
 ok(AIR_VISION_MODEL !== AIR_MODEL, "text and photo requests do not silently share a model");
 
 const eggs = cheapestPack("eggs");
@@ -93,6 +94,102 @@ for (const f of ["public/index.html", "public/app.js", "public/styles.css", "dat
 }
 const html = fs.readFileSync("public/index.html", "utf8");
 ok(html.includes("app.js") && html.includes("api/plan") === false, "index.html loads app.js");
-ok(fs.readFileSync("public/app.js", "utf8").includes("/api/plan"), "app.js calls /api/plan");
+const appJs = fs.readFileSync("public/app.js", "utf8");
+ok(appJs.includes("/api/plan"), "app.js calls /api/plan");
+ok(!/catalogOnly\s*:\s*true/.test(appJs), "frontend planning requests do not bypass the text model");
 
-console.log(`\nALL ${n} CHECKS PASSED`);
+function aiEnvelope(plan) {
+  return {
+    ok: true,
+    data: { choices: [{ message: { content: JSON.stringify(plan) } }] }
+  };
+}
+
+function callPlan(body, chat) {
+  return new Promise((resolve, reject) => {
+    let statusCode = 200;
+    const req = { body };
+    const res = {
+      status(code) {
+        statusCode = code;
+        return this;
+      },
+      json(payload) {
+        resolve({ statusCode, payload });
+      }
+    };
+    Promise.resolve(handlePlanRequest(req, res, { chat })).catch(reject);
+  });
+}
+
+const validAiPlan = {
+  dinners: [{
+    title: "AI spinach rice bowl",
+    timeMin: 10,
+    protein: 18,
+    carbs: 45,
+    fiber: 5,
+    equip: ["microwave"],
+    usesPantry: ["spinach", "rice", "eggs"],
+    needs: ["soy sauce"],
+    steps: ["Microwave the spinach, rice, and eggs until the eggs are fully set."]
+  }],
+  shoppingList: [],
+  totalCost: 0,
+  notes: ""
+};
+
+async function runRouteChecks() {
+  const request = {
+    pantry: ["spinach", "rice", "eggs"],
+    useSoon: ["spinach"],
+    budget: 18,
+    dinners: 1,
+    maxTimeMin: 20,
+    equipment: ["microwave"],
+    diet: "",
+    request: "Use the spinach first",
+    exclude: []
+  };
+
+  let liveCalls = 0;
+  const live = await callPlan(request, async (messages, options) => {
+    liveCalls++;
+    assert(messages.some((message) => String(message.content).includes("Use the spinach first")));
+    assert.strictEqual(options.maxTokens, 1800);
+    return aiEnvelope(validAiPlan);
+  });
+  ok(live.statusCode === 200 && live.payload.ok && live.payload.model === AIR_MODEL, "plan route returns the configured text model response");
+  ok(liveCalls === 1 && !live.payload.mock && !live.payload.fallback, "omitting catalogOnly calls the text model exactly once");
+  ok(live.payload.shoppingList.length === 1 && live.payload.shoppingList[0].item === "soy sauce", "AI shopping needs are grounded against the price catalog");
+
+  const catalog = await callPlan({ ...request, catalogOnly: true }, async () => {
+    throw new Error("catalog-only request must not call the text model");
+  });
+  ok(catalog.payload.ok && catalog.payload.model === "grounded-catalog", "explicit catalogOnly requests still use the local planner");
+
+  let repairCalls = 0;
+  const repaired = await callPlan(request, async (messages) => {
+    repairCalls++;
+    if (repairCalls === 1) {
+      return { ok: true, data: { choices: [{ message: { content: "not valid JSON" } }] } };
+    }
+    assert(messages.some((message) => String(message.content).includes("Use the spinach first")));
+    return aiEnvelope(validAiPlan);
+  });
+  ok(repairCalls === 2 && repaired.payload.ok && repaired.payload.dinners[0].title === validAiPlan.dinners[0].title, "malformed AI output gets one successful repair attempt");
+  ok(!repaired.payload.mock && !repaired.payload.fallback, "a repaired AI plan does not silently become a local plan");
+
+  const failedRepair = await callPlan(request, async () => ({
+    ok: true,
+    data: { choices: [{ message: { content: "still not valid JSON" } }] }
+  }));
+  ok(failedRepair.payload.ok === false && !failedRepair.payload.dinners, "failed AI repair returns an error instead of a local plan");
+
+  console.log(`\nALL ${n} CHECKS PASSED`);
+}
+
+runRouteChecks().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
