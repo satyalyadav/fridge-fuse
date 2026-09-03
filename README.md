@@ -8,15 +8,58 @@ dinners, one full-package shopping list, and a view of what will remain.
 
 Live demo: [fridgefuse.netlify.app](https://fridgefuse.netlify.app)
 
+## Prerequisites
+
+- Node.js 20+ (`netlify.toml` pins `NODE_VERSION = "20"`) and npm
+- git
+
+Check with `node --version` / `npm --version`.
+
+## Setup
+
+```bash
+git clone https://github.com/satyalyadav/fridge-fuse.git
+cd fridge-fuse
+npm install
+```
+
+Optional — live AI mode (photo recognition + AI planning):
+
+```bash
+cp .env.example .env
+```
+
+Then edit `.env` and set `VOYAGER_KEY` to your ASU AIR (Voyager) API key.
+`ASU_AIR_BASE_URL`, `ASU_AIR_MODEL`, and `ASU_AIR_VISION_MODEL` already have
+working defaults — leave them unless told otherwise.
+
+Without `VOYAGER_KEY` the app runs in deterministic MOCK demo mode using the
+grounded Tempe 85281 catalog in `data/prices.json`. This is expected and fine
+for the stage demo. With the key missing you will see
+`key=MISSING (mock mode)` in the server log.
+
+`.env` is gitignored — never commit the real key.
+
 ## Run
 
 ```bash
-npm install
 npm start
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Run `npm test` for the
-in-process planner and contract checks.
+Open [http://localhost:3000](http://localhost:3000).
+To use another port: `PORT=4000 npm start`.
+
+Verify it works:
+
+```bash
+npm test
+curl http://localhost:3000/api/health
+```
+
+`npm test` runs the in-process planner and contract checks (expects
+`ALL ... CHECKS PASSED`). `/api/health` should return
+`{"ok":true,...}` with `airConfigured: false` in mock mode,
+`true` when `VOYAGER_KEY` is set.
 
 ## Demo flow
 
@@ -49,6 +92,13 @@ stage presentation.
 Mock prices are development estimates. The interface labels them as mock Tempe
 prices and does not present them as live store quotes.
 
+## Troubleshooting
+
+- `EADDRINUSE :::3000`: something already uses port 3000 — run `PORT=4000 npm start`.
+- `key=MISSING (mock mode)`: normal without `VOYAGER_KEY`. Add it to `.env` and restart for live AI.
+- `npm test` fails: make sure you ran `npm install` first and did not edit `data/prices.json`.
+- Phone on same WiFi can't reach demo: server binds `0.0.0.0`, use your laptop's LAN IP, e.g. `http://192.168.1.x:3000`.
+
 ## Deploy to Netlify
 
 The repository includes a Netlify Function wrapper for the Express API and a
@@ -59,5 +109,5 @@ the static interface from `public/`.
 npx netlify-cli deploy --prod
 ```
 
-Set `VOYAGER_KEY` as a secret function environment variable to enable live photo
-recognition. Without it, the app keeps working in deterministic demo mode.
+Set `VOYAGER_KEY` under Site settings > Environment variables to enable live
+photo recognition. Without it, the app keeps working in deterministic demo mode.
