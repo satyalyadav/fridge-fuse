@@ -1,0 +1,24 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "express",
+  "buildCommand": "npm test",
+  "devCommand": "npm start",
+  "functions": {
+    "server.js": {
+      "includeFiles": ["data/prices.json", "data/stores.json"],
+      "maxDuration": 120
+    }
+  },
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "X-Frame-Options", "value": "DENY" },
+        { "key": "Referrer-Policy", "value": "no-referrer" },
+        { "key": "X-DNS-Prefetch-Control", "value": "off" },
+        { "key": "Permissions-Policy", "value": "microphone=(), geolocation=(self)" }
+      ]
+    }
+  ]
+}

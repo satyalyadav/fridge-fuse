@@ -97,6 +97,19 @@ const fs = require("fs");
 for (const f of ["public/index.html", "public/app.js", "public/styles.css", "data/prices.json", ".env.example"]) {
   ok(fs.existsSync(f), `${f} exists`);
 }
+const vercelConfig = JSON.parse(fs.readFileSync("vercel.json", "utf8"));
+const vercelServer = require("./server.js");
+const vercelFunction = vercelConfig.functions?.["server.js"] || {};
+ok(vercelConfig.framework === "express", "Vercel uses the Express framework preset");
+ok(vercelConfig.buildCommand === "npm test", "Vercel runs the contract checks during builds");
+ok(
+  Array.isArray(vercelFunction.includeFiles) &&
+    vercelFunction.includeFiles.includes("data/prices.json") &&
+    vercelFunction.includeFiles.includes("data/stores.json"),
+  "Vercel bundles both catalog data files with the API"
+);
+ok(/geolocation=\(self\)/.test(JSON.stringify(vercelConfig)), "Vercel allows browser geolocation");
+ok(typeof vercelServer === "function" && vercelServer === vercelServer.app, "Vercel receives the Express app export");
 const html = fs.readFileSync("public/index.html", "utf8");
 ok(html.includes("app.js") && html.includes("api/plan") === false, "index.html loads app.js");
 const appJs = fs.readFileSync("public/app.js", "utf8");
