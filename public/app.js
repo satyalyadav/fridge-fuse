@@ -406,6 +406,7 @@ async function buildPlan(request = "") {
     };
     saveState();
     renderPlan();
+    renderGroceryList();
     hideThinking();
 
     if (!result.dinners?.length) {
