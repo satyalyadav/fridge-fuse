@@ -1,0 +1,101 @@
+{
+  "version": 2,
+  "note": "Approved recipe sources for AI meal generation. The planner may only pull, adapt, or cite recipes from this list. Add or remove entries here; the system prompt is built from this file at startup.",
+  "sources": [
+    {
+      "name": "America's Test Kitchen",
+      "url": "https://www.americastestkitchen.com",
+      "focus": "technique-tested, reliable recipes with detailed steps"
+    },
+    {
+      "name": "Budget Bytes",
+      "url": "https://www.budgetbytes.com",
+      "focus": "cheap, beginner-friendly meals with per-serving cost breakdowns"
+    },
+    {
+      "name": "Allrecipes",
+      "url": "https://www.allrecipes.com",
+      "focus": "large general recipe collection with community ratings"
+    },
+    {
+      "name": "Serious Eats",
+      "url": "https://www.seriouseats.com",
+      "focus": "technique-tested recipes with clear step-by-step instructions"
+    },
+    {
+      "name": "King Arthur Baking",
+      "url": "https://www.kingarthurbaking.com",
+      "focus": "reliable baking and pastry recipes with precise measurements"
+    },
+    {
+      "name": "RecipeTin Eats",
+      "url": "https://www.recipetineats.com",
+      "focus": "step-by-step cooking with photos, easy weeknight dinners"
+    },
+    {
+      "name": "Sally's Baking Addiction",
+      "url": "https://sallysbakingaddiction.com",
+      "focus": "trusted baking recipes, cakes and cookies"
+    },
+    {
+      "name": "Spend With Pennies",
+      "url": "https://www.spendwithpennies.com",
+      "focus": "affordable budget-friendly family recipes"
+    },
+    {
+      "name": "Student Eats",
+      "url": "https://studenteats.co.uk/recipes",
+      "focus": "quick, cheap dorm and student cooking"
+    },
+    {
+      "name": "Student Food Project",
+      "url": "https://www.thestudentfoodproject.com",
+      "focus": "budget-friendly meals and student meal plans"
+    },
+    {
+      "name": "Country Living",
+      "url": "https://www.countryliving.com/food-drinks",
+      "focus": "home-style comfort cooking and easy dinners"
+    },
+    {
+      "name": "Food Network",
+      "url": "https://www.foodnetwork.com/recipes",
+      "focus": "popular recipes and techniques from well-known chefs"
+    },
+    {
+      "name": "Air Fryer World",
+      "url": "https://airfryerworld.com",
+      "focus": "air fryer recipes for fast, hands-off cooking"
+    },
+    {
+      "name": "Skinnytaste",
+      "url": "https://www.skinnytaste.com",
+      "focus": "light, calorie-conscious dinners"
+    },
+    {
+      "name": "Eat Figs, Not Pigs",
+      "url": "https://www.eatfigsnotpigs.com/recipes",
+      "focus": "easy plant-based and vegan recipes"
+    },
+    {
+      "name": "Nora Cooks",
+      "url": "https://www.noracooks.com",
+      "focus": "beginner-friendly, approachable home cooking"
+    },
+    {
+      "name": "Vegan Bell",
+      "url": "https://veganbell.com",
+      "focus": "quick vegan meals and substitutions"
+    },
+    {
+      "name": "Rainbow Plant Life",
+      "url": "https://rainbowplantlife.com",
+      "focus": "plant-based, vegetable-forward healthy meals"
+    },
+    {
+      "name": "FridgeFuse Demo Catalog",
+      "url": "https://github.com/satyalyadav/fridge-fuse",
+      "focus": "built-in beginner microwave/stove recipes shipped with the app (fallback planner)"
+    }
+  ]
+}

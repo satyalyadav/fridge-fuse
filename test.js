@@ -1,14 +1,20 @@
 // In-process verification (this sandbox blocks localhost TCP, so no live HTTP test).
 // Run: node test.js
 const assert = require("assert");
+const path = require("path");
 const {
   localPlan, cheapestPack, findPrice, extractJson, PRICES,
-  DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL, resolveDataPath,
+  DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL,
+  resolveDataPath, RECIPE_SOURCES, buildPlanSystemPrompt,
   handlePlanRequest, handleVisionRequest, normalizeVisionResult, handleGeoPostal,
   haversineMiles, isValidCoordinate, resolveCatalogItem, optimizeCart,
   describeLocation, handleGeoDescribe,
   STORE_DATA, BRANCHES, DEFAULT_ORIGIN, ITEM_ALIASES
 } = require("./server.js");
+
+// Normalize OS-native path separators to forward slashes so assertions are
+// cross-platform (path.join yields backslashes on Windows).
+const toSlashes = (p) => p.split(path.sep).join("/");
 
 let n = 0;
 const ok = (cond, msg) => { n++; assert(cond, msg); console.log(`ok ${n} - ${msg}`); };
@@ -18,7 +24,7 @@ ok(PRICES.items.length >= 20, `price DB has ${PRICES.items.length} items`);
 ok(Object.keys(PRICES.stores).length === 4, "4 stores");
 ok(
   typeof resolveDataPath === "function" &&
-    resolveDataPath("/var/task/netlify/functions", "/var/task", (candidate) => candidate === "/var/task/data/prices.json") === "/var/task/data/prices.json",
+    toSlashes(resolveDataPath("/var/task/netlify/functions", "/var/task", (candidate) => toSlashes(candidate) === "/var/task/data/prices.json")) === "/var/task/data/prices.json",
   "price data resolves from the Netlify task root"
 );
 ok(AIR_VISION_MODEL === "qwen3-vl-32b-instruct", "photo requests use the dedicated vision model");
@@ -89,12 +95,36 @@ const swapped = localPlan({
 });
 ok(swapped.dinners.every((d) => d.title !== "Spinach egg rice bowl"), "meal exclusion supports conversational swaps");
 
+// Fallback planner dinners must cite the demo catalog entry from the approved sources DB.
+const demoSource = RECIPE_SOURCES.sources.find((s) => s.name === "FridgeFuse Demo Catalog");
+ok(
+  demoSource && [plan, swapped].every((p) => p.dinners.every((d) => d.source === demoSource.name && d.sourceUrl === demoSource.url)),
+  "fallback dinners carry source/sourceUrl from the demo catalog entry"
+);
+
 ok(extractJson('```json\n{"a":1}\n```').a === 1, "fenced JSON parsed");
 ok(extractJson('{"a":2}').a === 2, "raw JSON parsed");
 
+// Approved recipe sources: the AI planner prompt is grounded to this DB.
+ok(Array.isArray(RECIPE_SOURCES.sources) && RECIPE_SOURCES.sources.length >= 3, `approved sources DB has ${RECIPE_SOURCES.sources.length} sources`);
+ok(RECIPE_SOURCES.sources.every((s) => s.name && /^https?:\/\//.test(s.url)), "every approved source has a name and URL");
+const planPrompt = buildPlanSystemPrompt("(price context)");
+ok(planPrompt.includes("ONLY") && planPrompt.includes("approved sources"), "plan prompt restricts recipes to approved sources");
+ok(planPrompt.includes('"source"') && planPrompt.includes('"sourceUrl"'), "plan prompt requires source name/URL in dinner data");
+ok(planPrompt.includes("adaptationNote") && planPrompt.includes("CLOSEST matching approved recipe"), "plan prompt falls back to closest approved recipe with an adaptation note");
+ok(planPrompt.includes("NEVER invent a new recipe from scratch"), "plan prompt forbids inventing recipes");
+for (const s of RECIPE_SOURCES.sources) {
+  ok(planPrompt.includes(s.name) && planPrompt.includes(s.url), `plan prompt lists approved source: ${s.name}`);
+}
+ok(
+  typeof resolveDataPath === "function" &&
+    toSlashes(resolveDataPath("/var/task/netlify/functions", "/var/task", (candidate) => toSlashes(candidate) === "/var/task/data/recipe-sources.json", "recipe-sources.json")) === "/var/task/data/recipe-sources.json",
+  "recipe sources resolve from the Netlify task root"
+);
+
 // Frontend files exist and wire up.
 const fs = require("fs");
-for (const f of ["public/index.html", "public/app.js", "public/styles.css", "data/prices.json", ".env.example"]) {
+for (const f of ["public/index.html", "public/app.js", "public/styles.css", "data/prices.json", "data/recipe-sources.json", ".env.example"]) {
   ok(fs.existsSync(f), `${f} exists`);
 }
 const vercelConfig = JSON.parse(fs.readFileSync("vercel.json", "utf8"));
@@ -130,6 +160,10 @@ ok(
     appJs.includes('$("drawerPhotoButton").addEventListener("click", () => $("photoInput").click())'),
   "chat and pantry photo buttons open the native image picker directly"
 );
+ok(
+  appJs.includes("meal.sourceUrl") && appJs.includes("meal.source"),
+  "meal cards expose approved recipe citations"
+);
 
 // ---------- grocery optimizer ----------
 ok(fs.existsSync("data/stores.json"), "data/stores.json exists");
@@ -138,6 +172,11 @@ ok(
   "store data resolves from the Netlify task root"
 );
 ok(fs.readFileSync("netlify.toml", "utf8").includes("data/stores.json"), "netlify bundles the store data with the function");
+ok(
+  (fs.readFileSync("netlify.toml", "utf8").match(/^\s*included_files\s*=/gm) || []).length === 1 &&
+    fs.readFileSync("netlify.toml", "utf8").includes("data/recipe-sources.json"),
+  "netlify bundles all catalog data in one included_files setting"
+);
 // geolocation=() silently disables the browser location API — the Shop tab needs it.
 ok(/geolocation=\(self\)/.test(fs.readFileSync("server.js", "utf8")), "server Permissions-Policy allows geolocation");
 ok(/geolocation=\(self\)/.test(fs.readFileSync("netlify.toml", "utf8")), "netlify Permissions-Policy allows geolocation");
@@ -366,7 +405,10 @@ const validAiPlan = {
     equip: ["microwave"],
     usesPantry: ["spinach", "rice", "eggs"],
     needs: ["soy sauce"],
-    steps: ["Microwave the spinach, rice, and eggs until the eggs are fully set."]
+    steps: ["Microwave the spinach, rice, and eggs until the eggs are fully set."],
+    source: "Budget Bytes",
+    sourceUrl: "https://www.budgetbytes.com",
+    adaptationNote: ""
   }],
   shoppingList: [],
   totalCost: 0,
@@ -396,6 +438,29 @@ async function runRouteChecks() {
   ok(live.statusCode === 200 && live.payload.ok && live.payload.model === AIR_MODEL, "plan route returns the configured text model response");
   ok(liveCalls === 1 && !live.payload.mock && !live.payload.fallback, "omitting catalogOnly calls the text model exactly once");
   ok(live.payload.shoppingList.length === 1 && live.payload.shoppingList[0].item === "soy sauce", "AI shopping needs are grounded against the price catalog");
+  ok(
+    live.payload.dinners[0].source === validAiPlan.dinners[0].source &&
+      live.payload.dinners[0].sourceUrl === validAiPlan.dinners[0].sourceUrl,
+    "AI plans preserve approved recipe citations"
+  );
+
+  const unapprovedAiPlan = {
+    ...validAiPlan,
+    dinners: validAiPlan.dinners.map((dinner) => ({
+      ...dinner,
+      source: "Unapproved Recipe Blog",
+      sourceUrl: "https://example.com/recipe"
+    }))
+  };
+  let unapprovedCalls = 0;
+  const unapproved = await callPlan(request, async () => {
+    unapprovedCalls++;
+    return aiEnvelope(unapprovedAiPlan);
+  });
+  ok(
+    unapprovedCalls === 2 && unapproved.payload.ok === false && /approved recipe list/.test(unapproved.payload.failure?.message || ""),
+    "unapproved AI recipe citations are rejected after repair"
+  );
 
   const catalog = await callPlan({ ...request, catalogOnly: true }, async () => {
     throw new Error("catalog-only request must not call the text model");

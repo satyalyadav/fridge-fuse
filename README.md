@@ -161,12 +161,28 @@ honoured, requests are throttled to their ~1/second limit, and the browser never
 makes a cross-origin call. If the service is slow or down, the local description
 stands and the failure is logged like any other external call.
 
+## Recipe sources
+
+- AI meal generation is constrained to the approved source list in
+  `data/recipe-sources.json` (19 sources, v2). The server rejects recipe
+  citations that do not match that list exactly.
+- Every returned dinner carries `source` and `sourceUrl`.
+- When no approved recipe fits the pantry/budget, the plan returns the closest
+  approved recipe with an `adaptationNote`.
+- The fallback/mock planner tags its dinners with the "FridgeFuse Demo Catalog"
+  entry so mock plans carry citations too.
+- Edit the JSON to change the allowlist — the system prompt and citation checks
+  are rebuilt from it at startup. A bad or empty file makes the server refuse to
+  start, by design. The app does not fetch recipe pages; the model supplies the
+  recipe adaptation and the server enforces the citation allowlist.
+
 ## API
 
 - `GET /api/health` reports server and catalog status.
 - `POST /api/vision {imageDataUrl}` returns independently verified `confirmed`
   pantry items plus `uncertain` items with bounding boxes for user review.
-- `POST /api/plan` builds and prices the dinner plan.
+- `POST /api/plan` builds and prices the dinner plan; dinners include
+  `source`, `sourceUrl`, and (when adapted) `adaptationNote`.
 - `GET /api/prices?item=` reads the Tempe 85281 mock catalog.
 - `GET /api/stores?lat=&lng=&maxDistanceMi=` lists nearby branches with distances.
 - `POST /api/grocery/optimize {items,lat,lng}` ranks stores by what the basket costs.
@@ -183,8 +199,9 @@ prices and does not present them as live store quotes.
 
 - `EADDRINUSE :::3000`: something already uses port 3000 — run `PORT=4000 npm start`.
 - `key=MISSING (mock mode)`: normal without `VOYAGER_KEY`. Add it to `.env` and restart for live AI.
+- `npm test` fails: make sure you ran `npm install` first and did not edit
+  `data/prices.json` or `data/recipe-sources.json`.
 - Slow live plans: check `/api/health` and confirm `airModel` is `llama4-scout-17b`.
-- `npm test` fails: make sure you ran `npm install` first and did not edit `data/prices.json`.
 - Phone on same WiFi can't reach demo: server binds `0.0.0.0`, use your laptop's LAN IP, e.g. `http://192.168.1.x:3000`.
 
 ## Deploy to Vercel
@@ -192,7 +209,7 @@ prices and does not present them as live store quotes.
 The repository is configured as an Express deployment. Vercel serves the
 interface from `public/` and runs the Express API from `server.js`, so the
 browser-facing `/api/*` URLs stay the same. `npm test` runs during each build,
-and both local catalog files are included with the function.
+and the local JSON data files are included with the function.
 
 ### Option 1: import the GitHub repository
 

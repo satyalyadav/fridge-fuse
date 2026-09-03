@@ -170,15 +170,44 @@ function extractJson(content) {
   return JSON.parse(raw);
 }
 
-// ---------- mock price DB (Tempe 85281, dev-harvested mock) ----------
-// fileName is last so the original 3-arg calls keep working unchanged.
-function resolveDataPath(runtimeDir = __dirname, taskRoot = process.env.LAMBDA_TASK_ROOT, exists = fs.existsSync, fileName = "prices.json") {
-  const candidates = [path.join(runtimeDir, "data", fileName)];
-  if (taskRoot) candidates.push(path.join(taskRoot, "data", fileName));
+// ---------- data files (work both locally and from the Netlify task root) ----------
+function resolveDataPath(runtimeDir = __dirname, taskRoot = process.env.LAMBDA_TASK_ROOT, exists = fs.existsSync, filename = "prices.json") {
+  const candidates = [path.join(runtimeDir, "data", filename)];
+  if (taskRoot) candidates.push(path.join(taskRoot, "data", filename));
   return candidates.find((candidate) => exists(candidate)) || candidates[0];
 }
 
 const PRICES = JSON.parse(fs.readFileSync(resolveDataPath(), "utf8"));
+
+// ---------- approved recipe sources (grounds AI meal generation) ----------
+// The /api/plan system prompt is built from this list: the model may only
+// pull, adapt, or cite recipes from these sources.
+const RECIPE_SOURCES = JSON.parse(fs.readFileSync(resolveDataPath(__dirname, process.env.LAMBDA_TASK_ROOT, fs.existsSync, "recipe-sources.json"), "utf8"));
+if (!Array.isArray(RECIPE_SOURCES.sources) || RECIPE_SOURCES.sources.length === 0) {
+  throw new Error("data/recipe-sources.json must contain a non-empty sources array");
+}
+for (const source of RECIPE_SOURCES.sources) {
+  if (!source || typeof source.name !== "string" || !source.name.trim() || typeof source.url !== "string" || !/^https?:\/\//.test(source.url)) {
+    throw new Error("every approved recipe source needs a name and http(s) URL");
+  }
+}
+
+function recipeSourcesContext() {
+  return RECIPE_SOURCES.sources
+    .map((source) => `- ${source.name} — ${source.url} (${source.focus || "approved recipe source"})`)
+    .join("\n");
+}
+
+function isApprovedRecipeCitation(source, sourceUrl) {
+  return RECIPE_SOURCES.sources.some((approved) => approved.name === source && approved.url === sourceUrl);
+}
+
+const FALLBACK_RECIPE_SOURCE = RECIPE_SOURCES.sources.find(
+  (source) => source.name === "FridgeFuse Demo Catalog" && source.url === "https://github.com/satyalyadav/fridge-fuse"
+);
+if (!FALLBACK_RECIPE_SOURCE) {
+  throw new Error("data/recipe-sources.json must include the FridgeFuse Demo Catalog fallback source");
+}
 const STORES = Object.keys(PRICES.stores);
 // Typed words a student uses -> catalog item ("cheese" -> "cheddar"). Lives in
 // the data file so the UI can fetch it instead of keeping a second copy.
@@ -767,7 +796,9 @@ function localPlan({
       equip: selection.recipe.equip,
       usesPantry: selection.recipe.needs.filter((item) => !selection.missing.includes(item)),
       needs: selection.missing,
-      steps: selection.recipe.steps
+      steps: selection.recipe.steps,
+      source: FALLBACK_RECIPE_SOURCE.name,
+      sourceUrl: FALLBACK_RECIPE_SOURCE.url
     })),
     shoppingList,
     leftovers,
@@ -811,6 +842,12 @@ function parseAiPlan(content, expectedDinners) {
     if (!dinner || typeof dinner !== "object") throw new Error(`Dinner ${index + 1} must be an object`);
     if (typeof dinner.title !== "string" || !dinner.title.trim()) throw new Error(`Dinner ${index + 1} needs a title`);
     if (!Number.isFinite(Number(dinner.timeMin))) throw new Error(`Dinner ${index + 1} needs a numeric timeMin`);
+    if (!isApprovedRecipeCitation(dinner.source, dinner.sourceUrl)) {
+      throw new Error(`Dinner ${index + 1} needs a source/sourceUrl pair from the approved recipe list`);
+    }
+    if (dinner.adaptationNote !== undefined && typeof dinner.adaptationNote !== "string") {
+      throw new Error(`Dinner ${index + 1} adaptationNote must be a string when present`);
+    }
     for (const field of ["usesPantry", "needs", "steps"]) {
       if (!Array.isArray(dinner[field])) throw new Error(`Dinner ${index + 1} needs a ${field} array`);
     }
@@ -823,7 +860,7 @@ async function repairAiPlan(chat, content, expectedDinners, initialError, requir
   return chat([
     {
       role: "system",
-      content: `Repair a malformed FridgeFuse meal-plan response. Reply ONLY with valid JSON containing exactly ${expectedDinners} dinners. Each dinner must have a non-empty title, numeric timeMin, and arrays named usesPantry, needs, and steps. Preserve the original meal ideas when possible. Do not add commentary or Markdown fences.`
+      content: `Repair a malformed FridgeFuse meal-plan response. Reply ONLY with valid JSON containing exactly ${expectedDinners} dinners. Each dinner must have a non-empty title, numeric timeMin, arrays named usesPantry, needs, and steps, and a source/sourceUrl pair matching one of these approved sources:\n${recipeSourcesContext()}\nPreserve the original meal ideas when possible. Do not add commentary or Markdown fences.`
     },
     {
       role: "user",
@@ -1063,6 +1100,26 @@ Set confirmed true only when the named grocery is visibly present, its entire ph
 
 app.post("/api/vision", handleVisionRequest);
 
+// System prompt for AI meal generation. Grounded to data/recipe-sources.json:
+// the model may only pull, adapt, or cite recipes from the approved sources,
+// must cite the source name/URL in every dinner, and must fall back to the
+// closest approved recipe (with an adaptation note) instead of inventing one.
+function buildPlanSystemPrompt(priceCtx) {
+  const sourcesCtx = recipeSourcesContext();
+  return `You are FridgeFuse, a student meal planner for Tempe AZ 85281. Reply ONLY with JSON:
+{"dinners":[{"title":"...","source":"...","sourceUrl":"...","adaptationNote":"","timeMin":20,"protein":25,"carbs":50,"fiber":6,"usesPantry":["..."],"needs":["..."],"steps":["..."]}],
+"shoppingList":[{"item":"...","pack":"...","packPrice":0.0,"store":"...","qty":1,"sharedBy":["..."]}],
+"totalCost":0.0,"notes":"..."}
+Rules: plan EXACTLY the requested number of dinners. The user is a freshman cook, so give concrete beginner-safe steps and only use the listed equipment. First use food marked use-soon, then minimize unique purchases, stay within budget, and keep cooking easy. Prefer purchases shared across dinners. Put only missing ingredients in needs; pantry items cost $0. The server will ground final prices against its catalog. Respect time, equipment, and dietary restrictions. Price context: ${priceCtx}.
+Recipe grounding (STRICT):
+- Pull, adapt, or cite recipes ONLY from the approved sources listed below. NEVER invent a new recipe from scratch and NEVER use a recipe from an unlisted source, even if the user asks for one.
+- Ground every dinner in a real recipe from one of these sources: base its ingredients and steps on that recipe, adjusting only for the user's pantry, budget, equipment, time, and diet.
+- For every dinner, set "source" to the source's exact name and "sourceUrl" to its exact URL from the list below. Both fields are required and must match the list verbatim.
+- If NO approved recipe fits the user's pantry and budget constraints, return the CLOSEST matching approved recipe instead of inventing one, and describe the minor changes in "adaptationNote" (e.g. "Adapted from Budget Bytes black bean quesadillas: swapped cheddar for the mozzarella the user has"). Set "adaptationNote" to "" when the recipe needs no changes.
+Approved sources:
+${sourcesCtx}`;
+}
+
 async function handlePlanRequest(req, res, { chat = airChat } = {}) {
   const { pantry = [], budget = 30, dinners = 3, maxTimeMin = 30,
           equipment = ["stove"], diet = "", useSoon = [], request = "", exclude = [],
@@ -1100,11 +1157,7 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
     return `${i.name} (~${c.pack} @ ${c.store} $${c.packPrice})`;
   }).join("; ");
   const planningMessages = [
-    { role: "system", content: `You are FridgeFuse, a student meal planner for Tempe AZ 85281. Reply ONLY with JSON:
-{"dinners":[{"title":"...","timeMin":20,"protein":25,"carbs":50,"fiber":6,"usesPantry":["..."],"needs":["..."],"steps":["..."]}],
-"shoppingList":[{"item":"...","pack":"...","packPrice":0.0,"store":"...","qty":1,"sharedBy":["..."]}],
-"totalCost":0.0,"notes":"..."}
-Rules: plan EXACTLY the requested number of dinners. The user is a freshman cook, so give concrete beginner-safe steps and only use the listed equipment. First use food marked use-soon, then minimize unique purchases, stay within budget, and keep cooking easy. Prefer purchases shared across dinners. Put only missing ingredients in needs; pantry items cost $0. The server will ground final prices against its catalog. Respect time, equipment, and dietary restrictions. Price context: ${priceCtx}.` },
+    { role: "system", content: buildPlanSystemPrompt(priceCtx) },
     { role: "user", content: `Pantry: ${safePantry.join(", ") || "(empty)"}. Use soon: ${safeUseSoon.join(", ") || "none"}. Budget total $${budget} for the whole plan. Dinners: ${dinners}. Max ${maxTimeMin} min each. Equipment: ${safeEquipment.join(", ")}. Diet/notes: ${safeDiet || "none"}. Avoid these meals: ${safeExclude.join(", ") || "none"}. Latest request: ${request || "build the best plan"}.` },
   ];
   const out = await chat(planningMessages, { maxTokens: 1800 });
@@ -1325,8 +1378,9 @@ app.get("/api/failures", (req, res) => res.json({ ok: true, count: failures.leng
 module.exports = app;
 Object.assign(module.exports, {
   app, localPlan, cheapestPack, findPrice, extractJson, PRICES, STORES, RECIPES,
-  reportFailure, resolveDataPath, handlePlanRequest, handleVisionRequest, normalizeVisionResult,
+  RECIPE_SOURCES, buildPlanSystemPrompt, reportFailure, resolveDataPath,
   DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL,
+  handlePlanRequest, handleVisionRequest, normalizeVisionResult,
   haversineMiles, isValidCoordinate, resolveCatalogItem, normalizeCartItems, optimizeCart,
   describeLocation, reverseGeocode, handleGeoDescribe, geocodePostalCode, handleGeoPostal,
   STORE_DATA, BRANCHES, DEFAULT_ORIGIN, ITEM_ALIASES
