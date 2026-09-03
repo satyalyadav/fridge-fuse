@@ -23,7 +23,9 @@ const ALIASES = {
 const DEFAULT_STATE = {
   profile: {
     displayName: "",
-    postalCode: ""
+    postalCode: "",
+    // false until the first-run wizard is completed once.
+    onboarded: false
   },
   pantry: [],
   constraints: {
@@ -74,7 +76,8 @@ function loadState() {
       ...stored,
       profile: {
         ...DEFAULT_STATE.profile,
-        ...(stored.profile || {})
+        ...(stored.profile || {}),
+        onboarded: stored.profile?.onboarded === true
       },
       constraints: { ...DEFAULT_STATE.constraints, ...(stored.constraints || {}) },
       pantry: Array.isArray(stored.pantry) ? stored.pantry : [],
@@ -559,6 +562,280 @@ function renderPantry() {
   `).join("");
 }
 
+/* ---------------- preference catalogs + onboarding ---------------- */
+
+// Option lists come from the server so the form and the planner's filter can
+// never disagree. Falls back to the minimum viable set if the fetch fails.
+let PREFERENCES = {
+  diets: [],
+  equipment: [{ id: "microwave", label: "Microwave", hint: "" }, { id: "stove", label: "Stovetop or hot plate", hint: "" }],
+  limits: { budget: { min: 5, max: 100 }, dinners: { min: 1, max: 7 }, maxTimeMin: { min: 10, max: 60 } },
+  disclaimer: "Preferences filter suggestions. They are not an allergy-safety guarantee.",
+  recipeCount: 0,
+};
+let preferencesLoaded = false;
+
+async function loadPreferences() {
+  if (preferencesLoaded) return PREFERENCES;
+  try {
+    const response = await fetch("/api/preferences");
+    const result = await response.json();
+    if (result.ok && Array.isArray(result.equipment) && result.equipment.length) {
+      PREFERENCES = result;
+      preferencesLoaded = true;
+    }
+  } catch {
+    // Keep the fallback list; the form still works.
+  }
+  return PREFERENCES;
+}
+
+function selectedDietSet() {
+  return new Set(
+    String(state.constraints.diet || "")
+      .split(",")
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean)
+  );
+}
+
+// Renders equipment cards and diet chips into a given pair of containers, so
+// the welcome wizard and the profile drawer share one implementation.
+function renderPreferenceControls({ equipmentHost, dietHost, namePrefix }) {
+  const chosenEquipment = new Set((state.constraints.equipment || []).map((item) => String(item).toLowerCase()));
+  if (equipmentHost) {
+    equipmentHost.innerHTML = PREFERENCES.equipment.map((option) => `
+      <label class="option-card${chosenEquipment.has(option.id) ? " is-checked" : ""}">
+        <input type="checkbox" name="${namePrefix}-equipment" value="${escapeHtml(option.id)}"${chosenEquipment.has(option.id) ? " checked" : ""}>
+        <strong>${escapeHtml(option.label)}</strong>
+        ${option.hint ? `<small>${escapeHtml(option.hint)}</small>` : ""}
+      </label>`).join("");
+  }
+
+  if (dietHost) {
+    const chosenDiet = selectedDietSet();
+    const groups = [];
+    for (const option of PREFERENCES.diets) {
+      const group = groups.find((entry) => entry.name === option.group);
+      if (group) group.options.push(option);
+      else groups.push({ name: option.group, options: [option] });
+    }
+    const groupIntro = {
+      Diet: "How you eat",
+      Allergy: "Allergies and intolerances",
+      Avoid: "Things to skip",
+    };
+    dietHost.innerHTML = groups.map((group) => `
+      <div class="diet-group">
+        <h3>${escapeHtml(groupIntro[group.name] || group.name)}</h3>
+        <div class="chip-row">
+          ${group.options.map((option) => {
+            const checked = chosenDiet.has(option.id) || chosenDiet.has(option.label.toLowerCase());
+            return `
+              <label class="chip${checked ? " is-checked" : ""}"${option.note ? ` title="${escapeHtml(option.note)}"` : ""}>
+                <input type="checkbox" name="${namePrefix}-diet" value="${escapeHtml(option.id)}"${checked ? " checked" : ""}>
+                ${escapeHtml(option.label)}
+              </label>`;
+          }).join("")}
+        </div>
+      </div>`).join("");
+  }
+}
+
+// :has() is unavailable on older browsers, so selection state is also a class.
+function bindOptionToggles(root, notePrefix) {
+  root.addEventListener("change", (event) => {
+    const input = event.target.closest('input[type="checkbox"]');
+    if (!input) return;
+    const holder = input.closest(".option-card, .chip");
+    if (holder) holder.classList.toggle("is-checked", input.checked);
+    // Clear the "pick something" warning the moment it stops being true.
+    if (input.name === `${notePrefix}-equipment` && readCheckedValues(`${notePrefix}-equipment`).length) {
+      $("equipmentError").hidden = true;
+    }
+    updateKitchenNote(notePrefix);
+  });
+  root.addEventListener("focusin", (event) => {
+    const holder = event.target.closest?.(".option-card, .chip");
+    if (holder) holder.classList.add("is-focus");
+  });
+  root.addEventListener("focusout", (event) => {
+    const holder = event.target.closest?.(".option-card, .chip");
+    if (holder) holder.classList.remove("is-focus");
+  });
+}
+
+function readCheckedValues(name) {
+  return [...document.querySelectorAll(`input[name="${name}"]:checked`)].map((input) => input.value);
+}
+
+// Describes the cooking style a selection unlocks, purely from the already-
+// fetched PREFERENCES catalog — no network round trip on every click, and no
+// claim of a precise count now that planning is fully AI-driven with no fixed
+// recipe list to count against.
+function equipmentVibeText(ids) {
+  const chosen = ids.map((id) => PREFERENCES.equipment.find((e) => e.id === id)).filter(Boolean);
+  if (!chosen.length) return "";
+  const labels = chosen.map((e) => e.label).join(" + ");
+  const vibes = [...new Set(chosen.map((e) => e.vibe).filter(Boolean))].join(", ");
+  return vibes ? `${labels} — ${vibes}.` : `${labels}.`;
+}
+
+function dietVibeText(ids) {
+  const chosen = ids.map((id) => PREFERENCES.diets.find((d) => d.id === id)).filter(Boolean);
+  if (!chosen.length) return "";
+  const labels = chosen.map((d) => d.label).join(", ");
+  const notes = chosen.filter((d) => d.note).map((d) => d.note);
+  return notes.length ? `${labels} selected. ${notes.join(" ")}` : `${labels} selected — matching dinners will avoid these ingredients.`;
+}
+
+function updateKitchenNote(prefix) {
+  const host = $(prefix === "welcome" ? "welcomeKitchenNote" : "profileKitchenNote");
+  if (!host) return;
+  const equipmentText = equipmentVibeText(readCheckedValues(`${prefix}-equipment`));
+  const dietText = dietVibeText(readCheckedValues(`${prefix}-diet`));
+  const parts = [equipmentText, dietText].filter(Boolean);
+
+  if (prefix === "welcome") {
+    // The hero panel always shows something, even before a choice is made.
+    host.innerHTML = parts.length
+      ? parts.map((text) => `<p>${escapeHtml(text)}</p>`).join("")
+      : "<p>Pick your equipment to see what kind of meals you'll get.</p>";
+  } else {
+    // The profile drawer stays silent until there is something to say
+    // (:empty hides it in CSS), since it sits above an already-labelled form.
+    host.innerHTML = parts.map((text) => `<p>${escapeHtml(text)}</p>`).join("");
+  }
+}
+
+/* ----- the welcome wizard ----- */
+
+let welcomeSteps = [];
+let welcomeIndex = 0;
+
+function needsOnboarding() {
+  return state.profile?.onboarded !== true;
+}
+
+function stepLabels() {
+  return { identity: "About you", kitchen: "Your kitchen", food: "Your food" };
+}
+
+function renderWelcomeStep() {
+  const current = welcomeSteps[welcomeIndex];
+  document.querySelectorAll(".welcome-step").forEach((section) => {
+    section.hidden = section.dataset.step !== current;
+  });
+
+  const labels = stepLabels();
+  $("welcomeProgress").innerHTML = welcomeSteps.map((step, index) => `
+    <li class="${index === welcomeIndex ? "current" : index < welcomeIndex ? "done" : ""}">${escapeHtml(labels[step] || step)}</li>
+  `).join("");
+
+  $("welcomeBack").hidden = welcomeIndex === 0;
+  const isLast = welcomeIndex === welcomeSteps.length - 1;
+  $("welcomeNext").textContent = isLast ? "Start cooking" : "Continue";
+  updateKitchenNote("welcome");
+}
+
+// Runs once, ever — the first time the app opens with no saved profile. Later
+// visits go straight to the app; preferences after that are only ever changed
+// by deliberately opening the profile drawer, never re-asked on login.
+async function openWelcome() {
+  await loadPreferences();
+
+  welcomeSteps = ["identity", "kitchen", "food"];
+  welcomeIndex = 0;
+
+  $("welcomeName").value = state.profile?.displayName || "";
+  $("welcomeZip").value = state.profile?.postalCode || "";
+
+  const budget = clampNumber(state.constraints.budget, PREFERENCES.limits.budget, 20);
+  $("welcomeBudget").value = budget;
+  $("welcomeBudgetValue").textContent = `$${budget}`;
+
+  renderPreferenceControls({
+    equipmentHost: $("equipmentOptions"),
+    dietHost: $("dietOptions"),
+    namePrefix: "welcome",
+  });
+  $("dietDisclaimer").textContent = PREFERENCES.disclaimer;
+
+  $("welcomeScreen").hidden = false;
+  document.body.dataset.welcomeOpen = "true";
+  renderWelcomeStep();
+  requestAnimationFrame(() => $("welcomeName").focus());
+}
+
+function closeWelcome() {
+  $("welcomeScreen").hidden = true;
+  delete document.body.dataset.welcomeOpen;
+}
+
+function clampNumber(value, limit, fallback) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(limit.max, Math.max(limit.min, n));
+}
+
+// Saves whatever the wizard currently holds. Called on finish and on skip so a
+// partly-filled form is never silently discarded.
+function commitWelcome({ markOnboarded }) {
+  const equipment = readCheckedValues("welcome-equipment");
+  const diets = readCheckedValues("welcome-diet");
+
+  if (state.plan && !state.plan.constraints) {
+    state.plan.constraints = clone(state.constraints);
+  }
+
+  state.profile = {
+    ...state.profile,
+    displayName: $("welcomeName").value.trim().slice(0, 40),
+    postalCode: $("welcomeZip").value.trim(),
+    onboarded: markOnboarded ? true : state.profile?.onboarded === true,
+  };
+
+  if (equipment.length) state.constraints.equipment = equipment;
+  state.constraints.diet = diets.join(", ");
+  state.constraints.budget = clampNumber($("welcomeBudget").value, PREFERENCES.limits.budget, 20);
+
+  saveState();
+  renderProfile();
+  renderLocation();
+}
+
+function advanceWelcome() {
+  const current = welcomeSteps[welcomeIndex];
+
+  if (current === "identity") {
+    const zip = $("welcomeZip").value.trim();
+    if (zip && !/^\d{5}$/.test(zip)) {
+      toast("Enter a five-digit ZIP code, or leave it blank.", "error");
+      $("welcomeZip").focus();
+      return;
+    }
+  }
+
+  if (current === "kitchen" && !readCheckedValues("welcome-equipment").length) {
+    $("equipmentError").hidden = false;
+    return;
+  }
+  $("equipmentError").hidden = true;
+
+  if (welcomeIndex < welcomeSteps.length - 1) {
+    welcomeIndex += 1;
+    renderWelcomeStep();
+    // A long step can leave the next one scrolled halfway down.
+    $("welcomeForm").scrollTop = 0;
+    return;
+  }
+
+  commitWelcome({ markOnboarded: true });
+  closeWelcome();
+  const name = state.profile.displayName;
+  toast(name ? `You're set, ${name}. Plans will use these preferences.` : "You're set. Plans will use these preferences.");
+}
+
 function profileInitials(name) {
   const parts = String(name || "")
     .trim()
@@ -583,50 +860,25 @@ function renderProfile() {
   );
 }
 
-function openProfile() {
+async function openProfile() {
   closePantry();
+  await loadPreferences();
 
   $("profileName").value = state.profile?.displayName || "";
   $("profilePostalCode").value = state.profile?.postalCode || "";
 
-  const budget = Math.min(
-    100,
-    Math.max(5, Number(state.constraints.budget) || 20)
-  );
-
+  const budget = clampNumber(state.constraints.budget, PREFERENCES.limits.budget, 20);
   $("profileBudget").value = budget;
   $("profileBudgetValue").textContent = `$${budget}`;
 
-  const dinners = Math.min(7, Math.max(1, Math.floor(Number(state.constraints.dinners)) || 3));
-  $("profileDinners").value = dinners;
-
-  const maxTimeMin = Math.min(60, Math.max(10, Number(state.constraints.maxTimeMin) || 20));
-  $("profileMaxTime").value = maxTimeMin;
-
-  const equipment = new Set((state.constraints.equipment || []).map((item) => String(item).toLowerCase()));
-
-  document
-    .querySelectorAll('#profileForm input[name="equipment"]')
-    .forEach((input) => {
-      input.checked = equipment.has(String(input.value).toLowerCase());
-    });
-
-  const diets = new Set(
-    String(state.constraints.diet || "")
-      .split(",")
-      .map((item) => item.trim().toLowerCase())
-      .filter(Boolean)
-  );
-
-  if (diets.has("peanut allergy")) {
-    diets.add("no peanuts");
-  }
-
-  document
-    .querySelectorAll('#profileForm input[name="diet"]')
-    .forEach((input) => {
-      input.checked = diets.has(input.value.toLowerCase());
-    });
+  // Same renderer as the welcome wizard, so both stay in step automatically.
+  renderPreferenceControls({
+    equipmentHost: $("profileEquipmentOptions"),
+    dietHost: $("profileDietOptions"),
+    namePrefix: "profile",
+  });
+  $("profileDietDisclaimer").textContent = PREFERENCES.disclaimer;
+  updateKitchenNote("profile");
 
   $("profileDrawer").classList.add("open");
   $("profileDrawer").setAttribute("aria-hidden", "false");
@@ -821,78 +1073,32 @@ $("profileBudget").addEventListener("input", () => {
 $("profileForm").addEventListener("submit", (event) => {
   event.preventDefault();
 
-  const displayName = $("profileName").value.trim().slice(0, 40);
   const postalCode = $("profilePostalCode").value.trim();
-
   if (postalCode && !/^\d{5}$/.test(postalCode)) {
     toast("Enter a five-digit ZIP code.", "error");
     $("profilePostalCode").focus();
     return;
   }
 
-  const dinners = Math.floor(Number($("profileDinners").value));
-  if (!Number.isFinite(dinners) || dinners < 1 || dinners > 7) {
-    toast("Choose 1 to 7 dinners.", "error");
-    $("profileDinners").focus();
-    return;
-  }
-
-  const maxTimeMin = Number($("profileMaxTime").value);
-  if (!Number.isFinite(maxTimeMin) || maxTimeMin < 10 || maxTimeMin > 60) {
-    toast("Choose 10 to 60 minutes per dinner.", "error");
-    $("profileMaxTime").focus();
-    return;
-  }
-
-  const checkedEquipment = [
-    ...document.querySelectorAll(
-      '#profileForm input[name="equipment"]:checked'
-    )
-  ].map((input) => input.value);
-
-  if (!checkedEquipment.length) {
+  const equipment = readCheckedValues("profile-equipment");
+  if (!equipment.length) {
     toast("Choose at least one cooking option.", "error");
     return;
   }
 
-  const knownEquipment = new Set(PROFILE_EQUIPMENT_OPTIONS);
-  const preservedEquipment = (state.constraints.equipment || [])
-    .map((item) => String(item))
-    .filter((item) => item && !knownEquipment.has(item.toLowerCase()));
-  const equipment = [...new Set([...checkedEquipment, ...preservedEquipment])];
-
-  const checkedDiets = [
-    ...document.querySelectorAll(
-      '#profileForm input[name="diet"]:checked'
-    )
-  ].map((input) => input.value);
-
-  const knownDiets = new Set([...PROFILE_DIET_OPTIONS, ...PROFILE_EXTRA_DIET_TERMS].map((item) => item.toLowerCase()));
-  const preservedDiets = String(state.constraints.diet || "")
-    .split(",")
-    .map((item) => item.trim())
-    .filter((item) => item && !knownDiets.has(item.toLowerCase()));
-  if (checkedDiets.includes("no peanuts")) {
-    for (let i = preservedDiets.length - 1; i >= 0; i -= 1) {
-      if (preservedDiets[i].toLowerCase() === "peanut allergy") preservedDiets.splice(i, 1);
-    }
+  if (state.plan && !state.plan.constraints) {
+    state.plan.constraints = clone(state.constraints);
   }
-  const diets = [...checkedDiets, ...preservedDiets];
 
   state.profile = {
-    displayName,
-    postalCode
+    ...state.profile,
+    displayName: $("profileName").value.trim().slice(0, 40),
+    postalCode,
   };
 
-  if (state.plan && !state.plan.constraints) {
-    state.plan.constraints = structuredClone(state.constraints);
-  }
-
-  state.constraints.budget = Math.min(100, Math.max(5, Number($("profileBudget").value) || 20));
   state.constraints.equipment = equipment;
-  state.constraints.diet = diets.join(", ");
-  state.constraints.dinners = dinners;
-  state.constraints.maxTimeMin = maxTimeMin;
+  state.constraints.diet = readCheckedValues("profile-diet").join(", ");
+  state.constraints.budget = clampNumber($("profileBudget").value, PREFERENCES.limits.budget, 20);
 
   saveState();
   renderProfile();
@@ -1308,6 +1514,30 @@ $("fromPlanButton").addEventListener("click", () => {
   toast(added ? `${added} item${added === 1 ? "" : "s"} added from your meal plan` : "Those items are already on the list");
 });
 
+/* ----- welcome wizard wiring ----- */
+$("welcomeNext").addEventListener("click", advanceWelcome);
+$("welcomeBack").addEventListener("click", () => {
+  if (welcomeIndex === 0) return;
+  welcomeIndex -= 1;
+  $("equipmentError").hidden = true;
+  renderWelcomeStep();
+});
+$("welcomeSkip").addEventListener("click", () => {
+  // Skipping still keeps whatever was entered, and still counts as onboarded
+  // so the identity step is not asked for again.
+  commitWelcome({ markOnboarded: true });
+  closeWelcome();
+});
+$("welcomeBudget").addEventListener("input", () => {
+  $("welcomeBudgetValue").textContent = `$${$("welcomeBudget").value}`;
+});
+$("welcomeForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  advanceWelcome();
+});
+bindOptionToggles($("welcomeForm"), "welcome");
+bindOptionToggles($("profileForm"), "profile");
+
 $("useLocationButton").addEventListener("click", requestLocation);
 $("useProfileZipButton").addEventListener("click", resolveProfileZip);
 $("compareButton").addEventListener("click", compareStores);
@@ -1460,3 +1690,8 @@ renderPlan();
 renderGroceryList();
 renderLocation();
 setMobileView(activeMobileView);
+
+// The welcome wizard is a one-time landing experience: it runs once, ever,
+// on the very first visit. After that, preferences are only ever changed by
+// deliberately opening the profile drawer — never re-asked on login.
+if (needsOnboarding()) openWelcome();
