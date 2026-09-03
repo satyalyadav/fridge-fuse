@@ -35,7 +35,11 @@ const DEFAULT_STATE = {
   },
   excludedTitles: [],
   plan: null,
-  messages: []
+  messages: [],
+  groceryList: [],
+  location: null,
+  // null = never asked. Only true sends coordinates to the place-name service.
+  allowPlaceLookup: null
 };
 
 const MAX_EXCLUDED = 20;
@@ -43,11 +47,19 @@ const MAX_MESSAGES = 30;
 const PROFILE_EQUIPMENT_OPTIONS = ["microwave", "stove", "oven", "air fryer"];
 const PROFILE_DIET_OPTIONS = ["vegetarian", "vegan", "dairy-free", "gluten-free", "no peanuts"];
 const PROFILE_EXTRA_DIET_TERMS = ["peanut allergy"];
+const MAX_GROCERY_ITEMS = 50;
+const MAX_GROCERY_QTY = 99;
 
 function addExclusion(title) {
   if (!title) return;
   state.excludedTitles = [...new Set([...state.excludedTitles, title])].slice(-MAX_EXCLUDED);
 }
+
+// structuredClone is missing on Safari < 15.4 and other older browsers, and the
+// whole app runs through it on load — fall back rather than fail to start.
+const clone = typeof structuredClone === "function"
+  ? structuredClone
+  : (value) => JSON.parse(JSON.stringify(value));
 
 let state = loadState();
 let activeMobileView = state.plan ? "plan" : "chat";
@@ -56,9 +68,9 @@ let visionReviewItems = [];
 function loadState() {
   try {
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (!stored) return structuredClone(DEFAULT_STATE);
+    if (!stored) return clone(DEFAULT_STATE);
     return {
-      ...structuredClone(DEFAULT_STATE),
+      ...clone(DEFAULT_STATE),
       ...stored,
       profile: {
         ...DEFAULT_STATE.profile,
@@ -67,10 +79,16 @@ function loadState() {
       constraints: { ...DEFAULT_STATE.constraints, ...(stored.constraints || {}) },
       pantry: Array.isArray(stored.pantry) ? stored.pantry : [],
       excludedTitles: Array.isArray(stored.excludedTitles) ? stored.excludedTitles.slice(-MAX_EXCLUDED) : [],
-      messages: Array.isArray(stored.messages) ? stored.messages.slice(-MAX_MESSAGES) : []
+      messages: Array.isArray(stored.messages) ? stored.messages.slice(-MAX_MESSAGES) : [],
+      groceryList: Array.isArray(stored.groceryList) ? stored.groceryList.slice(0, MAX_GROCERY_ITEMS) : [],
+      location: stored.location && Number.isFinite(stored.location.lat) && Number.isFinite(stored.location.lng)
+        ? stored.location
+        : null,
+      // Anything other than a stored true/false means the question is still open.
+      allowPlaceLookup: typeof stored.allowPlaceLookup === "boolean" ? stored.allowPlaceLookup : null
     };
   } catch {
-    return structuredClone(DEFAULT_STATE);
+    return clone(DEFAULT_STATE);
   }
 }
 
@@ -79,8 +97,18 @@ function recordMessage(entry) {
   saveState();
 }
 
+// Private windows, blocked site data, and a full quota all make setItem throw.
+// Losing persistence is survivable; losing the click that triggered it is not.
+let storageWarned = false;
 function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    if (!storageWarned) {
+      storageWarned = true;
+      toast("This browser is blocking saved data, so your list will not survive a reload.", "error");
+    }
+  }
 }
 
 function escapeHtml(value) {
@@ -622,17 +650,22 @@ function closePantry() {
   delete document.body.dataset.drawerOpen;
 }
 
+// One view model for both breakpoints. Chat and plan stay paired side by side
+// on desktop (body[data-view] only splits the grocery tab out); on mobile the
+// .mobile-active class picks the single visible panel.
 function setMobileView(view) {
   if (view === "pantry") {
     openPantry();
     return;
   }
   activeMobileView = view;
+  document.body.dataset.view = view;
   $("chatView").classList.toggle("mobile-active", view === "chat");
   $("planView").classList.toggle("mobile-active", view === "plan");
-  document.querySelectorAll(".mobile-nav button").forEach((button) => {
-    button.classList.toggle("active", button.dataset.view === view);
+  document.querySelectorAll(".mobile-nav button, .desktop-nav .nav-item").forEach((button) => {
+    if (button.dataset.view) button.classList.toggle("active", button.dataset.view === view);
   });
+  if (view === "grocery") loadCatalog();
 }
 
 function loadSamplePantry() {
@@ -858,10 +891,423 @@ $("profileForm").addEventListener("submit", (event) => {
 
   saveState();
   renderProfile();
+  // Keeps the Shop tab's "Shop near <ZIP>" button in step with the saved ZIP.
+  renderLocation();
   closeProfile();
 
   toast("Profile saved. New plans will use these preferences.");
 });
+
+/* ---------------- groceries: build a list, price it at every nearby store ---------------- */
+
+let catalogNames = [];
+let catalogLoaded = false;
+let comparing = false;
+// Where the server measures from without a fix, and the ZIP its catalog covers.
+// Both are fetched, never assumed, so the copy stays correct if
+// data/stores.json moves to another city.
+let originLabel = "the default area";
+let originZip = "";
+
+// Autocomplete source. Optional: a failure here must not block adding items,
+// because the server resolves names anyway.
+async function loadCatalog() {
+  if (catalogLoaded) return;
+  catalogLoaded = true;
+  try {
+    const [pricesResponse, storesResponse] = await Promise.all([
+      fetch("/api/prices"),
+      fetch("/api/stores")
+    ]);
+    const result = await pricesResponse.json();
+    if (result.ok && Array.isArray(result.items)) {
+      catalogNames = [...result.items.map((item) => item.name), ...Object.keys(result.aliases || {})].sort();
+      $("catalogOptions").innerHTML = catalogNames
+        .map((name) => `<option value="${escapeHtml(name)}"></option>`)
+        .join("");
+    }
+    const stores = await storesResponse.json();
+    if (stores.ok) {
+      if (stores.origin?.label) originLabel = stores.origin.label;
+      if (stores.zip) originZip = String(stores.zip);
+      renderLocation();
+    }
+  } catch {
+    catalogLoaded = false; // let the next visit retry
+  }
+}
+
+function addGroceryItem(name, qty = 1) {
+  const normalized = String(name || "").trim().toLowerCase();
+  if (!normalized) return false;
+  const existing = state.groceryList.find((item) => item.name === normalized);
+  if (existing) {
+    existing.qty = Math.min(existing.qty + qty, MAX_GROCERY_QTY);
+    return false;
+  }
+  if (state.groceryList.length >= MAX_GROCERY_ITEMS) {
+    toast(`The list is capped at ${MAX_GROCERY_ITEMS} items.`, "error");
+    return false;
+  }
+  state.groceryList.push({ name: normalized, qty: Math.min(Math.max(1, qty), MAX_GROCERY_QTY) });
+  return true;
+}
+
+function renderGroceryList() {
+  const count = state.groceryList.length;
+  $("groceryNavCount").textContent = count;
+  $("mobileGroceryCount").textContent = count;
+  $("compareButton").disabled = count === 0;
+
+  const planItems = state.plan?.shoppingList?.length || 0;
+  $("fromPlanButton").disabled = planItems === 0;
+  $("fromPlanButton").textContent = planItems
+    ? `Add ${planItems} meal-plan item${planItems === 1 ? "" : "s"}`
+    : "No meal plan yet";
+
+  if (!count) {
+    $("groceryList").innerHTML = `
+      <div class="grocery-empty">
+        Nothing on the list yet. Add what you need to buy, or pull in the missing
+        ingredients from your meal plan.
+      </div>`;
+    return;
+  }
+
+  $("groceryList").innerHTML = state.groceryList.map((item, index) => `
+    <div class="grocery-item${item.unknown ? " unknown" : ""}">
+      <span class="grocery-item-name">
+        <strong>${escapeHtml(item.name)}</strong>
+        ${item.unknown ? "<span>Not in the Tempe mock catalog — not priced</span>" : ""}
+      </span>
+      <span class="qty-stepper">
+        <button type="button" data-grocery-action="less" data-index="${index}" aria-label="Fewer ${escapeHtml(item.name)}">−</button>
+        <span>${Number(item.qty) || 1}</span>
+        <button type="button" data-grocery-action="more" data-index="${index}" aria-label="More ${escapeHtml(item.name)}">+</button>
+      </span>
+      <button type="button" class="remove-item" data-grocery-action="remove" data-index="${index}" aria-label="Remove ${escapeHtml(item.name)}">Remove</button>
+    </div>
+  `).join("");
+}
+
+function renderLocation() {
+  const bar = $("locationBar");
+  const located = Boolean(state.location);
+  bar.classList.toggle("located", located);
+  $("useLocationButton").textContent = located ? "Update location" : "Use my location";
+  $("locationLabel").textContent = located
+    ? (state.location.label || `${state.location.lat.toFixed(4)}, ${state.location.lng.toFixed(4)}`)
+    : `No location shared yet — distances from ${originLabel}`;
+
+  // The profile's saved ZIP is the way in for anyone who will not share a fix.
+  const zip = String(state.profile?.postalCode || "").trim();
+  const zipButton = $("useProfileZipButton");
+  zipButton.hidden = !/^\d{5}$/.test(zip);
+  if (!zipButton.hidden) zipButton.textContent = `Shop near ${zip}`;
+
+  const detail = $("locationDetail");
+  const parts = [];
+  if (located) {
+    if (state.location.detail && state.location.detail !== state.location.label) parts.push(state.location.detail);
+    if (Number.isFinite(state.location.accuracyM)) parts.push(`accurate to about ${Math.round(state.location.accuracyM)} m`);
+  }
+  detail.textContent = parts.join(" · ");
+  detail.hidden = parts.length === 0;
+}
+
+// Asks the server to put the fix in words. The local description is always
+// computed here; the third-party name lookup only runs with explicit consent.
+async function describeCurrentLocation(allowLookup) {
+  if (!state.location) return;
+  try {
+    const response = await fetch("/api/geo/describe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lat: state.location.lat, lng: state.location.lng, allowLookup })
+    });
+    const result = await response.json();
+    if (!result.ok) return;
+    if (result.placeName) {
+      state.location.label = result.placeName;
+      state.location.detail = result.local?.text || "";
+    } else {
+      state.location.label = result.local?.text || "Your current location";
+      state.location.detail = "";
+      if (allowLookup && result.failure) {
+        toast("Could not reach the place-name service — showing the local estimate instead.", "error");
+      }
+    }
+    saveState();
+    renderLocation();
+  } catch {
+    // The label is cosmetic: a failure here must not disturb the comparison.
+  }
+}
+
+function showLookupConsent() {
+  // Only ask when there is no standing answer.
+  $("lookupConsent").hidden = state.allowPlaceLookup !== null;
+}
+
+// Set when a ZIP outside the catalog is waiting on the consent answer, so
+// saying yes resumes the action the user actually asked for.
+let pendingZipLookup = null;
+
+function answerLookupConsent(allow) {
+  state.allowPlaceLookup = allow;
+  saveState();
+  $("lookupConsent").hidden = true;
+
+  const zip = pendingZipLookup;
+  pendingZipLookup = null;
+  if (zip) {
+    if (allow) resolveProfileZip();
+    else toast(`Kept local. FridgeFuse can only place ZIP ${originZip || "the catalog area"} without a lookup.`);
+    return;
+  }
+
+  describeCurrentLocation(allow);
+  toast(allow
+    ? "Place-name lookup enabled. Reset the demo to change this."
+    : "Kept local. Your coordinates stay on this machine.");
+}
+
+// Turns the profile's saved ZIP into the point we measure from. The catalog's
+// own ZIP resolves with no network call at all.
+async function resolveProfileZip() {
+  const zip = String(state.profile?.postalCode || "").trim();
+  if (!/^\d{5}$/.test(zip)) return;
+  const button = $("useProfileZipButton");
+  button.disabled = true;
+  button.textContent = "Locating…";
+  try {
+    const response = await fetch("/api/geo/postal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ postalCode: zip, allowLookup: state.allowPlaceLookup === true })
+    });
+    const result = await response.json();
+
+    if (result.needsConsent) {
+      pendingZipLookup = zip;
+      $("lookupConsent").hidden = false;
+      toast(result.note || `ZIP ${zip} needs a lookup outside this app.`);
+      return;
+    }
+    if (!result.ok || !result.resolved) {
+      throw new Error(result.failure?.message || `Could not place ZIP ${zip}`);
+    }
+
+    state.location = {
+      lat: result.lat,
+      lng: result.lng,
+      label: result.label || `ZIP ${zip}`,
+      detail: `From ZIP ${zip}`,
+      fromPostalCode: zip
+    };
+    saveState();
+    renderLocation();
+    toast(`Shopping from ZIP ${zip}. Distances are measured from there.`);
+    if (state.groceryList.length) compareStores();
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+    renderLocation();
+  }
+}
+
+function requestLocation() {
+  if (!navigator.geolocation) {
+    toast(`This browser has no location support. Distances will use ${originLabel}.`, "error");
+    return;
+  }
+  // Every browser blocks geolocation outside a secure context, so the LAN-IP
+  // demo path (http://192.168.x.x:3000) fails here no matter the permission.
+  if (window.isSecureContext === false) {
+    toast(`Location needs HTTPS or localhost. On a phone over WiFi, distances use ${originLabel}.`, "error");
+    return;
+  }
+  const button = $("useLocationButton");
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Locating…";
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      state.location = {
+        lat: position.coords.latitude,
+        lng: position.coords.longitude,
+        accuracyM: Number(position.coords.accuracy),
+        label: "Working out where that is…",
+        detail: ""
+      };
+      saveState();
+      renderLocation();
+      button.disabled = false;
+      toast("Location set. Distances are measured from here.");
+      // Local description first — it needs no network and cannot fail.
+      describeCurrentLocation(state.allowPlaceLookup === true);
+      showLookupConsent();
+      if (state.groceryList.length) compareStores();
+    },
+    (error) => {
+      button.disabled = false;
+      button.textContent = original;
+      const reason = error.code === error.PERMISSION_DENIED
+        ? "Location permission was denied."
+        : error.code === error.TIMEOUT
+          ? "Locating timed out."
+          : "Location is unavailable.";
+      toast(`${reason} Distances will use ${originLabel} instead.`, "error");
+    },
+    { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 }
+  );
+}
+
+async function compareStores() {
+  if (comparing || !state.groceryList.length) return;
+  comparing = true;
+  const button = $("compareButton");
+  button.disabled = true;
+  button.textContent = "Comparing…";
+  $("groceryResults").innerHTML = `<p class="results-note">Pricing your list at every nearby store…</p>`;
+
+  try {
+    const response = await fetch("/api/grocery/optimize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        items: state.groceryList.map((item) => ({ name: item.name, qty: item.qty })),
+        lat: state.location?.lat,
+        lng: state.location?.lng
+      })
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.failure?.message || `Comparison returned HTTP ${response.status}`);
+    }
+    // Flag list entries the catalog could not price so the user can fix them.
+    const unmatched = new Set((result.unmatched || []).map((name) => String(name).toLowerCase()));
+    for (const item of state.groceryList) item.unknown = unmatched.has(item.name);
+    saveState();
+    renderGroceryList();
+    renderGroceryResults(result);
+  } catch (error) {
+    $("groceryResults").innerHTML = `<p class="results-note warn">${escapeHtml(error.message)}</p>`;
+    toast(error.message, "error");
+  } finally {
+    comparing = false;
+    button.disabled = state.groceryList.length === 0;
+    button.textContent = "Compare nearby stores";
+  }
+}
+
+function renderGroceryResults(result) {
+  const options = result.options || [];
+  const notes = [];
+  if (result.note) notes.push({ text: result.note, warn: !options.length });
+
+  if (!options.length) {
+    $("groceryResults").innerHTML = notes
+      .map((note) => `<p class="results-note${note.warn ? " warn" : ""}">${escapeHtml(note.text)}</p>`)
+      .join("");
+    return;
+  }
+
+  const best = options[0];
+  const savings = Number(result.savingsVsWorst) || 0;
+  const summary = savings > 0
+    ? `${titleCase(best.name)} on ${best.area.replace(/^.*—\s*/, "")} fills the whole list for ${formatMoney(best.subtotal)} — ${formatMoney(savings)} less than the priciest nearby option, ${best.distanceMi} miles away.`
+    : `${titleCase(best.name)} fills the list for ${formatMoney(best.subtotal)}, ${best.distanceMi} miles away.`;
+
+  const cards = options.map((option, index) => {
+    const rows = (option.lineItems || []).map((line) => `
+      <tr>
+        <td>
+          ${escapeHtml(line.item)}${line.qty > 1 ? ` ×${line.qty}` : ""}
+          <div class="pack-note">${escapeHtml(line.pack || "1 package")}</div>
+        </td>
+        <td>${formatMoney(line.lineTotal)}</td>
+      </tr>`).join("");
+    return `
+      <article class="store-card${option.best ? " best" : ""}">
+        <div>
+          <span class="store-rank">${option.best ? "CHEAPEST" : `#${index + 1}`}</span>
+          <h3 class="store-name">${escapeHtml(option.name)}</h3>
+          <p class="store-meta">${escapeHtml(option.area)} · ${option.distanceMi} mi away · ${option.itemCount} of ${(result.requested || []).length} items</p>
+          ${option.missing?.length ? `<p class="store-missing">Does not stock: ${escapeHtml(option.missing.join(", "))}</p>` : ""}
+        </div>
+        <div class="store-total">
+          <strong>${formatMoney(option.subtotal)}</strong>
+          <small>${option.complete ? "WHOLE LIST" : "PARTIAL"}</small>
+        </div>
+        <details class="store-breakdown">
+          <summary>Price breakdown</summary>
+          <table>
+            <thead><tr><th>Item</th><th>Cost</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </details>
+      </article>`;
+  }).join("");
+
+  $("groceryResults").innerHTML = `
+    <div class="results-heading">
+      <div>
+        <p class="eyebrow">Ranked cheapest first</p>
+        <h3>${options.length} nearby option${options.length === 1 ? "" : "s"}</h3>
+      </div>
+    </div>
+    <p class="results-note">${escapeHtml(summary)}</p>
+    ${notes.map((note) => `<p class="results-note${note.warn ? " warn" : ""}">${escapeHtml(note.text)}</p>`).join("")}
+    <div class="store-list">${cards}</div>`;
+}
+
+$("groceryForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const value = $("groceryInput").value.trim();
+  if (!value) return;
+  const names = value.split(",").map((item) => item.trim()).filter(Boolean);
+  let added = 0;
+  for (const name of names) if (addGroceryItem(name)) added++;
+  $("groceryInput").value = "";
+  saveState();
+  renderGroceryList();
+  if (added) toast(`${added === 1 ? titleCase(names[0]) : `${added} items`} added to the list`);
+});
+
+$("groceryList").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-grocery-action]");
+  if (!button) return;
+  const index = Number(button.dataset.index);
+  const item = state.groceryList[index];
+  if (!item) return;
+  const action = button.dataset.groceryAction;
+  if (action === "remove") state.groceryList.splice(index, 1);
+  if (action === "more") item.qty = Math.min((Number(item.qty) || 1) + 1, MAX_GROCERY_QTY);
+  if (action === "less") {
+    item.qty = (Number(item.qty) || 1) - 1;
+    if (item.qty < 1) state.groceryList.splice(index, 1);
+  }
+  saveState();
+  renderGroceryList();
+});
+
+$("fromPlanButton").addEventListener("click", () => {
+  const planItems = state.plan?.shoppingList || [];
+  if (!planItems.length) return;
+  let added = 0;
+  for (const entry of planItems) if (addGroceryItem(entry.item, Number(entry.qty) || 1)) added++;
+  saveState();
+  renderGroceryList();
+  toast(added ? `${added} item${added === 1 ? "" : "s"} added from your meal plan` : "Those items are already on the list");
+});
+
+$("useLocationButton").addEventListener("click", requestLocation);
+$("useProfileZipButton").addEventListener("click", resolveProfileZip);
+$("compareButton").addEventListener("click", compareStores);
+$("allowLookupButton").addEventListener("click", () => answerLookupConsent(true));
+$("declineLookupButton").addEventListener("click", () => answerLookupConsent(false));
 
 $("chatForm").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -964,13 +1410,15 @@ $("mealList").addEventListener("click", async (event) => {
 document.querySelectorAll("[data-view]").forEach((button) => {
   button.addEventListener("click", () => {
     const view = button.dataset.view;
-    if (window.matchMedia("(max-width: 980px)").matches) setMobileView(view);
-    else if (view === "pantry") openPantry();
-    else {
-      document.querySelectorAll(".desktop-nav .nav-item").forEach((item) => item.classList.toggle("active", item === button));
-      if (view === "chat") $("chatInput").focus();
-      if (view === "plan") $("planView").querySelector(".plan-scroll").scrollTo({ top: 0, behavior: "smooth" });
+    if (view === "pantry") {
+      openPantry();
+      return;
     }
+    setMobileView(view);
+    // Desktop keeps chat and plan side by side, so those clicks only move focus.
+    if (window.matchMedia("(max-width: 980px)").matches) return;
+    if (view === "chat") $("chatInput").focus();
+    if (view === "plan") $("planView").querySelector(".plan-scroll").scrollTo({ top: 0, behavior: "smooth" });
   });
 });
 
@@ -1004,4 +1452,6 @@ if (state.messages?.length) {
 renderProfile();
 renderPantry();
 renderPlan();
+renderGroceryList();
+renderLocation();
 setMobileView(activeMobileView);

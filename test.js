@@ -4,7 +4,10 @@ const assert = require("assert");
 const {
   localPlan, cheapestPack, findPrice, extractJson, PRICES,
   DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL, resolveDataPath,
-  handlePlanRequest, handleVisionRequest, normalizeVisionResult
+  handlePlanRequest, handleVisionRequest, normalizeVisionResult, handleGeoPostal,
+  haversineMiles, isValidCoordinate, resolveCatalogItem, optimizeCart,
+  describeLocation, handleGeoDescribe,
+  STORE_DATA, BRANCHES, DEFAULT_ORIGIN, ITEM_ALIASES
 } = require("./server.js");
 
 let n = 0;
@@ -109,6 +112,190 @@ ok(
     appJs.includes('$("drawerPhotoButton").addEventListener("click", () => $("photoInput").click())'),
   "chat and pantry photo buttons open the native image picker directly"
 );
+
+// ---------- grocery optimizer ----------
+ok(fs.existsSync("data/stores.json"), "data/stores.json exists");
+ok(
+  resolveDataPath("/var/task/netlify/functions", "/var/task", (c) => c === "/var/task/data/stores.json", "stores.json") === "/var/task/data/stores.json",
+  "store data resolves from the Netlify task root"
+);
+ok(fs.readFileSync("netlify.toml", "utf8").includes("data/stores.json"), "netlify bundles the store data with the function");
+// geolocation=() silently disables the browser location API — the Shop tab needs it.
+ok(/geolocation=\(self\)/.test(fs.readFileSync("server.js", "utf8")), "server Permissions-Policy allows geolocation");
+ok(/geolocation=\(self\)/.test(fs.readFileSync("netlify.toml", "utf8")), "netlify Permissions-Policy allows geolocation");
+
+ok(BRANCHES.length >= 4, `store catalog has ${BRANCHES.length} branches`);
+ok(BRANCHES.every((b) => PRICES.stores[b.chain]), "every branch maps to a chain with prices");
+ok(new Set(BRANCHES.map((b) => b.id)).size === BRANCHES.length, "branch ids are unique");
+ok(BRANCHES.every((b) => Math.abs(b.lat) <= 90 && Math.abs(b.lng) <= 180), "branch coordinates are in range");
+ok(new Set(BRANCHES.map((b) => b.chain)).size === Object.keys(PRICES.stores).length, "every priced chain has at least one branch");
+ok(Object.values(ITEM_ALIASES).every((target) => PRICES.items.some((i) => i.name === target)), "every alias points at a real catalog item");
+
+// 1 degree of latitude is ~69 miles anywhere on the globe.
+ok(Math.abs(haversineMiles(33, -111, 34, -111) - 69) < 0.5, `haversine 1deg lat = ${haversineMiles(33, -111, 34, -111).toFixed(2)} mi`);
+ok(haversineMiles(33.42, -111.93, 33.42, -111.93) === 0, "distance to the same point is zero");
+ok(haversineMiles(33, -111, 34, -111) === haversineMiles(34, -111, 33, -111), "distance is symmetric");
+ok(!isValidCoordinate(0, 0) && !isValidCoordinate(NaN, 5) && !isValidCoordinate(91, 0), "null island and out-of-range coordinates are rejected");
+ok(isValidCoordinate(33.42, -111.93), "a real coordinate is accepted");
+
+ok(resolveCatalogItem("cheese").name === "cheddar", "alias resolves cheese to cheddar");
+ok(resolveCatalogItem("  EGGS  ").name === "eggs", "lookup trims and ignores case");
+ok(resolveCatalogItem("unobtainium") === null, "unknown item does not resolve");
+
+const campus = { lat: 33.4242, lng: -111.9281 };
+const basket = optimizeCart({ items: [{ name: "eggs", qty: 2 }, { name: "milk" }, { name: "cheese" }], ...campus });
+ok(basket.options.length === BRANCHES.length, "every branch is priced");
+ok(basket.options[0].best === true, "the winner is flagged");
+ok(basket.options.every((o, i, all) => i === 0 || all[i - 1].subtotal <= o.subtotal), "options are ranked cheapest first");
+// aldi: eggs 2.99*2 + milk 3.49 + cheddar 2.29
+ok(basket.options[0].chain === "aldi" && basket.options[0].subtotal === 11.76, `cheapest basket is aldi at $${basket.options[0].subtotal}`);
+ok(basket.options[0].distanceMi <= basket.options.find((o) => o.chain === "aldi" && o.storeId !== basket.options[0].storeId).distanceMi, "the nearer branch of the winning chain ranks first");
+ok(basket.savingsVsWorst > 0, `savings vs the priciest store reported ($${basket.savingsVsWorst})`);
+ok(basket.options.every((o) => o.complete), "all four chains stock the sample basket");
+ok(basket.requested.every((r) => r.prices === undefined), "internal price tables are not leaked to the client");
+
+const qtyOne = optimizeCart({ items: [{ name: "eggs", qty: 1 }], ...campus }).options[0].subtotal;
+const qtyThree = optimizeCart({ items: [{ name: "eggs", qty: 3 }], ...campus }).options[0].subtotal;
+ok(Math.abs(qtyThree - qtyOne * 3) < 0.01, "quantity multiplies the line total");
+ok(optimizeCart({ items: ["eggs", { name: "egg", qty: 3 }, "EGGS"] }).requested.length === 1, "duplicate and aliased entries merge into one line");
+ok(optimizeCart({ items: ["eggs", { name: "egg", qty: 3 }] }).requested[0].qty === 4, "merged duplicates sum their quantities");
+
+const withJunk = optimizeCart({ items: ["eggs", "unobtainium"], ...campus });
+ok(withJunk.unmatched.length === 1 && withJunk.options[0].lineItems.length === 1, "unmatched items are reported, never silently priced");
+ok(/not in the catalog/i.test(withJunk.note), "the note names the unpriced items");
+
+const nothing = optimizeCart({ items: ["unobtainium"] });
+ok(nothing.options.length === 0, "an unpriceable list returns no stores instead of $0 ones");
+
+const noFix = optimizeCart({ items: ["eggs"] });
+ok(noFix.usedFallbackLocation && noFix.origin.lat === DEFAULT_ORIGIN.lat, "missing coordinates fall back to campus");
+ok(!optimizeCart({ items: ["eggs"], ...campus }).usedFallbackLocation, "a real fix is used as-is");
+ok(optimizeCart({ items: ["eggs"], lat: "abc", lng: null }).options.length > 0, "junk coordinates do not throw");
+ok(optimizeCart({ items: [{ name: "eggs", qty: -5 }] }).requested[0].qty === 1, "negative quantity clamps to 1");
+ok(optimizeCart({ items: [{ name: "eggs", qty: 1e9 }] }).requested[0].qty === 99, "absurd quantity is capped");
+ok(optimizeCart({ items: [null, undefined, "", {}, { name: "eggs" }] }).requested.length === 1, "malformed entries are skipped");
+ok(optimizeCart({ items: Array(80).fill("eggs") }).requested[0].qty === 50, "oversized lists are capped at 50 entries");
+ok(optimizeCart().options.length === 0 && optimizeCart({ items: "nope" }).options.length === 0, "no-argument and non-array calls do not throw");
+
+const tight = optimizeCart({ items: ["eggs"], ...campus, maxDistanceMi: 0.01 });
+ok(tight.widenedSearch && tight.options.length > 0, "an over-tight radius widens instead of returning nothing");
+const near = optimizeCart({ items: ["eggs"], ...campus, maxDistanceMi: 2 });
+ok(near.options.length < BRANCHES.length && near.options.every((o) => o.distanceMi <= 2), "the distance filter excludes far branches");
+
+// ---------- location description + third-party consent ----------
+// The wording is derived from stores.json, never a hardcoded place string.
+const onCampus = describeLocation(DEFAULT_ORIGIN.lat, DEFAULT_ORIGIN.lng);
+ok(onCampus.text === `At ${DEFAULT_ORIGIN.label}` && onCampus.distanceMi === 0, "a fix on the origin is described as being there");
+const nearBranch = describeLocation(BRANCHES[1].lat, BRANCHES[1].lng);
+ok(nearBranch.nearest === (BRANCHES[1].area || BRANCHES[1].name), "the nearest reference point comes from the store data");
+ok(describeLocation(33.43, -111.95).text.includes("mi from"), "a fix between references is described by measured distance");
+ok(/2\d{3} mi from/.test(describeLocation(40.7128, -74.006).text), "a far fix falls back to distance from the origin");
+ok(describeLocation(NaN, 5) === null && describeLocation(0, 0) === null, "invalid coordinates produce no description");
+// Every label the user can see must exist in the data file, not in the code.
+const serverSrc = fs.readFileSync("server.js", "utf8");
+const labels = [DEFAULT_ORIGIN.label, ...BRANCHES.map((b) => b.area)];
+ok(labels.every((label) => !serverSrc.includes(`"${label}"`)), "no place label is hardcoded in server.js");
+
+async function callGeo(body, geocode) {
+  let payload = null;
+  let status = 200;
+  const res = {
+    status(code) { status = code; return this; },
+    json(value) { payload = value; return this; },
+  };
+  await handleGeoDescribe({ body }, res, geocode ? { geocode } : undefined);
+  return { status, payload };
+}
+
+// Consent gating is the security-relevant part, so it gets its own checks.
+async function runGeoConsentChecks() {
+  let geocodeCalls = 0;
+  const fakeGeocode = async () => { geocodeCalls++; return { ok: true, placeName: "Tempe, Arizona" }; };
+  const at = { lat: 33.4242, lng: -111.9281 };
+
+  const noConsent = await callGeo({ ...at }, fakeGeocode);
+  ok(noConsent.payload.lookupUsed === false && geocodeCalls === 0, "without consent no coordinates are sent to the third party");
+  ok(noConsent.payload.local.text.length > 0, "the local description is returned even without consent");
+
+  for (const value of [false, "true", 1, null, undefined]) {
+    await callGeo({ ...at, allowLookup: value }, fakeGeocode);
+  }
+  ok(geocodeCalls === 0, "only a literal true unlocks the lookup (truthy values do not)");
+
+  const consented = await callGeo({ ...at, allowLookup: true }, fakeGeocode);
+  ok(geocodeCalls === 1 && consented.payload.placeName === "Tempe, Arizona", "explicit consent performs the lookup");
+
+  const lookupFailed = await callGeo({ ...at, allowLookup: true }, async () => ({ ok: false, failure: { message: "down" } }));
+  ok(lookupFailed.payload.ok && lookupFailed.payload.placeName === null && lookupFailed.payload.local.text, "a failed lookup still returns the local description");
+
+  ok((await callGeo({ lat: 999, lng: "x" }, fakeGeocode)).status === 400, "invalid coordinates are rejected with 400");
+}
+
+// The profile's saved ZIP is the non-geolocation way into the Shop tab.
+async function runPostalCodeChecks() {
+  async function callPostal(body, geocode) {
+    let payload = null;
+    let status = 200;
+    const res = {
+      status(code) { status = code; return this; },
+      json(value) { payload = value; return this; },
+    };
+    await handleGeoPostal({ body }, res, geocode ? { geocode } : undefined);
+    return { status, payload };
+  }
+
+  let postalCalls = 0;
+  const fakePostal = async (zip) => {
+    postalCalls++;
+    return { ok: true, lat: 41.88, lng: -87.63, label: `ZIP ${zip}`, source: "nominatim", lookupUsed: true };
+  };
+
+  // The catalog's own ZIP must resolve with no third-party call at all.
+  const local = await callPostal({ postalCode: STORE_DATA.zip }, fakePostal);
+  ok(local.payload.resolved && local.payload.lat === DEFAULT_ORIGIN.lat, "the catalog ZIP resolves to the store-data origin");
+  ok(postalCalls === 0, "the catalog ZIP never triggers a third-party lookup");
+  ok(local.payload.source === "local-store-data" && local.payload.lookupUsed === false, "the catalog ZIP reports itself as locally resolved");
+
+  const foreignNoConsent = await callPostal({ postalCode: "60601" }, fakePostal);
+  ok(foreignNoConsent.payload.needsConsent === true && postalCalls === 0, "a ZIP outside the catalog asks for consent before any lookup");
+  ok(foreignNoConsent.payload.resolved === false, "an unconsented ZIP is not silently resolved");
+
+  for (const value of [false, "true", 1, null]) {
+    await callPostal({ postalCode: "60601", allowLookup: value }, fakePostal);
+  }
+  ok(postalCalls === 0, "only a literal true unlocks the ZIP lookup");
+
+  const consented = await callPostal({ postalCode: "60601", allowLookup: true }, fakePostal);
+  ok(postalCalls === 1 && consented.payload.resolved === true, "explicit consent resolves a ZIP outside the catalog");
+
+  for (const bad of ["", "abc", "1234", "123456", "8528a", null, undefined]) {
+    ok((await callPostal({ postalCode: bad }, fakePostal)).status === 400, `malformed ZIP ${JSON.stringify(bad)} is rejected with 400`);
+  }
+
+  const failed = await callPostal({ postalCode: "60601", allowLookup: true }, async () => ({ ok: false, failure: { message: "down" } }));
+  ok(failed.payload.ok === false && failed.payload.resolved === false, "a failed ZIP lookup reports rather than inventing a location");
+
+  ok(/useProfileZipButton/.test(appJs) && html.includes('id="useProfileZipButton"'), "the Shop tab exposes the saved ZIP as a location source");
+  ok(/allowLookup:\s*state\.allowPlaceLookup === true/.test(appJs), "the client never asserts consent it does not have");
+}
+
+ok(/allowPlaceLookup:\s*null/.test(appJs), "the client defaults to never sending coordinates");
+ok(html.includes('id="lookupConsent"'), "the consent disclaimer exists in the markup");
+ok(/nominatim/i.test(serverSrc) && !/nominatim/i.test(appJs), "the third-party call is proxied by the server, not the browser");
+
+// app.js wires listeners at module scope, so one missing id throws on load and
+// takes the whole page with it. thinkingMessage is created at runtime.
+const RUNTIME_IDS = new Set(["thinkingMessage"]);
+const htmlIds = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
+const missingIds = [...new Set([...appJs.matchAll(/\$\("([^"]+)"\)/g)].map((m) => m[1]))]
+  .filter((id) => !htmlIds.has(id) && !RUNTIME_IDS.has(id));
+ok(missingIds.length === 0, `every element app.js touches exists in the HTML${missingIds.length ? ` (missing: ${missingIds.join(", ")})` : ""}`);
+
+ok(html.includes('id="groceryView"'), "index.html has the grocery panel");
+ok(html.includes('data-view="grocery"'), "index.html has the grocery nav entry");
+ok(appJs.includes("/api/grocery/optimize"), "app.js calls the optimizer");
+ok(appJs.includes("navigator.geolocation"), "app.js asks the browser for a location");
+ok(fs.readFileSync("public/styles.css", "utf8").includes("repeat(4, 1fr)"), "mobile nav has room for the fourth tab");
 
 function aiEnvelope(plan) {
   return {
@@ -277,6 +464,9 @@ async function runRouteChecks() {
   const updatedAppJs = fs.readFileSync("public/app.js", "utf8");
   ok(updatedHtml.includes("visionReviewList") && updatedAppJs.includes("data-vision-action"), "frontend includes an uncertain-item confirmation interface");
   ok(/MAX_VISION_IMAGE_EDGE\s*=\s*1024/.test(updatedAppJs) && /resizeImageForVision\(file\)/.test(updatedAppJs), "frontend caps large vision uploads at the tested 1024-pixel edge");
+
+  await runGeoConsentChecks();
+  await runPostalCodeChecks();
 
   console.log(`\nALL ${n} CHECKS PASSED`);
 }
