@@ -21,6 +21,10 @@ const ALIASES = {
 };
 
 const DEFAULT_STATE = {
+  profile: {
+    displayName: "",
+    postalCode: ""
+  },
   pantry: [],
   constraints: {
     budget: 20,
@@ -36,6 +40,9 @@ const DEFAULT_STATE = {
 
 const MAX_EXCLUDED = 20;
 const MAX_MESSAGES = 30;
+const PROFILE_EQUIPMENT_OPTIONS = ["microwave", "stove", "oven", "air fryer"];
+const PROFILE_DIET_OPTIONS = ["vegetarian", "vegan", "dairy-free", "gluten-free", "no peanuts"];
+const PROFILE_EXTRA_DIET_TERMS = ["peanut allergy"];
 
 function addExclusion(title) {
   if (!title) return;
@@ -53,6 +60,10 @@ function loadState() {
     return {
       ...structuredClone(DEFAULT_STATE),
       ...stored,
+      profile: {
+        ...DEFAULT_STATE.profile,
+        ...(stored.profile || {})
+      },
       constraints: { ...DEFAULT_STATE.constraints, ...(stored.constraints || {}) },
       pantry: Array.isArray(stored.pantry) ? stored.pantry : [],
       excludedTitles: Array.isArray(stored.excludedTitles) ? stored.excludedTitles.slice(-MAX_EXCLUDED) : [],
@@ -101,7 +112,14 @@ function toast(message, type = "") {
 function addUserMessage(text, { record = true } = {}) {
   const article = document.createElement("article");
   article.className = "message user-message";
-  article.innerHTML = `<div class="message-copy"><p>${escapeHtml(text)}</p></div>`;
+  const displayName = state.profile?.displayName?.trim();
+  article.innerHTML = `
+    <div class="message-copy">
+      ${displayName
+        ? `<span class="message-author">${escapeHtml(displayName)}</span>`
+        : ""}
+      <p>${escapeHtml(text)}</p>
+    </div>`;
   $("messages").append(article);
   scrollMessages();
   if (record) recordMessage({ role: "user", text });
@@ -354,7 +372,10 @@ async function buildPlan(request = "") {
     const result = await response.json();
     if (!result.ok && !result.dinners) throw new Error(result.failure?.message || "The planner did not return a plan");
 
-    state.plan = result;
+    state.plan = {
+      ...result,
+      constraints: structuredClone(state.constraints)
+    };
     saveState();
     renderPlan();
     hideThinking();
@@ -401,14 +422,19 @@ function renderPlan() {
     return;
   }
 
+  const planConstraints = {
+    ...DEFAULT_STATE.constraints,
+    ...(plan.constraints || state.constraints)
+  };
+
   $("emptyPlan").hidden = true;
   $("planContent").hidden = false;
   $("budgetStamp").hidden = false;
   $("planTitle").textContent = `${plan.dinners.length} dinners, one small grocery run`;
-  $("planSubtitle").textContent = `Built for ${state.constraints.equipment.join(" + ") || "the equipment you have"}, ${state.constraints.maxTimeMin} minutes or less each.`;
+  $("planSubtitle").textContent = `Built for ${planConstraints.equipment.join(" + ") || "the equipment you have"}, ${planConstraints.maxTimeMin} minutes or less each.`;
   $("budgetTotal").textContent = formatMoney(plan.totalCost);
-  $("budgetLimit").textContent = `of ${formatMoney(state.constraints.budget)}`;
-  $("budgetStamp").classList.toggle("over", plan.totalCost > state.constraints.budget);
+  $("budgetLimit").textContent = `of ${formatMoney(planConstraints.budget)}`;
+  $("budgetStamp").classList.toggle("over", plan.totalCost > planConstraints.budget);
   $("tripStatus").classList.add("ready");
   $("tripLabel").textContent = `${plan.shoppingList?.length || 0} packages · ${formatMoney(plan.totalCost)} estimated`;
 
@@ -417,7 +443,7 @@ function renderPlan() {
   const logicParts = [];
   if (soon.length) logicParts.push(`${capitalize(soon.join(" and "))} get used first`);
   if (shared.length) logicParts.push(`${shared.length} purchase${shared.length === 1 ? " works" : "s work"} across multiple dinners`);
-  logicParts.push(plan.totalCost <= state.constraints.budget ? `${formatMoney(state.constraints.budget - plan.totalCost)} stays in your budget` : `${formatMoney(plan.totalCost - state.constraints.budget)} over budget`);
+  logicParts.push(plan.totalCost <= planConstraints.budget ? `${formatMoney(planConstraints.budget - plan.totalCost)} stays in your budget` : `${formatMoney(plan.totalCost - planConstraints.budget)} over budget`);
   $("planLogic").textContent = logicParts.join(". ") + ".";
 
   const dayLabels = ["TONIGHT", "NEXT", "THEN", "LATER", "LAST"];
@@ -435,7 +461,7 @@ function renderPlan() {
         <div class="meal-day">${dayLabels[index] || `DAY ${index + 1}`}</div>
         <div class="meal-main">
           <h3>${escapeHtml(meal.title)}</h3>
-          <p class="meal-meta">${Number(meal.timeMin) || "—"} min · beginner · ${escapeHtml((meal.equip || []).join(" + ") || state.constraints.equipment[0] || "simple equipment")}</p>
+          <p class="meal-meta">${Number(meal.timeMin) || "—"} min · beginner · ${escapeHtml((meal.equip || []).join(" + ") || planConstraints.equipment[0] || "simple equipment")}</p>
           <p class="meal-reason">${escapeHtml(reason)}</p>
         </div>
         <div class="meal-actions">
@@ -500,7 +526,90 @@ function renderPantry() {
   `).join("");
 }
 
+function profileInitials(name) {
+  const parts = String(name || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (!parts.length) return "ME";
+
+  return parts
+    .slice(0, 2)
+    .map((part) => part[0].toUpperCase())
+    .join("");
+}
+
+function renderProfile() {
+  const name = state.profile?.displayName?.trim() || "";
+
+  $("profileButton").textContent = profileInitials(name);
+  $("profileButton").setAttribute(
+    "aria-label",
+    name ? `Open ${name}'s profile` : "Open profile"
+  );
+}
+
+function openProfile() {
+  closePantry();
+
+  $("profileName").value = state.profile?.displayName || "";
+  $("profilePostalCode").value = state.profile?.postalCode || "";
+
+  const budget = Math.min(
+    100,
+    Math.max(5, Number(state.constraints.budget) || 20)
+  );
+
+  $("profileBudget").value = budget;
+  $("profileBudgetValue").textContent = `$${budget}`;
+
+  const dinners = Math.min(7, Math.max(1, Math.floor(Number(state.constraints.dinners)) || 3));
+  $("profileDinners").value = dinners;
+
+  const maxTimeMin = Math.min(60, Math.max(10, Number(state.constraints.maxTimeMin) || 20));
+  $("profileMaxTime").value = maxTimeMin;
+
+  const equipment = new Set((state.constraints.equipment || []).map((item) => String(item).toLowerCase()));
+
+  document
+    .querySelectorAll('#profileForm input[name="equipment"]')
+    .forEach((input) => {
+      input.checked = equipment.has(String(input.value).toLowerCase());
+    });
+
+  const diets = new Set(
+    String(state.constraints.diet || "")
+      .split(",")
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean)
+  );
+
+  if (diets.has("peanut allergy")) {
+    diets.add("no peanuts");
+  }
+
+  document
+    .querySelectorAll('#profileForm input[name="diet"]')
+    .forEach((input) => {
+      input.checked = diets.has(input.value.toLowerCase());
+    });
+
+  $("profileDrawer").classList.add("open");
+  $("profileDrawer").setAttribute("aria-hidden", "false");
+  document.body.dataset.drawerOpen = "true";
+
+  requestAnimationFrame(() => $("profileName").focus());
+}
+
+function closeProfile() {
+  $("profileDrawer").classList.remove("open");
+  $("profileDrawer").setAttribute("aria-hidden", "true");
+  delete document.body.dataset.drawerOpen;
+}
+
 function openPantry() {
+  closeProfile();
   $("pantryDrawer").classList.add("open");
   $("pantryDrawer").setAttribute("aria-hidden", "false");
   document.body.dataset.drawerOpen = "true";
@@ -659,6 +768,101 @@ async function handlePhoto(file) {
   }
 }
 
+$("profileButton").addEventListener("click", openProfile);
+
+document
+  .querySelectorAll("[data-close-profile]")
+  .forEach((button) => {
+    button.addEventListener("click", closeProfile);
+  });
+
+$("profileBudget").addEventListener("input", () => {
+  $("profileBudgetValue").textContent = `$${$("profileBudget").value}`;
+});
+
+$("profileForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+
+  const displayName = $("profileName").value.trim().slice(0, 40);
+  const postalCode = $("profilePostalCode").value.trim();
+
+  if (postalCode && !/^\d{5}$/.test(postalCode)) {
+    toast("Enter a five-digit ZIP code.", "error");
+    $("profilePostalCode").focus();
+    return;
+  }
+
+  const dinners = Math.floor(Number($("profileDinners").value));
+  if (!Number.isFinite(dinners) || dinners < 1 || dinners > 7) {
+    toast("Choose 1 to 7 dinners.", "error");
+    $("profileDinners").focus();
+    return;
+  }
+
+  const maxTimeMin = Number($("profileMaxTime").value);
+  if (!Number.isFinite(maxTimeMin) || maxTimeMin < 10 || maxTimeMin > 60) {
+    toast("Choose 10 to 60 minutes per dinner.", "error");
+    $("profileMaxTime").focus();
+    return;
+  }
+
+  const checkedEquipment = [
+    ...document.querySelectorAll(
+      '#profileForm input[name="equipment"]:checked'
+    )
+  ].map((input) => input.value);
+
+  if (!checkedEquipment.length) {
+    toast("Choose at least one cooking option.", "error");
+    return;
+  }
+
+  const knownEquipment = new Set(PROFILE_EQUIPMENT_OPTIONS);
+  const preservedEquipment = (state.constraints.equipment || [])
+    .map((item) => String(item))
+    .filter((item) => item && !knownEquipment.has(item.toLowerCase()));
+  const equipment = [...new Set([...checkedEquipment, ...preservedEquipment])];
+
+  const checkedDiets = [
+    ...document.querySelectorAll(
+      '#profileForm input[name="diet"]:checked'
+    )
+  ].map((input) => input.value);
+
+  const knownDiets = new Set([...PROFILE_DIET_OPTIONS, ...PROFILE_EXTRA_DIET_TERMS].map((item) => item.toLowerCase()));
+  const preservedDiets = String(state.constraints.diet || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item && !knownDiets.has(item.toLowerCase()));
+  if (checkedDiets.includes("no peanuts")) {
+    for (let i = preservedDiets.length - 1; i >= 0; i -= 1) {
+      if (preservedDiets[i].toLowerCase() === "peanut allergy") preservedDiets.splice(i, 1);
+    }
+  }
+  const diets = [...checkedDiets, ...preservedDiets];
+
+  state.profile = {
+    displayName,
+    postalCode
+  };
+
+  if (state.plan && !state.plan.constraints) {
+    state.plan.constraints = structuredClone(state.constraints);
+  }
+
+  state.constraints.budget = Math.min(100, Math.max(5, Number($("profileBudget").value) || 20));
+  state.constraints.equipment = equipment;
+  state.constraints.diet = diets.join(", ");
+  state.constraints.dinners = dinners;
+  state.constraints.maxTimeMin = maxTimeMin;
+
+  saveState();
+  renderProfile();
+  closeProfile();
+
+  toast("Profile saved. New plans will use these preferences.");
+});
+
 $("chatForm").addEventListener("submit", (event) => {
   event.preventDefault();
   const message = $("chatInput").value;
@@ -778,7 +982,10 @@ $("resetDemoButton").addEventListener("click", () => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") closePantry();
+  if (event.key === "Escape") {
+    closePantry();
+    closeProfile();
+  }
 });
 
 if (state.messages?.length) {
@@ -793,6 +1000,8 @@ if (state.messages?.length) {
   const firstMessage = document.querySelector(".assistant-message .message-copy");
   firstMessage.innerHTML = "<p>Your last plan and pantry are still here. Tell me what changed.</p><p class=\"message-example\">Try \"lower my budget to $15\" or swap a meal from the plan.</p>";
 }
+
+renderProfile();
 renderPantry();
 renderPlan();
 setMobileView(activeMobileView);
