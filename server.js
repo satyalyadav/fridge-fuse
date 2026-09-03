@@ -47,6 +47,18 @@ const app = express();
 app.disable("x-powered-by");
 app.use(express.json({ limit: "12mb" }));
 
+// Body-parser failures default to an HTML error page, which every fetch() in
+// the UI would then choke on while parsing. Answer in JSON like every route.
+app.use((err, req, res, next) => {
+  if (err?.type === "entity.parse.failed") {
+    return res.status(400).json({ ok: false, failure: { message: "Request body must be valid JSON." } });
+  }
+  if (err?.type === "entity.too.large") {
+    return res.status(413).json({ ok: false, failure: { message: "Request body is too large (12mb limit)." } });
+  }
+  return next(err);
+});
+
 // Basic hygiene headers (no extra dependency). Skips CSP on purpose: the UI
 // loads Google Fonts, and a strict policy would break them on stage.
 app.use((req, res, next) => {
@@ -54,7 +66,9 @@ app.use((req, res, next) => {
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("X-DNS-Prefetch-Control", "off");
-  res.setHeader("Permissions-Policy", "microphone=(), geolocation=()");
+  // geolocation=(self): the Groceries tab needs the browser location API to
+  // rank nearby stores. Anything stricter disables it with no console error.
+  res.setHeader("Permissions-Policy", "microphone=(), geolocation=(self)");
   next();
 });
 
@@ -157,14 +171,45 @@ function extractJson(content) {
 }
 
 // ---------- mock price DB (Tempe 85281, dev-harvested mock) ----------
-function resolveDataPath(runtimeDir = __dirname, taskRoot = process.env.LAMBDA_TASK_ROOT, exists = fs.existsSync) {
-  const candidates = [path.join(runtimeDir, "data", "prices.json")];
-  if (taskRoot) candidates.push(path.join(taskRoot, "data", "prices.json"));
+// fileName is last so the original 3-arg calls keep working unchanged.
+function resolveDataPath(runtimeDir = __dirname, taskRoot = process.env.LAMBDA_TASK_ROOT, exists = fs.existsSync, fileName = "prices.json") {
+  const candidates = [path.join(runtimeDir, "data", fileName)];
+  if (taskRoot) candidates.push(path.join(taskRoot, "data", fileName));
   return candidates.find((candidate) => exists(candidate)) || candidates[0];
 }
 
 const PRICES = JSON.parse(fs.readFileSync(resolveDataPath(), "utf8"));
 const STORES = Object.keys(PRICES.stores);
+// Typed words a student uses -> catalog item ("cheese" -> "cheddar"). Lives in
+// the data file so the UI can fetch it instead of keeping a second copy.
+const ITEM_ALIASES = PRICES.aliases || {};
+
+// ---------- store branch locations (approximate dev mock, Tempe 85281) ----------
+const STORE_DATA = JSON.parse(
+  fs.readFileSync(resolveDataPath(__dirname, process.env.LAMBDA_TASK_ROOT, fs.existsSync, "stores.json"), "utf8")
+);
+// Only branches whose chain has a price list are usable — a typo in the data
+// would otherwise surface as a store with no prices instead of a loud failure.
+const BRANCHES = (STORE_DATA.branches || []).filter(
+  (branch) => branch && PRICES.stores[branch.chain] && Number.isFinite(branch.lat) && Number.isFinite(branch.lng)
+);
+if (BRANCHES.length !== (STORE_DATA.branches || []).length) {
+  console.error(`[WARN] stores.json: ${(STORE_DATA.branches || []).length - BRANCHES.length} branch(es) dropped (unknown chain or bad coordinates)`);
+}
+// Where distances are measured from when the browser gives us nothing usable.
+// Taken from stores.json; if that has no origin, it is derived from the mean of
+// the loaded branches so no place name or coordinate is baked into this file.
+const DEFAULT_ORIGIN = (() => {
+  const origin = STORE_DATA.origin || {};
+  const lat = Number(origin.lat);
+  const lng = Number(origin.lng);
+  if (isValidCoordinate(lat, lng)) {
+    return { lat, lng, label: origin.label || `the ${STORE_DATA.zip || "local"} area` };
+  }
+  if (!BRANCHES.length) return { lat: 0, lng: 0, label: "the store area" };
+  const mean = (pick) => BRANCHES.reduce((total, branch) => total + branch[pick], 0) / BRANCHES.length;
+  return { lat: mean("lat"), lng: mean("lng"), label: `the ${STORE_DATA.zip || "local"} store area` };
+})();
 
 function findPrice(itemName) {
   const q = itemName.toLowerCase();
@@ -183,6 +228,254 @@ function cheapestPack(itemName) {
     }
   }
   return best;
+}
+
+// ---------- grocery cart optimizer (deterministic, offline, no API key) ----------
+const EARTH_RADIUS_MI = 3958.7613;
+const MAX_CART_ITEMS = 50;
+const MAX_ITEM_QTY = 99;
+const DEFAULT_MAX_DISTANCE_MI = 15;
+
+function haversineMiles(lat1, lng1, lat2, lng2) {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  // asin clamped: floating point can push a past 1 for antipodal points.
+  return 2 * EARTH_RADIUS_MI * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+function isValidCoordinate(lat, lng) {
+  return Number.isFinite(lat) && Number.isFinite(lng) &&
+    Math.abs(lat) <= 90 && Math.abs(lng) <= 180 &&
+    !(lat === 0 && lng === 0); // null island means "no fix", not the Atlantic
+}
+
+// Exact name -> alias table -> the looser substring match findPrice already does.
+function resolveCatalogItem(name) {
+  const q = String(name ?? "").trim().toLowerCase();
+  if (!q) return null;
+  const exact = PRICES.items.find((item) => item.name.toLowerCase() === q);
+  if (exact) return exact;
+  const aliased = ITEM_ALIASES[q];
+  if (aliased) {
+    const hit = PRICES.items.find((item) => item.name.toLowerCase() === String(aliased).toLowerCase());
+    if (hit) return hit;
+  }
+  return findPrice(q);
+}
+
+// Accepts ["eggs"] or [{name, qty}]. Merges duplicates, clamps quantities, and
+// keeps anything the catalog does not know in `unmatched` rather than guessing
+// a price for it.
+function normalizeCartItems(rawItems) {
+  const merged = new Map();
+  const unmatched = [];
+  for (const raw of rawItems.slice(0, MAX_CART_ITEMS)) {
+    const isObject = raw !== null && typeof raw === "object";
+    const label = String((isObject ? raw.name : raw) ?? "").trim();
+    if (!label) continue;
+    const qty = Math.min(
+      Math.max(1, Math.floor(asPositiveNumber(isObject ? raw.qty : 1, 1)) || 1),
+      MAX_ITEM_QTY
+    );
+    const match = resolveCatalogItem(label);
+    if (!match) {
+      if (!unmatched.includes(label)) unmatched.push(label);
+      continue;
+    }
+    const existing = merged.get(match.name);
+    if (existing) existing.qty = Math.min(existing.qty + qty, MAX_ITEM_QTY);
+    else merged.set(match.name, {
+      item: match.name,
+      unit: match.unit,
+      qty,
+      requestedAs: label,
+      prices: match.prices,
+    });
+  }
+  return { resolved: [...merged.values()], unmatched };
+}
+
+// Describes where a coordinate is using only data we already ship: the branch
+// list and the origin in stores.json. Nothing here is a hardcoded place string,
+// so editing stores.json changes what users are told.
+function describeLocation(lat, lng) {
+  if (!isValidCoordinate(Number(lat), Number(lng))) return null;
+  const references = [
+    ...BRANCHES.map((branch) => ({ label: branch.area || branch.name, lat: branch.lat, lng: branch.lng })),
+    { label: DEFAULT_ORIGIN.label, lat: DEFAULT_ORIGIN.lat, lng: DEFAULT_ORIGIN.lng },
+  ];
+  let nearest = null;
+  for (const reference of references) {
+    const distanceMi = haversineMiles(Number(lat), Number(lng), reference.lat, reference.lng);
+    if (!nearest || distanceMi < nearest.distanceMi) nearest = { ...reference, distanceMi };
+  }
+  if (!nearest) return null;
+  const miles = +nearest.distanceMi.toFixed(2);
+  // Wording tracks the measured distance rather than a fixed phrase.
+  const text = miles <= 0.3
+    ? `At ${nearest.label}`
+    : miles <= 3
+      ? `${miles} mi from ${nearest.label}`
+      : `${Math.round(miles)} mi from ${DEFAULT_ORIGIN.label}`;
+  return { text, nearest: nearest.label, distanceMi: miles, source: "local-store-data" };
+}
+
+// Reverse geocoding through OpenStreetMap Nominatim. Kept server-side so the
+// User-Agent follows their usage policy and the browser never hits CORS. Only
+// ever called when the client passes explicit consent.
+const NOMINATIM_MIN_INTERVAL_MS = 1100; // their policy allows ~1 request/second
+let lastNominatimAt = 0;
+
+async function reverseGeocode(lat, lng) {
+  const wait = NOMINATIM_MIN_INTERVAL_MS - (Date.now() - lastNominatimAt);
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+  lastNominatimAt = Date.now();
+  // 3 decimals is ~110m: enough for a neighbourhood name, coarser than the fix.
+  const roundedLat = Number(lat).toFixed(3);
+  const roundedLng = Number(lng).toFixed(3);
+  const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=14&lat=${roundedLat}&lon=${roundedLng}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6000);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "FridgeFuse/0.1 (ASU AIR Spark Challenge student prototype)",
+        "Accept-Language": "en",
+        Accept: "application/json",
+      },
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      return { ok: false, failure: reportFailure("nominatim", "reverse", {
+        status: response.status, message: `Reverse geocode failed: HTTP ${response.status}`,
+        responseSnippet: text.slice(0, 200),
+      }) };
+    }
+    const data = JSON.parse(text);
+    const a = data.address || {};
+    const locality = a.neighbourhood || a.suburb || a.city || a.town || a.village || a.hamlet || a.county;
+    const parts = [locality, a.state_code || a.state, a.postcode].filter(Boolean);
+    const placeName = parts.length ? parts.join(", ") : (data.display_name || "").split(",").slice(0, 2).join(",").trim();
+    if (!placeName) {
+      return { ok: false, failure: reportFailure("nominatim", "reverse", {
+        status: "no-name", message: "Reverse geocode returned no usable place name.",
+      }) };
+    }
+    return { ok: true, placeName, precisionNote: "rounded to ~110 m before lookup" };
+  } catch (e) {
+    return { ok: false, failure: reportFailure("nominatim", "reverse", {
+      status: e.name === "AbortError" ? "timeout" : "network-error",
+      message: `Reverse geocode failed: ${e.message}`,
+    }) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function optimizeCart({ items = [], lat, lng, maxDistanceMi } = {}) {
+  const { resolved, unmatched } = normalizeCartItems(Array.isArray(items) ? items : []);
+  const userLat = Number(lat);
+  const userLng = Number(lng);
+  const usedFallbackLocation = !isValidCoordinate(userLat, userLng);
+  const origin = usedFallbackLocation
+    ? { lat: DEFAULT_ORIGIN.lat, lng: DEFAULT_ORIGIN.lng, label: DEFAULT_ORIGIN.label }
+    : { lat: userLat, lng: userLng, label: "your location" };
+  const radius = asPositiveNumber(maxDistanceMi, DEFAULT_MAX_DISTANCE_MI) || DEFAULT_MAX_DISTANCE_MI;
+
+  const byDistance = BRANCHES
+    .map((branch) => ({ branch, distanceMi: +haversineMiles(origin.lat, origin.lng, branch.lat, branch.lng).toFixed(2) }))
+    .sort((a, b) => a.distanceMi - b.distanceMi);
+
+  // An empty result is worse than a slightly-too-far one: widen rather than
+  // hand the user a blank screen.
+  let inRange = byDistance.filter((entry) => entry.distanceMi <= radius);
+  const widenedSearch = inRange.length === 0 && byDistance.length > 0;
+  if (widenedSearch) inRange = byDistance.slice(0, 3);
+
+  // Nothing priceable: ranking stores by a $0 basket would be meaningless, so
+  // return no options and let `note` explain why.
+  const options = (resolved.length === 0 ? [] : inRange).map(({ branch, distanceMi }) => {
+    const lineItems = [];
+    const missing = [];
+    let subtotal = 0;
+    for (const entry of resolved) {
+      const pack = entry.prices[branch.chain];
+      const price = Number(pack?.price);
+      if (!pack || !Number.isFinite(price)) {
+        missing.push(entry.item); // chain does not stock it
+        continue;
+      }
+      const lineTotal = +(price * entry.qty).toFixed(2);
+      subtotal += lineTotal;
+      lineItems.push({
+        item: entry.item,
+        requestedAs: entry.requestedAs,
+        qty: entry.qty,
+        unit: entry.unit,
+        pack: pack.pack,
+        packPrice: price,
+        lineTotal,
+      });
+    }
+    return {
+      storeId: branch.id,
+      chain: branch.chain,
+      name: branch.name,
+      chainLabel: PRICES.stores[branch.chain],
+      area: branch.area,
+      lat: branch.lat,
+      lng: branch.lng,
+      approximateLocation: branch.approximate !== false,
+      distanceMi,
+      missing,
+      complete: resolved.length > 0 && missing.length === 0,
+      itemCount: lineItems.length,
+      subtotal: +subtotal.toFixed(2),
+      lineItems,
+    };
+  });
+
+  // Stores that cover the whole list win; then price; then distance. The id
+  // tie-break keeps the order stable for identical branches.
+  options.sort((a, b) =>
+    Number(b.complete) - Number(a.complete) ||
+    a.subtotal - b.subtotal ||
+    a.distanceMi - b.distanceMi ||
+    a.storeId.localeCompare(b.storeId)
+  );
+  if (options.length) options[0].best = true;
+
+  const covering = options.filter((option) => option.complete);
+  const savingsVsWorst = covering.length > 1
+    ? +(covering[covering.length - 1].subtotal - covering[0].subtotal).toFixed(2)
+    : 0;
+
+  const notes = [];
+  if (!resolved.length && !unmatched.length) notes.push("Add at least one item to compare stores.");
+  else if (!resolved.length) notes.push(`None of those items are in the Tempe 85281 mock catalog yet, so there is nothing to price: ${unmatched.join(", ")}.`);
+  else if (unmatched.length) notes.push(`Not priced (not in the catalog): ${unmatched.join(", ")}.`);
+  if (options.length && widenedSearch) notes.push(`No store within ${radius} miles — showing the ${inRange.length} closest instead.`);
+  if (usedFallbackLocation) notes.push(`Distances are measured from ${DEFAULT_ORIGIN.label} because no location was shared.`);
+
+  return {
+    origin,
+    usedFallbackLocation,
+    maxDistanceMi: radius,
+    widenedSearch,
+    requested: resolved.map(({ prices, ...rest }) => rest),
+    unmatched,
+    options,
+    cheapestStoreId: options[0]?.storeId || null,
+    savingsVsWorst,
+    zip: PRICES.zip,
+    locationNote: STORE_DATA.note,
+    priceNote: PRICES.note,
+    note: notes.join(" "),
+  };
 }
 
 // ---------- small, grounded recipe bank for the stable demo planner ----------
@@ -514,6 +807,7 @@ app.get("/api/health", (req, res) => {
     airVisionVerifyModel: AIR_VISION_VERIFY_MODEL,
     stores: STORES,
     priceItems: PRICES.items.length,
+    storeBranches: BRANCHES.length,
     zip: PRICES.zip,
     failures: failures.length,
   });
@@ -816,10 +1110,92 @@ app.post("/api/plan", handlePlanRequest);
 
 app.get("/api/prices", (req, res) => {
   const q = (req.query.item || "").toLowerCase();
-  if (!q) return res.json({ ok: true, stores: PRICES.stores, items: PRICES.items, zip: PRICES.zip, note: PRICES.note });
+  if (!q) return res.json({ ok: true, stores: PRICES.stores, items: PRICES.items, aliases: ITEM_ALIASES, zip: PRICES.zip, note: PRICES.note });
   const hit = findPrice(q);
   if (!hit) return res.json({ ok: false, failure: { message: `No mock price for "${q}". Try /api/prices for full list.` } });
   res.json({ ok: true, ...hit, zip: PRICES.zip });
+});
+
+// Nearby branches with distance from the caller. Falls back to campus rather
+// than erroring when the browser gives us no usable fix.
+app.get("/api/stores", (req, res) => {
+  const lat = Number(req.query.lat);
+  const lng = Number(req.query.lng);
+  const hasFix = isValidCoordinate(lat, lng);
+  const origin = hasFix
+    ? { lat, lng, label: "your location" }
+    : { lat: DEFAULT_ORIGIN.lat, lng: DEFAULT_ORIGIN.lng, label: DEFAULT_ORIGIN.label };
+  const radius = asPositiveNumber(req.query.maxDistanceMi, DEFAULT_MAX_DISTANCE_MI) || DEFAULT_MAX_DISTANCE_MI;
+  const stores = BRANCHES
+    .map((branch) => ({
+      ...branch,
+      chainLabel: PRICES.stores[branch.chain],
+      distanceMi: +haversineMiles(origin.lat, origin.lng, branch.lat, branch.lng).toFixed(2),
+    }))
+    .sort((a, b) => a.distanceMi - b.distanceMi)
+    .filter((store) => store.distanceMi <= radius);
+  res.json({
+    ok: true,
+    origin,
+    usedFallbackLocation: !hasFix,
+    maxDistanceMi: radius,
+    count: stores.length,
+    stores,
+    zip: STORE_DATA.zip,
+    note: STORE_DATA.note,
+  });
+});
+
+// Turns a fix into something readable. The local description always comes back;
+// the third-party lookup only runs when the client sends allowLookup: true.
+async function handleGeoDescribe(req, res, { geocode = reverseGeocode } = {}) {
+  const body = req.body || {};
+  const lat = Number(body.lat);
+  const lng = Number(body.lng);
+  if (!isValidCoordinate(lat, lng)) {
+    return res.status(400).json({ ok: false, failure: { message: "A valid lat and lng are required." } });
+  }
+  const local = describeLocation(lat, lng);
+  // Strict equality: only an explicit true sends coordinates off this machine.
+  if (body.allowLookup !== true) {
+    return res.json({ ok: true, local, lookupUsed: false });
+  }
+  const lookup = await geocode(lat, lng);
+  return res.json({
+    ok: true,
+    local,
+    lookupUsed: true,
+    placeName: lookup.ok ? lookup.placeName : null,
+    precisionNote: lookup.ok ? lookup.precisionNote : null,
+    // A failed lookup is reported, not fatal: the local description still stands.
+    failure: lookup.ok ? undefined : lookup.failure,
+  });
+}
+
+app.post("/api/geo/describe", handleGeoDescribe);
+
+// Prices a basket at every nearby branch and ranks them cheapest-first.
+app.post("/api/grocery/optimize", (req, res) => {
+  const body = req.body || {};
+  if (body.items !== undefined && !Array.isArray(body.items)) {
+    return res.status(400).json({ ok: false, failure: { message: "items must be an array of names or {name, qty} entries" } });
+  }
+  const items = Array.isArray(body.items) ? body.items : [];
+  if (!items.length) {
+    return res.status(400).json({ ok: false, failure: { message: "Add at least one item before comparing stores." } });
+  }
+  if (!BRANCHES.length) {
+    return res.status(503).json({ ok: false, failure: reportFailure("grocery", "optimize", {
+      status: "no-stores", message: "No store locations are loaded — check data/stores.json.",
+    }) });
+  }
+  try {
+    return res.json({ ok: true, ...optimizeCart({ items, lat: body.lat, lng: body.lng, maxDistanceMi: body.maxDistanceMi }) });
+  } catch (e) {
+    return res.status(500).json({ ok: false, failure: reportFailure("grocery", "optimize", {
+      status: "optimize-error", message: e.message,
+    }) });
+  }
 });
 
 // Honest live-price attempt: tries the real store search page, reports blocks.
@@ -875,7 +1251,10 @@ app.get("/api/failures", (req, res) => res.json({ ok: true, count: failures.leng
 module.exports = {
   app, localPlan, cheapestPack, findPrice, extractJson, PRICES, STORES, RECIPES,
   reportFailure, resolveDataPath, handlePlanRequest, handleVisionRequest, normalizeVisionResult,
-  DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL
+  DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL,
+  haversineMiles, isValidCoordinate, resolveCatalogItem, normalizeCartItems, optimizeCart,
+  describeLocation, reverseGeocode, handleGeoDescribe,
+  STORE_DATA, BRANCHES, DEFAULT_ORIGIN, ITEM_ALIASES
 };
 
 if (require.main === module) {

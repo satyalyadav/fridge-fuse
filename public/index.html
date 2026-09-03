@@ -37,6 +37,11 @@
         <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v12H8l-4 3z"/></svg>
         <span>Chat</span>
       </button>
+      <button class="nav-item" data-view="grocery">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 5h2.2l2.3 10h9.4l2.1-7H6.4"/><circle cx="9" cy="19" r="1.4"/><circle cx="17" cy="19" r="1.4"/></svg>
+        <span>Shop</span>
+        <span class="nav-count" id="groceryNavCount">0</span>
+      </button>
       <button class="nav-item" data-view="pantry">
         <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 3h12v18H6zM6 9h12M15 6h.01M15 13h.01"/></svg>
         <span>Pantry</span>
@@ -153,6 +158,63 @@
               <div class="leftover-list" id="leftoverList"></div>
             </section>
           </div>
+        </div>
+      </section>
+      <section class="grocery-panel" id="groceryView" aria-label="Grocery cost comparison">
+        <div class="grocery-scroll">
+          <div class="plan-header">
+            <div>
+              <p class="eyebrow">One list, one cheapest run</p>
+              <h2>Where should you shop?</h2>
+              <p>Add what you need to buy. FridgeFuse prices the whole basket at every nearby store and ranks them by what you would actually pay.</p>
+            </div>
+            <span class="mock-label">Mock Tempe prices</span>
+          </div>
+
+          <div class="location-bar" id="locationBar">
+            <div class="tape-label">
+              <span class="tape-kicker">SHOPPING FROM</span>
+              <strong id="locationLabel">No location shared yet</strong>
+              <small id="locationDetail" hidden></small>
+            </div>
+            <button id="useLocationButton" type="button">Use my location</button>
+          </div>
+
+          <div class="consent-card" id="lookupConsent" hidden>
+            <div>
+              <p class="eyebrow">Before we look that up</p>
+              <p class="consent-copy">
+                FridgeFuse worked out your area from its own store list, entirely on
+                this machine. To show a real place name instead, it would send your
+                coordinates — rounded to about 110 metres — to OpenStreetMap's free
+                Nominatim service. That is a third party outside this app.
+              </p>
+              <p class="consent-copy subtle">
+                Say no and nothing leaves your machine. Store distances and prices are
+                calculated locally either way, so the comparison works exactly the same.
+              </p>
+            </div>
+            <div class="consent-actions">
+              <button class="ghost-button" id="declineLookupButton" type="button">No, keep it local</button>
+              <button class="primary-button" id="allowLookupButton" type="button">Look up the name</button>
+            </div>
+          </div>
+
+          <form class="grocery-add" id="groceryForm">
+            <label class="sr-only" for="groceryInput">Add an item to buy</label>
+            <input id="groceryInput" type="text" list="catalogOptions" placeholder="Add eggs, milk, rice…" autocomplete="off">
+            <datalist id="catalogOptions"></datalist>
+            <button type="submit">Add</button>
+          </form>
+
+          <div class="grocery-list" id="groceryList"></div>
+
+          <div class="grocery-actions">
+            <button class="ghost-button" id="fromPlanButton" type="button">Add my meal-plan items</button>
+            <button class="primary-button" id="compareButton" type="button">Compare nearby stores</button>
+          </div>
+
+          <div class="grocery-results" id="groceryResults" aria-live="polite"></div>
         </div>
       </section>
     </main>
@@ -391,6 +453,7 @@
     <nav class="mobile-nav" aria-label="Mobile navigation">
       <button class="active" data-view="plan"><span>Plan</span></button>
       <button data-view="chat"><span>Chat</span></button>
+      <button data-view="grocery"><span>Shop</span><b id="mobileGroceryCount">0</b></button>
       <button data-view="pantry"><span>Pantry</span><b id="mobilePantryCount">0</b></button>
     </nav>
 
