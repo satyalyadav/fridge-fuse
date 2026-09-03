@@ -23,6 +23,9 @@
         <span class="trip-dot"></span>
         <span id="tripLabel">No grocery run planned</span>
       </div>
+      <button class="avatar-button" id="profileButton" type="button" aria-label="Open profile">
+        ME
+      </button>
     </header>
 
     <nav class="desktop-nav" aria-label="Main navigation">
@@ -33,6 +36,11 @@
       <button class="nav-item" data-view="chat">
         <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v12H8l-4 3z"/></svg>
         <span>Chat</span>
+      </button>
+      <button class="nav-item" data-view="grocery">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 5h2.2l2.3 10h9.4l2.1-7H6.4"/><circle cx="9" cy="19" r="1.4"/><circle cx="17" cy="19" r="1.4"/></svg>
+        <span>Shop</span>
+        <span class="nav-count" id="groceryNavCount">0</span>
       </button>
       <button class="nav-item" data-view="pantry">
         <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 3h12v18H6zM6 9h12M15 6h.01M15 13h.01"/></svg>
@@ -83,7 +91,7 @@
                 <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h3l1.5-2h7L17 7h3v12H4z"/><circle cx="12" cy="13" r="3"/></svg>
                 <span>Photo</span>
               </button>
-              <input id="photoInput" type="file" accept="image/*" capture="environment" hidden>
+              <input id="photoInput" type="file" accept="image/*" hidden>
               <span class="composer-hint">Enter to send</span>
             </div>
             <button class="send-button" type="submit" aria-label="Send message">
@@ -152,6 +160,66 @@
           </div>
         </div>
       </section>
+      <section class="grocery-panel" id="groceryView" aria-label="Grocery cost comparison">
+        <div class="grocery-scroll">
+          <div class="plan-header">
+            <div>
+              <p class="eyebrow">One list, one cheapest run</p>
+              <h2>Where should you shop?</h2>
+              <p>Add what you need to buy. FridgeFuse prices the whole basket at every nearby store and ranks them by what you would actually pay.</p>
+            </div>
+            <span class="mock-label">Mock Tempe prices</span>
+          </div>
+
+          <div class="location-bar" id="locationBar">
+            <div class="tape-label">
+              <span class="tape-kicker">SHOPPING FROM</span>
+              <strong id="locationLabel">No location shared yet</strong>
+              <small id="locationDetail" hidden></small>
+            </div>
+            <div class="location-actions">
+              <button id="useProfileZipButton" type="button" hidden></button>
+              <button id="useLocationButton" type="button">Use my location</button>
+            </div>
+          </div>
+
+          <div class="consent-card" id="lookupConsent" hidden>
+            <div>
+              <p class="eyebrow">Before we look that up</p>
+              <p class="consent-copy">
+                FridgeFuse worked out your area from its own store list, entirely on
+                this machine. To show a real place name instead, it would send your
+                coordinates — rounded to about 110 metres — to OpenStreetMap's free
+                Nominatim service. That is a third party outside this app.
+              </p>
+              <p class="consent-copy subtle">
+                Say no and nothing leaves your machine. Store distances and prices are
+                calculated locally either way, so the comparison works exactly the same.
+              </p>
+            </div>
+            <div class="consent-actions">
+              <button class="ghost-button" id="declineLookupButton" type="button">No, keep it local</button>
+              <button class="primary-button" id="allowLookupButton" type="button">Look up the name</button>
+            </div>
+          </div>
+
+          <form class="grocery-add" id="groceryForm">
+            <label class="sr-only" for="groceryInput">Add an item to buy</label>
+            <input id="groceryInput" type="text" list="catalogOptions" placeholder="Add eggs, milk, rice…" autocomplete="off">
+            <datalist id="catalogOptions"></datalist>
+            <button type="submit">Add</button>
+          </form>
+
+          <div class="grocery-list" id="groceryList"></div>
+
+          <div class="grocery-actions">
+            <button class="ghost-button" id="fromPlanButton" type="button">Add my meal-plan items</button>
+            <button class="primary-button" id="compareButton" type="button">Compare nearby stores</button>
+          </div>
+
+          <div class="grocery-results" id="groceryResults" aria-live="polite"></div>
+        </div>
+      </section>
     </main>
 
     <aside class="pantry-drawer" id="pantryDrawer" aria-labelledby="pantryTitle" aria-hidden="true">
@@ -172,6 +240,17 @@
           <input id="pantryInput" type="text" placeholder="Add eggs, some rice…" autocomplete="off">
           <button type="submit">Add</button>
         </form>
+        <section class="vision-review" id="visionReview" aria-labelledby="visionReviewTitle" hidden>
+          <div class="vision-review-heading">
+            <div>
+              <p class="eyebrow">Check the photo</p>
+              <h3 id="visionReviewTitle">Confirm uncertain items</h3>
+            </div>
+            <span id="visionReviewCount"></span>
+          </div>
+          <p>I did not add these automatically. Confirm the name, correct it, or dismiss the crop.</p>
+          <div class="vision-review-list" id="visionReviewList"></div>
+        </section>
         <div class="pantry-list" id="pantryList"></div>
         <button class="photo-wide-button" id="drawerPhotoButton" type="button">
           <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h3l1.5-2h7L17 7h3v12H4z"/><circle cx="12" cy="13" r="3"/></svg>
@@ -179,10 +258,205 @@
         </button>
       </div>
     </aside>
+    <aside
+      class="pantry-drawer profile-drawer"
+      id="profileDrawer"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="profileTitle"
+      aria-hidden="true"
+    >
+      <div class="drawer-scrim" data-close-profile></div>
 
+      <div class="drawer-sheet">
+        <div class="drawer-header">
+          <div>
+            <p class="eyebrow">Saved on this device</p>
+            <h2 id="profileTitle">Your profile</h2>
+          </div>
+
+          <button
+            class="icon-button"
+            type="button"
+            data-close-profile
+            aria-label="Close profile"
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <path d="m6 6 12 12M18 6 6 18"/>
+            </svg>
+          </button>
+        </div>
+
+        <p class="drawer-intro">
+          Set defaults for your meal plans. You can still change them in the chat.
+        </p>
+
+        <form class="profile-form" id="profileForm">
+          <label class="profile-field">
+            <span>Display name</span>
+            <input
+              id="profileName"
+              type="text"
+              maxlength="40"
+              autocomplete="name"
+              placeholder="Your name"
+            >
+          </label>
+
+          <label class="profile-field">
+            <span class="profile-field-heading">
+              <span>Plan budget cap</span>
+              <output id="profileBudgetValue">$20</output>
+            </span>
+
+            <input
+              id="profileBudget"
+              type="range"
+              min="5"
+              max="100"
+              step="1"
+              value="20"
+            >
+
+            <small>Choose between $5 and $100.</small>
+          </label>
+
+          <fieldset class="profile-field">
+            <legend>Cooking equipment</legend>
+
+            <div class="profile-options">
+              <label class="profile-choice">
+                <input
+                  type="checkbox"
+                  name="equipment"
+                  value="microwave"
+                >
+                <span>Microwave</span>
+              </label>
+
+              <label class="profile-choice">
+                <input
+                  type="checkbox"
+                  name="equipment"
+                  value="stove"
+                >
+                <span>Stovetop / hot plate</span>
+              </label>
+
+              <label class="profile-choice">
+                <input
+                  type="checkbox"
+                  name="equipment"
+                  value="oven"
+                >
+                <span>Oven</span>
+              </label>
+
+              <label class="profile-choice">
+                <input
+                  type="checkbox"
+                  name="equipment"
+                  value="air fryer"
+                >
+                <span>Air fryer</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <div class="profile-grid">
+            <label class="profile-field">
+              <span>Dinners</span>
+              <input
+                id="profileDinners"
+                type="number"
+                min="1"
+                max="7"
+                step="1"
+                value="3"
+              >
+              <small>1 to 7.</small>
+            </label>
+
+            <label class="profile-field">
+              <span>Max minutes each</span>
+              <input
+                id="profileMaxTime"
+                type="number"
+                min="10"
+                max="60"
+                step="5"
+                value="20"
+              >
+              <small>10 to 60.</small>
+            </label>
+          </div>
+
+          <fieldset class="profile-field">
+            <legend>Dietary preferences</legend>
+
+            <div class="profile-options">
+              <label class="profile-choice">
+                <input type="checkbox" name="diet" value="vegetarian">
+                <span>Vegetarian</span>
+              </label>
+
+              <label class="profile-choice">
+                <input type="checkbox" name="diet" value="vegan">
+                <span>Vegan</span>
+              </label>
+
+              <label class="profile-choice">
+                <input type="checkbox" name="diet" value="dairy-free">
+                <span>Dairy-free</span>
+              </label>
+
+              <label class="profile-choice">
+                <input type="checkbox" name="diet" value="gluten-free">
+                <span>Gluten-free</span>
+              </label>
+
+              <label class="profile-choice">
+                <input type="checkbox" name="diet" value="no peanuts">
+                <span>No peanuts</span>
+              </label>
+            </div>
+
+            <small>
+              Preferences help filter suggestions but are not an allergy-safety guarantee.
+            </small>
+          </fieldset>
+
+          <label class="profile-field">
+            <span>ZIP code <small>optional</small></span>
+            <input
+              id="profilePostalCode"
+              type="text"
+              inputmode="numeric"
+              autocomplete="postal-code"
+              maxlength="5"
+              pattern="[0-9]{5}"
+              placeholder="85281"
+            >
+            <small>
+              Optional — saved on this device for future nearby-store recommendations.
+            </small>
+          </label>
+
+          <div class="profile-actions">
+            <button type="button" class="secondary-button" data-close-profile>
+              Cancel
+            </button>
+            <button type="submit" class="primary-button">
+              Save profile
+            </button>
+          </div>
+        </form>
+      </div>
+    </aside>
     <nav class="mobile-nav" aria-label="Mobile navigation">
       <button class="active" data-view="plan"><span>Plan</span></button>
       <button data-view="chat"><span>Chat</span></button>
+      <button data-view="grocery"><span>Shop</span><b id="mobileGroceryCount">0</b></button>
       <button data-view="pantry"><span>Pantry</span><b id="mobilePantryCount">0</b></button>
     </nav>
 

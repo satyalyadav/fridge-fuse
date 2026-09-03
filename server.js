@@ -16,8 +16,10 @@ const path = require("path");
 const PORT = process.env.PORT || 3000;
 const AIR_BASE = (process.env.ASU_AIR_BASE_URL || "https://openai.rc.asu.edu/v1").replace(/\/$/, "");
 const AIR_KEY = process.env.VOYAGER_KEY || "";
-const AIR_MODEL = process.env.ASU_AIR_MODEL || "glm-5-3-flash";
+const DEFAULT_AIR_MODEL = "llama4-scout-17b";
+const AIR_MODEL = process.env.ASU_AIR_MODEL || DEFAULT_AIR_MODEL;
 const AIR_VISION_MODEL = process.env.ASU_AIR_VISION_MODEL || "qwen3-vl-32b-instruct";
+const AIR_VISION_VERIFY_MODEL = process.env.ASU_AIR_VISION_VERIFY_MODEL || AIR_MODEL;
 
 // Fallback pack price for items outside the mock catalog (e.g. free-form AI
 // output). Named so a made-up price is easy to find and replace with live data.
@@ -45,6 +47,18 @@ const app = express();
 app.disable("x-powered-by");
 app.use(express.json({ limit: "12mb" }));
 
+// Body-parser failures default to an HTML error page, which every fetch() in
+// the UI would then choke on while parsing. Answer in JSON like every route.
+app.use((err, req, res, next) => {
+  if (err?.type === "entity.parse.failed") {
+    return res.status(400).json({ ok: false, failure: { message: "Request body must be valid JSON." } });
+  }
+  if (err?.type === "entity.too.large") {
+    return res.status(413).json({ ok: false, failure: { message: "Request body is too large (12mb limit)." } });
+  }
+  return next(err);
+});
+
 // Basic hygiene headers (no extra dependency). Skips CSP on purpose: the UI
 // loads Google Fonts, and a strict policy would break them on stage.
 app.use((req, res, next) => {
@@ -52,7 +66,9 @@ app.use((req, res, next) => {
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("X-DNS-Prefetch-Control", "off");
-  res.setHeader("Permissions-Policy", "microphone=(), geolocation=()");
+  // geolocation=(self): the Groceries tab needs the browser location API to
+  // rank nearby stores. Anything stricter disables it with no console error.
+  res.setHeader("Permissions-Policy", "microphone=(), geolocation=(self)");
   next();
 });
 
@@ -174,6 +190,36 @@ for (const s of RECIPE_SOURCES.sources) {
   if (!s.name || !s.url) throw new Error("every approved recipe source needs a name and url");
 }
 const STORES = Object.keys(PRICES.stores);
+// Typed words a student uses -> catalog item ("cheese" -> "cheddar"). Lives in
+// the data file so the UI can fetch it instead of keeping a second copy.
+const ITEM_ALIASES = PRICES.aliases || {};
+
+// ---------- store branch locations (approximate dev mock, Tempe 85281) ----------
+const STORE_DATA = JSON.parse(
+  fs.readFileSync(resolveDataPath(__dirname, process.env.LAMBDA_TASK_ROOT, fs.existsSync, "stores.json"), "utf8")
+);
+// Only branches whose chain has a price list are usable — a typo in the data
+// would otherwise surface as a store with no prices instead of a loud failure.
+const BRANCHES = (STORE_DATA.branches || []).filter(
+  (branch) => branch && PRICES.stores[branch.chain] && Number.isFinite(branch.lat) && Number.isFinite(branch.lng)
+);
+if (BRANCHES.length !== (STORE_DATA.branches || []).length) {
+  console.error(`[WARN] stores.json: ${(STORE_DATA.branches || []).length - BRANCHES.length} branch(es) dropped (unknown chain or bad coordinates)`);
+}
+// Where distances are measured from when the browser gives us nothing usable.
+// Taken from stores.json; if that has no origin, it is derived from the mean of
+// the loaded branches so no place name or coordinate is baked into this file.
+const DEFAULT_ORIGIN = (() => {
+  const origin = STORE_DATA.origin || {};
+  const lat = Number(origin.lat);
+  const lng = Number(origin.lng);
+  if (isValidCoordinate(lat, lng)) {
+    return { lat, lng, label: origin.label || `the ${STORE_DATA.zip || "local"} area` };
+  }
+  if (!BRANCHES.length) return { lat: 0, lng: 0, label: "the store area" };
+  const mean = (pick) => BRANCHES.reduce((total, branch) => total + branch[pick], 0) / BRANCHES.length;
+  return { lat: mean("lat"), lng: mean("lng"), label: `the ${STORE_DATA.zip || "local"} store area` };
+})();
 
 function findPrice(itemName) {
   const q = itemName.toLowerCase();
@@ -192,6 +238,292 @@ function cheapestPack(itemName) {
     }
   }
   return best;
+}
+
+// ---------- grocery cart optimizer (deterministic, offline, no API key) ----------
+const EARTH_RADIUS_MI = 3958.7613;
+const MAX_CART_ITEMS = 50;
+const MAX_ITEM_QTY = 99;
+const DEFAULT_MAX_DISTANCE_MI = 15;
+
+function haversineMiles(lat1, lng1, lat2, lng2) {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  // asin clamped: floating point can push a past 1 for antipodal points.
+  return 2 * EARTH_RADIUS_MI * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+function isValidCoordinate(lat, lng) {
+  return Number.isFinite(lat) && Number.isFinite(lng) &&
+    Math.abs(lat) <= 90 && Math.abs(lng) <= 180 &&
+    !(lat === 0 && lng === 0); // null island means "no fix", not the Atlantic
+}
+
+// Exact name -> alias table -> the looser substring match findPrice already does.
+function resolveCatalogItem(name) {
+  const q = String(name ?? "").trim().toLowerCase();
+  if (!q) return null;
+  const exact = PRICES.items.find((item) => item.name.toLowerCase() === q);
+  if (exact) return exact;
+  const aliased = ITEM_ALIASES[q];
+  if (aliased) {
+    const hit = PRICES.items.find((item) => item.name.toLowerCase() === String(aliased).toLowerCase());
+    if (hit) return hit;
+  }
+  return findPrice(q);
+}
+
+// Accepts ["eggs"] or [{name, qty}]. Merges duplicates, clamps quantities, and
+// keeps anything the catalog does not know in `unmatched` rather than guessing
+// a price for it.
+function normalizeCartItems(rawItems) {
+  const merged = new Map();
+  const unmatched = [];
+  for (const raw of rawItems.slice(0, MAX_CART_ITEMS)) {
+    const isObject = raw !== null && typeof raw === "object";
+    const label = String((isObject ? raw.name : raw) ?? "").trim();
+    if (!label) continue;
+    const qty = Math.min(
+      Math.max(1, Math.floor(asPositiveNumber(isObject ? raw.qty : 1, 1)) || 1),
+      MAX_ITEM_QTY
+    );
+    const match = resolveCatalogItem(label);
+    if (!match) {
+      if (!unmatched.includes(label)) unmatched.push(label);
+      continue;
+    }
+    const existing = merged.get(match.name);
+    if (existing) existing.qty = Math.min(existing.qty + qty, MAX_ITEM_QTY);
+    else merged.set(match.name, {
+      item: match.name,
+      unit: match.unit,
+      qty,
+      requestedAs: label,
+      prices: match.prices,
+    });
+  }
+  return { resolved: [...merged.values()], unmatched };
+}
+
+// Describes where a coordinate is using only data we already ship: the branch
+// list and the origin in stores.json. Nothing here is a hardcoded place string,
+// so editing stores.json changes what users are told.
+function describeLocation(lat, lng) {
+  if (!isValidCoordinate(Number(lat), Number(lng))) return null;
+  const references = [
+    ...BRANCHES.map((branch) => ({ label: branch.area || branch.name, lat: branch.lat, lng: branch.lng })),
+    { label: DEFAULT_ORIGIN.label, lat: DEFAULT_ORIGIN.lat, lng: DEFAULT_ORIGIN.lng },
+  ];
+  let nearest = null;
+  for (const reference of references) {
+    const distanceMi = haversineMiles(Number(lat), Number(lng), reference.lat, reference.lng);
+    if (!nearest || distanceMi < nearest.distanceMi) nearest = { ...reference, distanceMi };
+  }
+  if (!nearest) return null;
+  const miles = +nearest.distanceMi.toFixed(2);
+  // Wording tracks the measured distance rather than a fixed phrase.
+  const text = miles <= 0.3
+    ? `At ${nearest.label}`
+    : miles <= 3
+      ? `${miles} mi from ${nearest.label}`
+      : `${Math.round(miles)} mi from ${DEFAULT_ORIGIN.label}`;
+  return { text, nearest: nearest.label, distanceMi: miles, source: "local-store-data" };
+}
+
+// Reverse geocoding through OpenStreetMap Nominatim. Kept server-side so the
+// User-Agent follows their usage policy and the browser never hits CORS. Only
+// ever called when the client passes explicit consent.
+const NOMINATIM_MIN_INTERVAL_MS = 1100; // their policy allows ~1 request/second
+let lastNominatimAt = 0;
+
+// Shared plumbing for every Nominatim call: the policy throttle, the required
+// User-Agent, a timeout, and the same failure reporting as other externals.
+async function nominatimRequest(operation, query) {
+  const wait = NOMINATIM_MIN_INTERVAL_MS - (Date.now() - lastNominatimAt);
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+  lastNominatimAt = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6000);
+  try {
+    const response = await fetch(`https://nominatim.openstreetmap.org/${query}`, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "FridgeFuse/0.1 (ASU AIR Spark Challenge student prototype)",
+        "Accept-Language": "en",
+        Accept: "application/json",
+      },
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      return { ok: false, failure: reportFailure("nominatim", operation, {
+        status: response.status, message: `Nominatim ${operation} failed: HTTP ${response.status}`,
+        responseSnippet: text.slice(0, 200),
+      }) };
+    }
+    return { ok: true, data: JSON.parse(text) };
+  } catch (e) {
+    return { ok: false, failure: reportFailure("nominatim", operation, {
+      status: e.name === "AbortError" ? "timeout" : "network-error",
+      message: `Nominatim ${operation} failed: ${e.message}`,
+    }) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function reverseGeocode(lat, lng) {
+  // 3 decimals is ~110m: enough for a neighbourhood name, coarser than the fix.
+  const roundedLat = Number(lat).toFixed(3);
+  const roundedLng = Number(lng).toFixed(3);
+  const result = await nominatimRequest("reverse", `reverse?format=jsonv2&zoom=14&lat=${roundedLat}&lon=${roundedLng}`);
+  if (!result.ok) return result;
+  try {
+    const data = result.data;
+    const a = data.address || {};
+    const locality = a.neighbourhood || a.suburb || a.city || a.town || a.village || a.hamlet || a.county;
+    const parts = [locality, a.state_code || a.state, a.postcode].filter(Boolean);
+    const placeName = parts.length ? parts.join(", ") : (data.display_name || "").split(",").slice(0, 2).join(",").trim();
+    if (!placeName) {
+      return { ok: false, failure: reportFailure("nominatim", "reverse", {
+        status: "no-name", message: "Reverse geocode returned no usable place name.",
+      }) };
+    }
+    return { ok: true, placeName, precisionNote: "rounded to ~110 m before lookup" };
+  } catch (e) {
+    return { ok: false, failure: reportFailure("nominatim", "reverse", {
+      status: "parse-error", message: `Reverse geocode returned unusable JSON: ${e.message}`,
+    }) };
+  }
+}
+
+// The postal-code counterpart: turns a ZIP into a point to measure from, for a
+// user who would rather type five digits than share a live GPS fix. This is the
+// network path only — the catalog's own ZIP is short-circuited by the route
+// before it ever gets here.
+async function geocodePostalCode(postalCode) {
+  const zip = String(postalCode ?? "").trim();
+  if (!/^\d{5}$/.test(zip)) {
+    return { ok: false, failure: { message: "Enter a five-digit ZIP code." } };
+  }
+  const result = await nominatimRequest("postalcode", `search?format=jsonv2&country=us&limit=1&postalcode=${zip}`);
+  if (!result.ok) return result;
+  const hit = Array.isArray(result.data) ? result.data[0] : null;
+  const lat = Number(hit?.lat);
+  const lng = Number(hit?.lon);
+  if (!isValidCoordinate(lat, lng)) {
+    return { ok: false, failure: reportFailure("nominatim", "postalcode", {
+      status: "not-found", message: `No US location found for ZIP ${zip}.`,
+    }) };
+  }
+  return {
+    ok: true, lat, lng, source: "nominatim", lookupUsed: true,
+    label: (hit.display_name || `ZIP ${zip}`).split(",").slice(0, 2).join(",").trim(),
+  };
+}
+
+function optimizeCart({ items = [], lat, lng, maxDistanceMi } = {}) {
+  const { resolved, unmatched } = normalizeCartItems(Array.isArray(items) ? items : []);
+  const userLat = Number(lat);
+  const userLng = Number(lng);
+  const usedFallbackLocation = !isValidCoordinate(userLat, userLng);
+  const origin = usedFallbackLocation
+    ? { lat: DEFAULT_ORIGIN.lat, lng: DEFAULT_ORIGIN.lng, label: DEFAULT_ORIGIN.label }
+    : { lat: userLat, lng: userLng, label: "your location" };
+  const radius = asPositiveNumber(maxDistanceMi, DEFAULT_MAX_DISTANCE_MI) || DEFAULT_MAX_DISTANCE_MI;
+
+  const byDistance = BRANCHES
+    .map((branch) => ({ branch, distanceMi: +haversineMiles(origin.lat, origin.lng, branch.lat, branch.lng).toFixed(2) }))
+    .sort((a, b) => a.distanceMi - b.distanceMi);
+
+  // An empty result is worse than a slightly-too-far one: widen rather than
+  // hand the user a blank screen.
+  let inRange = byDistance.filter((entry) => entry.distanceMi <= radius);
+  const widenedSearch = inRange.length === 0 && byDistance.length > 0;
+  if (widenedSearch) inRange = byDistance.slice(0, 3);
+
+  // Nothing priceable: ranking stores by a $0 basket would be meaningless, so
+  // return no options and let `note` explain why.
+  const options = (resolved.length === 0 ? [] : inRange).map(({ branch, distanceMi }) => {
+    const lineItems = [];
+    const missing = [];
+    let subtotal = 0;
+    for (const entry of resolved) {
+      const pack = entry.prices[branch.chain];
+      const price = Number(pack?.price);
+      if (!pack || !Number.isFinite(price)) {
+        missing.push(entry.item); // chain does not stock it
+        continue;
+      }
+      const lineTotal = +(price * entry.qty).toFixed(2);
+      subtotal += lineTotal;
+      lineItems.push({
+        item: entry.item,
+        requestedAs: entry.requestedAs,
+        qty: entry.qty,
+        unit: entry.unit,
+        pack: pack.pack,
+        packPrice: price,
+        lineTotal,
+      });
+    }
+    return {
+      storeId: branch.id,
+      chain: branch.chain,
+      name: branch.name,
+      chainLabel: PRICES.stores[branch.chain],
+      area: branch.area,
+      lat: branch.lat,
+      lng: branch.lng,
+      approximateLocation: branch.approximate !== false,
+      distanceMi,
+      missing,
+      complete: resolved.length > 0 && missing.length === 0,
+      itemCount: lineItems.length,
+      subtotal: +subtotal.toFixed(2),
+      lineItems,
+    };
+  });
+
+  // Stores that cover the whole list win; then price; then distance. The id
+  // tie-break keeps the order stable for identical branches.
+  options.sort((a, b) =>
+    Number(b.complete) - Number(a.complete) ||
+    a.subtotal - b.subtotal ||
+    a.distanceMi - b.distanceMi ||
+    a.storeId.localeCompare(b.storeId)
+  );
+  if (options.length) options[0].best = true;
+
+  const covering = options.filter((option) => option.complete);
+  const savingsVsWorst = covering.length > 1
+    ? +(covering[covering.length - 1].subtotal - covering[0].subtotal).toFixed(2)
+    : 0;
+
+  const notes = [];
+  if (!resolved.length && !unmatched.length) notes.push("Add at least one item to compare stores.");
+  else if (!resolved.length) notes.push(`None of those items are in the Tempe 85281 mock catalog yet, so there is nothing to price: ${unmatched.join(", ")}.`);
+  else if (unmatched.length) notes.push(`Not priced (not in the catalog): ${unmatched.join(", ")}.`);
+  if (options.length && widenedSearch) notes.push(`No store within ${radius} miles — showing the ${inRange.length} closest instead.`);
+  if (usedFallbackLocation) notes.push(`Distances are measured from ${DEFAULT_ORIGIN.label} because no location was shared.`);
+
+  return {
+    origin,
+    usedFallbackLocation,
+    maxDistanceMi: radius,
+    widenedSearch,
+    requested: resolved.map(({ prices, ...rest }) => rest),
+    unmatched,
+    options,
+    cheapestStoreId: options[0]?.storeId || null,
+    savingsVsWorst,
+    zip: PRICES.zip,
+    locationNote: STORE_DATA.note,
+    priceNote: PRICES.note,
+    note: notes.join(" "),
+  };
 }
 
 // ---------- small, grounded recipe bank for the stable demo planner ----------
@@ -485,6 +817,39 @@ function groundShoppingPlan(plan) {
   };
 }
 
+function parseAiPlan(content, expectedDinners) {
+  const plan = extractJson(String(content || ""));
+  if (!plan || typeof plan !== "object" || !Array.isArray(plan.dinners)) {
+    throw new Error("AI plan must contain a dinners array");
+  }
+  if (plan.dinners.length !== expectedDinners) {
+    throw new Error(`AI plan returned ${plan.dinners.length} dinners; expected ${expectedDinners}`);
+  }
+  for (const [index, dinner] of plan.dinners.entries()) {
+    if (!dinner || typeof dinner !== "object") throw new Error(`Dinner ${index + 1} must be an object`);
+    if (typeof dinner.title !== "string" || !dinner.title.trim()) throw new Error(`Dinner ${index + 1} needs a title`);
+    if (!Number.isFinite(Number(dinner.timeMin))) throw new Error(`Dinner ${index + 1} needs a numeric timeMin`);
+    for (const field of ["usesPantry", "needs", "steps"]) {
+      if (!Array.isArray(dinner[field])) throw new Error(`Dinner ${index + 1} needs a ${field} array`);
+    }
+    if (dinner.steps.length === 0) throw new Error(`Dinner ${index + 1} needs at least one cooking step`);
+  }
+  return plan;
+}
+
+async function repairAiPlan(chat, content, expectedDinners, initialError, requirements) {
+  return chat([
+    {
+      role: "system",
+      content: `Repair a malformed FridgeFuse meal-plan response. Reply ONLY with valid JSON containing exactly ${expectedDinners} dinners. Each dinner must have a non-empty title, numeric timeMin, and arrays named usesPantry, needs, and steps. Preserve the original meal ideas when possible. Do not add commentary or Markdown fences.`
+    },
+    {
+      role: "user",
+      content: `Original requirements:\n${requirements}\n\nValidation problem: ${initialError.message}\n\nMalformed response:\n${String(content || "").slice(0, 12000)}`
+    }
+  ], { maxTokens: 1800 });
+}
+
 // ---------- routes ----------
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -495,8 +860,10 @@ app.get("/api/health", (req, res) => {
     airBase: AIR_BASE,
     airModel: AIR_MODEL,
     airVisionModel: AIR_VISION_MODEL,
+    airVisionVerifyModel: AIR_VISION_VERIFY_MODEL,
     stores: STORES,
     priceItems: PRICES.items.length,
+    storeBranches: BRANCHES.length,
     zip: PRICES.zip,
     failures: failures.length,
   });
@@ -530,34 +897,189 @@ app.get("/api/models", async (req, res) => {
   }
 });
 
-app.post("/api/vision", async (req, res) => {
+function normalizeVisionBbox(value) {
+  if (!Array.isArray(value) || value.length !== 4) return [0, 0, 1, 1];
+  let coords = value.map(Number);
+  if (!coords.every(Number.isFinite)) return [0, 0, 1, 1];
+  // Qwen-family vision models commonly return coordinates on a 0..1000 grid.
+  if (Math.max(...coords.map(Math.abs)) > 1 && Math.max(...coords.map(Math.abs)) <= 1000) {
+    coords = coords.map((coord) => coord / 1000);
+  }
+  const [x1, y1, x2, y2] = coords.map((coord) => Math.min(1, Math.max(0, coord)));
+  if (x2 <= x1 || y2 <= y1) return [0, 0, 1, 1];
+  return [x1, y1, x2, y2];
+}
+
+function isAutoConfirmableVisionBbox(value) {
+  if (!Array.isArray(value) || value.length !== 4 || !value.map(Number).every(Number.isFinite)) return false;
+  const [x1, y1, x2, y2] = normalizeVisionBbox(value);
+  // Touching the frame is strong evidence that part of the object may be cropped.
+  return x1 > 0.005 && y1 > 0.005 && x2 < 0.995 && y2 < 0.995 && x2 - x1 >= 0.01 && y2 - y1 >= 0.01;
+}
+
+function isSpecificVisionName(value) {
+  const name = String(value || "").trim().toLowerCase();
+  if (!name || /\b(unknown|unidentified|mystery|beverage|packaged item|jarred (?:item|food)|canned goods)\b/.test(name)) return false;
+  return !/^(?:[a-z -]+ )?(?:bottles?|containers?|jars?|packages?|cartons?|cans?|bags?)(?: \([^)]*\))?$/.test(name);
+}
+
+function hasSpecificVisionEvidence(name, evidence) {
+  const packagedFood = /\b(water|soda|juice|milk|cream|sauce|dressing|condiment|yogurt|cheese|butter|mayonnaise|mustard|ketchup|oil|vinegar)\b/i.test(name);
+  if (!packagedFood) return true;
+  return /\b(label|brand|printed|text|reads|logo)\b/i.test(evidence);
+}
+
+function normalizeVisionResult(payload) {
+  const confirmed = [];
+  const uncertain = [];
+  const confirmedNames = new Set();
+  const reviewNames = new Set();
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  const isCompactItem = (item) => item && ("n" in item || "b" in item || "v" in item || "c" in item);
+  const expandCompactItem = (item) => ({
+    name: item?.n,
+    guess: item?.n,
+    confidence: item?.c,
+    fullyVisible: item?.v,
+    bbox: item?.b,
+    evidence: item?.why,
+    reason: item?.why,
+    alternatives: item?.alt,
+  });
+  const compactItems = items.filter(isCompactItem).map(expandCompactItem);
+  const confirmedInput = [
+    ...(Array.isArray(payload?.confirmed) ? payload.confirmed : []),
+    ...compactItems.filter((item) => item.fullyVisible === true),
+  ];
+  const uncertainInput = [
+    ...(Array.isArray(payload?.uncertain) ? payload.uncertain : []),
+    ...compactItems.filter((item) => item.fullyVisible !== true),
+  ];
+
+  const addUncertain = (item, fallbackReason) => {
+    const guess = String(item?.guess || item?.name || "unknown item").trim().slice(0, 80) || "unknown item";
+    const key = guess.toLowerCase();
+    if (confirmedNames.has(key) || reviewNames.has(key) || confirmed.length + uncertain.length >= 25) return;
+    reviewNames.add(key);
+    uncertain.push({
+      guess,
+      confidence: Math.min(1, Math.max(0, Number(item?.confidence) || 0)),
+      bbox: normalizeVisionBbox(item?.bbox),
+      reason: String(item?.reason || fallbackReason || "The item is not fully clear.").trim().slice(0, 160),
+      alternatives: asStringArray(item?.alternatives, []).slice(0, 3),
+    });
+  };
+
+  for (const item of confirmedInput) {
+    const name = String(item?.name || "").trim().slice(0, 80);
+    const confidence = Math.min(1, Math.max(0, Number(item?.confidence) || 0));
+    const evidence = String(item?.evidence || "").trim().slice(0, 160);
+    if (!name) continue;
+    if (item?.fullyVisible === true && confidence >= 0.95 && evidence && isSpecificVisionName(name) && hasSpecificVisionEvidence(name, evidence) && isAutoConfirmableVisionBbox(item?.bbox) && confirmed.length + uncertain.length < 25) {
+      const key = name.toLowerCase();
+      if (!confirmedNames.has(key)) {
+        confirmedNames.add(key);
+        confirmed.push({ name, confidence, bbox: normalizeVisionBbox(item.bbox), evidence });
+      }
+    } else {
+      addUncertain(item, item?.fullyVisible === true
+        ? "The item lacked reliable visual evidence or a safe crop."
+        : "The item is partly hidden or cropped.");
+    }
+  }
+
+  for (const item of uncertainInput) {
+    addUncertain(item);
+  }
+  // Old or malformed model responses never get auto-added. They require review.
+  for (const item of items.filter((item) => !isCompactItem(item))) {
+    addUncertain(item, "The model used the old response format, so confirmation is required.");
+  }
+
+  return { confirmed, uncertain };
+}
+
+async function handleVisionRequest(req, res, { chat = airChat } = {}) {
   const { imageDataUrl } = req.body || {};
   if (!imageDataUrl) return res.status(400).json({ ok: false, failure: { message: "imageDataUrl required" } });
-  const out = await airChat([
-    { role: "system", content: 'You identify grocery ingredients visible in a fridge/pantry photo. Reply ONLY with JSON: {"items":[{"name":"...","confidence":0.0-1.0}]}. Use common grocery names (e.g. "eggs", "milk", "chicken breast", "rice"). Max 25 items.' },
+  const out = await chat([
+    { role: "system", content: `Identify groceries in this fridge or pantry photo. Be conservative and never guess. Return ONLY compact JSON:
+{"items":[{"n":"specific grocery or unknown item","c":0.0,"v":true,"b":[0,0,1,1],"why":"visible proof or doubt","alt":[]}]}
+Rules: v=true only when the entire object is inside the frame, unobstructed, unmistakable, and c>=0.95. Packaged food or drink needs a readable label; container color or shape is insufficient. Use v=false for anything partially visible, edge-cropped, occluded, blurry, label-hidden, generic, inferred, or doubtful. b is a tight normalized [left,top,right,bottom] crop. why is under 8 words. Return the 8 most useful objects at most.` },
     { role: "user", content: [
-      { type: "text", text: "List the ingredients you can see. When unsure, include with low confidence." },
+      { type: "text", text: "Identify only fully visible, unmistakable groceries as confirmed. Put partially visible or uncertain objects in uncertain so the user can review a crop." },
       { type: "image_url", image_url: { url: imageDataUrl } },
     ]},
-  ], { maxTokens: 800, model: AIR_VISION_MODEL });
+  ], { maxTokens: 650, model: AIR_VISION_MODEL });
   if (!out.ok) {
     if (out.mock) {
-      return res.json({ ok: true, mock: true, items: [
-        { name: "eggs", confidence: 0.9 }, { name: "milk", confidence: 0.85 },
-        { name: "rice", confidence: 0.7 }, { name: "onion", confidence: 0.6 },
-      ], note: "MOCK — set VOYAGER_KEY for live vision." });
+      return res.json({ ok: true, mock: true,
+        confirmed: [{ name: "eggs", confidence: 0.98 }, { name: "milk", confidence: 0.97 }],
+        uncertain: [],
+        note: "MOCK — set VOYAGER_KEY for live vision." });
     }
     return res.json({ ok: false, failure: out.failure });
   }
   try {
     const content = out.data.choices[0].message.content;
-    res.json({ ok: true, ...extractJson(content), model: AIR_VISION_MODEL });
+    const proposed = normalizeVisionResult(extractJson(content));
+    if (!proposed.confirmed.length) {
+      return res.json({ ok: true, ...proposed, model: AIR_VISION_MODEL });
+    }
+
+    const candidates = proposed.confirmed.map(({ name, bbox, evidence }) => ({ name, bbox, evidence }));
+    const verification = await chat([
+      { role: "system", content: `Act as a skeptical verifier, independent of the first detector. Check only the supplied candidates against the image. Reply ONLY with compact JSON:
+{"verified":[{"name":"exact supplied name","confirmed":false,"confidence":0.0,"fullyVisible":false,"evidence":"visible proof or rejection reason"}]}
+Set confirmed true only when the named grocery is visibly present, its entire physical outline is inside the image, it is not blocked by another object, and its identity is unmistakable. A container whose contents or label cannot be identified is not confirmed. Reject hallucinated, inferred, partly hidden, frame-cropped, or ambiguous candidates. Include every supplied candidate exactly once and add no new candidates.` },
+      { role: "user", content: [
+        { type: "text", text: `Verify these proposed automatic additions: ${JSON.stringify(candidates)}` },
+        { type: "image_url", image_url: { url: imageDataUrl } },
+      ]},
+    ], { maxTokens: 900, model: AIR_VISION_VERIFY_MODEL });
+
+    let verified = [];
+    let verificationWarning = null;
+    if (verification.ok) {
+      try {
+        verified = Array.isArray(extractJson(verification.data.choices[0].message.content)?.verified)
+          ? extractJson(verification.data.choices[0].message.content).verified : [];
+      } catch (error) {
+        verificationWarning = `Verification response was invalid: ${error.message}`;
+      }
+    } else {
+      verificationWarning = verification.failure?.message || "Verification request failed.";
+    }
+
+    const verdicts = new Map(verified.map((item) => [String(item?.name || "").trim().toLowerCase(), item]));
+    const confirmed = [];
+    const rejected = [];
+    for (const candidate of proposed.confirmed) {
+      const verdict = verdicts.get(candidate.name.toLowerCase());
+      const verifierConfidence = Math.min(1, Math.max(0, Number(verdict?.confidence) || 0));
+      const verifierEvidence = String(verdict?.evidence || "").trim();
+      if (verdict?.confirmed === true && verdict?.fullyVisible === true && verifierConfidence >= 0.95 && verifierEvidence && hasSpecificVisionEvidence(candidate.name, verifierEvidence)) {
+        confirmed.push({ name: candidate.name, confidence: Math.min(candidate.confidence, verifierConfidence) });
+      } else {
+        rejected.push({
+          guess: candidate.name,
+          confidence: Math.min(candidate.confidence, verifierConfidence),
+          bbox: candidate.bbox,
+          reason: String(verdict?.evidence || verificationWarning || "A second visual check could not confirm this item."),
+        });
+      }
+    }
+    const review = normalizeVisionResult({ uncertain: [...proposed.uncertain, ...rejected] }).uncertain;
+    return res.json({ ok: true, confirmed, uncertain: review, model: AIR_VISION_MODEL,
+      ...(verificationWarning ? { verificationWarning } : {}) });
   } catch (e) {
     res.json({ ok: false, failure: reportFailure("asu-air", "vision-parse", {
       status: "parse-error", message: `Could not parse vision JSON: ${e.message}`,
     })});
   }
-});
+}
+
+app.post("/api/vision", handleVisionRequest);
 
 // System prompt for AI meal generation. Grounded to data/recipe-sources.json:
 // the model may only pull, adapt, or cite recipes from the approved sources,
@@ -582,6 +1104,7 @@ ${sourcesCtx}`;
 }
 
 app.post("/api/plan", async (req, res) => {
+async function handlePlanRequest(req, res, { chat = airChat } = {}) {
   const { pantry = [], budget = 30, dinners = 3, maxTimeMin = 30,
           equipment = ["stove"], diet = "", useSoon = [], request = "", exclude = [],
           catalogOnly = false } = req.body || {};
@@ -619,8 +1142,15 @@ app.post("/api/plan", async (req, res) => {
   }).join("; ");
   const out = await airChat([
     { role: "system", content: buildPlanSystemPrompt(priceCtx) },
+  const planningMessages = [
+    { role: "system", content: `You are FridgeFuse, a student meal planner for Tempe AZ 85281. Reply ONLY with JSON:
+{"dinners":[{"title":"...","timeMin":20,"protein":25,"carbs":50,"fiber":6,"usesPantry":["..."],"needs":["..."],"steps":["..."]}],
+"shoppingList":[{"item":"...","pack":"...","packPrice":0.0,"store":"...","qty":1,"sharedBy":["..."]}],
+"totalCost":0.0,"notes":"..."}
+Rules: plan EXACTLY the requested number of dinners. The user is a freshman cook, so give concrete beginner-safe steps and only use the listed equipment. First use food marked use-soon, then minimize unique purchases, stay within budget, and keep cooking easy. Prefer purchases shared across dinners. Put only missing ingredients in needs; pantry items cost $0. The server will ground final prices against its catalog. Respect time, equipment, and dietary restrictions. Price context: ${priceCtx}.` },
     { role: "user", content: `Pantry: ${safePantry.join(", ") || "(empty)"}. Use soon: ${safeUseSoon.join(", ") || "none"}. Budget total $${budget} for the whole plan. Dinners: ${dinners}. Max ${maxTimeMin} min each. Equipment: ${safeEquipment.join(", ")}. Diet/notes: ${safeDiet || "none"}. Avoid these meals: ${safeExclude.join(", ") || "none"}. Latest request: ${request || "build the best plan"}.` },
-  ], { maxTokens: 1800 });
+  ];
+  const out = await chat(planningMessages, { maxTokens: 1800 });
   if (!out.ok) {
     if (out.mock) {
       return res.json({ ok: true, mock: true, ...localPlan({ pantry: safePantry, dinners, maxTimeMin, equipment: safeEquipment, diet: safeDiet, budget, useSoon: safeUseSoon, exclude: safeExclude }),
@@ -630,23 +1160,157 @@ app.post("/api/plan", async (req, res) => {
     return res.json({ ok: true, fallback: true, failure: out.failure,
       ...localPlan({ pantry: safePantry, dinners, maxTimeMin, equipment: safeEquipment, diet: safeDiet, budget, useSoon: safeUseSoon, exclude: safeExclude }) });
   }
+  const expectedDinners = asDinners(dinners, 3);
+  const content = out.data?.choices?.[0]?.message?.content;
   try {
-    const content = out.data.choices[0].message.content;
-    const plan = groundShoppingPlan(extractJson(content));
-    res.json({ ok: true, model: AIR_MODEL, ...plan });
-  } catch (e) {
-    res.json({ ok: true, fallback: true,
-      failure: reportFailure("asu-air", "plan-parse", { status: "parse-error", message: e.message }),
-      ...localPlan({ pantry: safePantry, dinners, maxTimeMin, equipment: safeEquipment, diet: safeDiet, budget, useSoon: safeUseSoon, exclude: safeExclude }) });
+    const plan = groundShoppingPlan(parseAiPlan(content, expectedDinners));
+    return res.json({ ok: true, model: AIR_MODEL, ...plan });
+  } catch (initialError) {
+    const repaired = await repairAiPlan(chat, content, expectedDinners, initialError, planningMessages[1].content);
+    if (!repaired.ok) {
+      return res.json({ ok: false, failure: repaired.failure || reportFailure("asu-air", "plan-repair", {
+        status: "repair-failed",
+        message: `Could not repair AI plan: ${initialError.message}`,
+      }) });
+    }
+    try {
+      const repairedContent = repaired.data?.choices?.[0]?.message?.content;
+      const plan = groundShoppingPlan(parseAiPlan(repairedContent, expectedDinners));
+      return res.json({ ok: true, model: AIR_MODEL, repaired: true, ...plan });
+    } catch (repairError) {
+      return res.json({ ok: false, failure: reportFailure("asu-air", "plan-repair", {
+        status: "parse-error",
+        message: `Could not repair AI plan: ${repairError.message}`,
+        initialMessage: initialError.message,
+      }) });
+    }
   }
-});
+}
+
+app.post("/api/plan", handlePlanRequest);
 
 app.get("/api/prices", (req, res) => {
   const q = (req.query.item || "").toLowerCase();
-  if (!q) return res.json({ ok: true, stores: PRICES.stores, items: PRICES.items, zip: PRICES.zip, note: PRICES.note });
+  if (!q) return res.json({ ok: true, stores: PRICES.stores, items: PRICES.items, aliases: ITEM_ALIASES, zip: PRICES.zip, note: PRICES.note });
   const hit = findPrice(q);
   if (!hit) return res.json({ ok: false, failure: { message: `No mock price for "${q}". Try /api/prices for full list.` } });
   res.json({ ok: true, ...hit, zip: PRICES.zip });
+});
+
+// Nearby branches with distance from the caller. Falls back to campus rather
+// than erroring when the browser gives us no usable fix.
+app.get("/api/stores", (req, res) => {
+  const lat = Number(req.query.lat);
+  const lng = Number(req.query.lng);
+  const hasFix = isValidCoordinate(lat, lng);
+  const origin = hasFix
+    ? { lat, lng, label: "your location" }
+    : { lat: DEFAULT_ORIGIN.lat, lng: DEFAULT_ORIGIN.lng, label: DEFAULT_ORIGIN.label };
+  const radius = asPositiveNumber(req.query.maxDistanceMi, DEFAULT_MAX_DISTANCE_MI) || DEFAULT_MAX_DISTANCE_MI;
+  const stores = BRANCHES
+    .map((branch) => ({
+      ...branch,
+      chainLabel: PRICES.stores[branch.chain],
+      distanceMi: +haversineMiles(origin.lat, origin.lng, branch.lat, branch.lng).toFixed(2),
+    }))
+    .sort((a, b) => a.distanceMi - b.distanceMi)
+    .filter((store) => store.distanceMi <= radius);
+  res.json({
+    ok: true,
+    origin,
+    usedFallbackLocation: !hasFix,
+    maxDistanceMi: radius,
+    count: stores.length,
+    stores,
+    zip: STORE_DATA.zip,
+    note: STORE_DATA.note,
+  });
+});
+
+// Turns a fix into something readable. The local description always comes back;
+// the third-party lookup only runs when the client sends allowLookup: true.
+async function handleGeoDescribe(req, res, { geocode = reverseGeocode } = {}) {
+  const body = req.body || {};
+  const lat = Number(body.lat);
+  const lng = Number(body.lng);
+  if (!isValidCoordinate(lat, lng)) {
+    return res.status(400).json({ ok: false, failure: { message: "A valid lat and lng are required." } });
+  }
+  const local = describeLocation(lat, lng);
+  // Strict equality: only an explicit true sends coordinates off this machine.
+  if (body.allowLookup !== true) {
+    return res.json({ ok: true, local, lookupUsed: false });
+  }
+  const lookup = await geocode(lat, lng);
+  return res.json({
+    ok: true,
+    local,
+    lookupUsed: true,
+    placeName: lookup.ok ? lookup.placeName : null,
+    precisionNote: lookup.ok ? lookup.precisionNote : null,
+    // A failed lookup is reported, not fatal: the local description still stands.
+    failure: lookup.ok ? undefined : lookup.failure,
+  });
+}
+
+app.post("/api/geo/describe", handleGeoDescribe);
+
+// Resolves a saved profile ZIP into a point to shop from. The catalog's own ZIP
+// resolves locally; any other ZIP needs the same consent as a place-name lookup.
+async function handleGeoPostal(req, res, { geocode = geocodePostalCode } = {}) {
+  const body = req.body || {};
+  const zip = String(body.postalCode ?? "").trim();
+  if (!/^\d{5}$/.test(zip)) {
+    return res.status(400).json({ ok: false, failure: { message: "Enter a five-digit ZIP code." } });
+  }
+  // The catalog's own ZIP is already a known point, so it resolves with no
+  // third-party call and no consent question at all.
+  if (zip === String(STORE_DATA.zip)) {
+    return res.json({
+      ok: true, resolved: true,
+      lat: DEFAULT_ORIGIN.lat, lng: DEFAULT_ORIGIN.lng,
+      label: DEFAULT_ORIGIN.label, source: "local-store-data", lookupUsed: false,
+    });
+  }
+  if (body.allowLookup !== true) {
+    return res.json({
+      ok: true,
+      resolved: false,
+      needsConsent: true,
+      note: `Finding ZIP ${zip} needs a lookup outside this app. ZIP ${STORE_DATA.zip} resolves without one.`,
+    });
+  }
+  const result = await geocode(zip);
+  if (!result.ok) {
+    return res.json({ ok: false, resolved: false, failure: result.failure });
+  }
+  return res.json({ ok: true, resolved: true, ...result });
+}
+
+app.post("/api/geo/postal", handleGeoPostal);
+
+// Prices a basket at every nearby branch and ranks them cheapest-first.
+app.post("/api/grocery/optimize", (req, res) => {
+  const body = req.body || {};
+  if (body.items !== undefined && !Array.isArray(body.items)) {
+    return res.status(400).json({ ok: false, failure: { message: "items must be an array of names or {name, qty} entries" } });
+  }
+  const items = Array.isArray(body.items) ? body.items : [];
+  if (!items.length) {
+    return res.status(400).json({ ok: false, failure: { message: "Add at least one item before comparing stores." } });
+  }
+  if (!BRANCHES.length) {
+    return res.status(503).json({ ok: false, failure: reportFailure("grocery", "optimize", {
+      status: "no-stores", message: "No store locations are loaded — check data/stores.json.",
+    }) });
+  }
+  try {
+    return res.json({ ok: true, ...optimizeCart({ items, lat: body.lat, lng: body.lng, maxDistanceMi: body.maxDistanceMi }) });
+  } catch (e) {
+    return res.status(500).json({ ok: false, failure: reportFailure("grocery", "optimize", {
+      status: "optimize-error", message: e.message,
+    }) });
+  }
 });
 
 // Honest live-price attempt: tries the real store search page, reports blocks.
@@ -702,12 +1366,17 @@ app.get("/api/failures", (req, res) => res.json({ ok: true, count: failures.leng
 module.exports = {
   app, localPlan, cheapestPack, findPrice, extractJson, PRICES, STORES, RECIPES,
   RECIPE_SOURCES, buildPlanSystemPrompt, reportFailure, resolveDataPath, AIR_MODEL, AIR_VISION_MODEL
+  reportFailure, resolveDataPath, handlePlanRequest, handleVisionRequest, normalizeVisionResult,
+  DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL,
+  haversineMiles, isValidCoordinate, resolveCatalogItem, normalizeCartItems, optimizeCart,
+  describeLocation, reverseGeocode, handleGeoDescribe, geocodePostalCode, handleGeoPostal,
+  STORE_DATA, BRANCHES, DEFAULT_ORIGIN, ITEM_ALIASES
 };
 
 if (require.main === module) {
   // 0.0.0.0 so a phone on the same WiFi can reach the demo.
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`FridgeFuse v0 on http://localhost:${PORT}`);
-    console.log(`AIR: ${AIR_BASE} text=${AIR_MODEL} vision=${AIR_VISION_MODEL} key=${AIR_KEY ? "set" : "MISSING (mock mode)"}`);
+    console.log(`AIR: ${AIR_BASE} text=${AIR_MODEL} vision=${AIR_VISION_MODEL} visionVerify=${AIR_VISION_VERIFY_MODEL} key=${AIR_KEY ? "set" : "MISSING (mock mode)"}`);
   });
 }

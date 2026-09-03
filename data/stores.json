@@ -1,0 +1,79 @@
+{
+  "zip": "85281",
+  "origin": { "lat": 33.4242, "lng": -111.9281, "label": "ASU Tempe campus" },
+  "note": "APPROXIMATE DEV MOCK branch locations near ASU Tempe 85281. Coordinates are rough neighborhood-level estimates for prototype distance math, NOT surveyed addresses — verify before relying on them. Each branch inherits its chain's prices from prices.json.",
+  "branches": [
+    {
+      "id": "frys-tempe-university",
+      "chain": "frys",
+      "name": "Fry's Food Store",
+      "area": "Tempe — University Dr",
+      "lat": 33.4222,
+      "lng": -111.94,
+      "approximate": true
+    },
+    {
+      "id": "aldi-tempe-broadway",
+      "chain": "aldi",
+      "name": "Aldi",
+      "area": "Tempe — Broadway Rd",
+      "lat": 33.4085,
+      "lng": -111.926,
+      "approximate": true
+    },
+    {
+      "id": "traderjoes-tempe-mcclintock",
+      "chain": "traderjoes",
+      "name": "Trader Joe's",
+      "area": "Tempe — McClintock Dr",
+      "lat": 33.43,
+      "lng": -111.91,
+      "approximate": true
+    },
+    {
+      "id": "walmart-tempe-apache",
+      "chain": "walmart",
+      "name": "Walmart Neighborhood Market",
+      "area": "Tempe — Apache Blvd",
+      "lat": 33.4148,
+      "lng": -111.906,
+      "approximate": true
+    },
+    {
+      "id": "frys-tempe-baseline",
+      "chain": "frys",
+      "name": "Fry's Food Store",
+      "area": "Tempe — Baseline Rd",
+      "lat": 33.3775,
+      "lng": -111.964,
+      "approximate": true
+    },
+    {
+      "id": "walmart-mesa-dobson",
+      "chain": "walmart",
+      "name": "Walmart Supercenter",
+      "area": "Mesa — Dobson Rd",
+      "lat": 33.39,
+      "lng": -111.875,
+      "approximate": true
+    },
+    {
+      "id": "aldi-tempe-elliot",
+      "chain": "aldi",
+      "name": "Aldi",
+      "area": "Tempe — Elliot Rd",
+      "lat": 33.35,
+      "lng": -111.935,
+      "approximate": true
+    },
+    {
+      "id": "traderjoes-tempe-warner",
+      "chain": "traderjoes",
+      "name": "Trader Joe's",
+      "area": "Tempe — Warner Rd",
+      "lat": 33.335,
+      "lng": -111.925,
+      "approximate": true
+    }
+  ]
+}

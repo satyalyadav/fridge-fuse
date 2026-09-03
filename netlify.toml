@@ -11,6 +11,7 @@
   node_bundler = "esbuild"
   external_node_modules = ["express", "serverless-http", "dotenv"]
   included_files = ["data/prices.json", "data/recipe-sources.json"]
+  included_files = ["data/prices.json", "data/stores.json"]
 
 [[redirects]]
   from = "/api/*"
@@ -27,4 +28,4 @@
     X-Frame-Options = "DENY"
     Referrer-Policy = "no-referrer"
     X-DNS-Prefetch-Control = "off"
-    Permissions-Policy = "microphone=(), geolocation=()"
+    Permissions-Policy = "microphone=(), geolocation=(self)"
