@@ -91,11 +91,6 @@
       "name": "Rainbow Plant Life",
       "url": "https://rainbowplantlife.com",
       "focus": "plant-based, vegetable-forward healthy meals"
-    },
-    {
-      "name": "FridgeFuse Demo Catalog",
-      "url": "https://github.com/satyalyadav/fridge-fuse",
-      "focus": "built-in beginner microwave/stove recipes shipped with the app (fallback planner)"
     }
   ]
 }

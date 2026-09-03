@@ -21,11 +21,6 @@ const AIR_MODEL = process.env.ASU_AIR_MODEL || DEFAULT_AIR_MODEL;
 const AIR_VISION_MODEL = process.env.ASU_AIR_VISION_MODEL || "qwen3-vl-32b-instruct";
 const AIR_VISION_VERIFY_MODEL = process.env.ASU_AIR_VISION_VERIFY_MODEL || AIR_MODEL;
 
-// Fallback pack price for items outside the mock catalog (e.g. free-form AI
-// output). Named so a made-up price is easy to find and replace with live data.
-const FALLBACK_PACK_PRICE = 3.99;
-const FALLBACK_STORE = "walmart";
-
 function asStringArray(value, fallback = []) {
   if (!Array.isArray(value)) return fallback;
   return value.map((item) => String(item)).filter((item) => item.length > 0);
@@ -103,16 +98,22 @@ function reportFailure(provider, operation, details) {
   return entry;
 }
 
+function aiFailureStatus(failure) {
+  const providerStatus = Number(failure?.status);
+  if (Number.isInteger(providerStatus) && providerStatus >= 500 && providerStatus <= 599) return providerStatus;
+  return failure?.status === "no-key" ? 503 : 502;
+}
+
 async function airChat(messages, { maxTokens = 1200, wantJson = true, model = AIR_MODEL } = {}) {
   // Returns { ok:true, data } or { ok:false, failure }
   if (!AIR_KEY) {
     const f = reportFailure("asu-air", "chat", {
       status: "no-key",
-      message: "VOYAGER_KEY not set — running in MOCK mode.",
+      message: "VOYAGER_KEY is required for AI requests.",
       model,
-      hint: "export VOYAGER_KEY=... to go live.",
+      hint: "Set VOYAGER_KEY before starting the app.",
     });
-    return { ok: false, failure: f, mock: true };
+    return { ok: false, failure: f };
   }
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 45000);
@@ -202,12 +203,6 @@ function isApprovedRecipeCitation(source, sourceUrl) {
   return RECIPE_SOURCES.sources.some((approved) => approved.name === source && approved.url === sourceUrl);
 }
 
-const FALLBACK_RECIPE_SOURCE = RECIPE_SOURCES.sources.find(
-  (source) => source.name === "FridgeFuse Demo Catalog" && source.url === "https://github.com/satyalyadav/fridge-fuse"
-);
-if (!FALLBACK_RECIPE_SOURCE) {
-  throw new Error("data/recipe-sources.json must include the FridgeFuse Demo Catalog fallback source");
-}
 const STORES = Object.keys(PRICES.stores);
 // Typed words a student uses -> catalog item ("cheese" -> "cheddar"). Lives in
 // the data file so the UI can fetch it instead of keeping a second copy.
@@ -545,274 +540,23 @@ function optimizeCart({ items = [], lat, lng, maxDistanceMi } = {}) {
   };
 }
 
-// ---------- small, grounded recipe bank for the stable demo planner ----------
-const RECIPES = [
-  {
-    title: "Spinach egg rice bowl",
-    needs: ["spinach", "eggs", "rice", "soy sauce"],
-    timeMin: 12, protein: 18, carbs: 49, fiber: 5, equip: ["microwave"],
-    steps: [
-      "Put a handful of spinach in a microwave-safe bowl. Cover loosely and heat for 45 seconds.",
-      "Crack in 2 eggs, beat with a fork, and microwave in 30-second bursts. Stir after each burst until the eggs are set.",
-      "Add cooked rice and a small splash of soy sauce. Heat for 60 to 90 seconds and stir."
-    ]
-  },
-  {
-    title: "Black bean quesadillas",
-    needs: ["tortillas", "black beans", "cheddar", "salsa"],
-    timeMin: 8, protein: 19, carbs: 47, fiber: 10, equip: ["microwave"],
-    steps: [
-      "Drain and rinse half the can of beans. Mash them lightly with a fork.",
-      "Spread beans and cheddar over 2 tortillas, fold them, and place on a microwave-safe plate.",
-      "Heat for 45 seconds at a time until the cheese melts. Let them stand for 1 minute, then add salsa."
-    ]
-  },
-  {
-    title: "Loaded potato bowl",
-    needs: ["potatoes", "black beans", "cheddar", "salsa"],
-    timeMin: 14, protein: 17, carbs: 58, fiber: 11, equip: ["microwave"],
-    steps: [
-      "Pierce a potato all over with a fork. Microwave for 4 minutes, turn it, then cook 3 to 5 minutes more until soft.",
-      "Split the potato carefully. Add the remaining beans and cheddar.",
-      "Heat for 45 seconds, then finish with salsa."
-    ]
-  },
-  {
-    title: "Peanut butter banana oats",
-    needs: ["oats", "peanut butter", "milk", "banana"],
-    timeMin: 6, protein: 16, carbs: 58, fiber: 8, equip: ["microwave"],
-    steps: [
-      "Mix oats and milk in a large microwave-safe bowl.",
-      "Microwave for 90 seconds, stir, then heat in 30-second bursts until thick.",
-      "Stir in peanut butter and top with sliced banana."
-    ]
-  },
-  {
-    title: "Microwave egg and cheese toast",
-    needs: ["bread", "eggs", "cheddar"],
-    timeMin: 7, protein: 20, carbs: 31, fiber: 3, equip: ["microwave"],
-    steps: [
-      "Beat 2 eggs in a mug and microwave in 30-second bursts, stirring each time, until set.",
-      "Put the eggs and cheddar between 2 slices of bread.",
-      "Microwave for 20 seconds to melt the cheese. Let it stand for 1 minute before eating."
-    ]
-  },
-  {
-    title: "Cheesy marinara pasta cup",
-    needs: ["pasta", "marinara", "cheddar"],
-    timeMin: 15, protein: 17, carbs: 61, fiber: 6, equip: ["microwave"],
-    steps: [
-      "Put pasta in a large microwave-safe bowl and cover it with water by 1 inch.",
-      "Microwave in 2-minute bursts, stirring each time, until tender. Drain carefully.",
-      "Stir in marinara and cheddar, then heat for 45 seconds."
-    ]
-  },
-  {
-    title: "Microwave veggie fried rice",
-    needs: ["rice", "eggs", "soy sauce", "frozen peas"],
-    timeMin: 12, protein: 15, carbs: 52, fiber: 5, equip: ["microwave"],
-    steps: [
-      "Heat peas and cooked rice in a large microwave-safe bowl for 90 seconds.",
-      "Push the rice aside, add a beaten egg, and microwave for 30 seconds. Stir and repeat until the egg is set.",
-      "Mix everything with a small splash of soy sauce."
-    ]
-  },
-  {
-    title: "Bean and cheese rice bowl",
-    needs: ["rice", "black beans", "cheddar", "salsa"],
-    timeMin: 9, protein: 20, carbs: 63, fiber: 12, equip: ["microwave"],
-    steps: [
-      "Combine cooked rice and drained beans in a microwave-safe bowl.",
-      "Microwave for 90 seconds, stir, and check that it is hot throughout.",
-      "Add cheddar, heat for 30 seconds, then spoon salsa over the top."
-    ]
-  },
-  {
-    title: "Black bean salsa rice bowl",
-    needs: ["rice", "black beans", "salsa", "onion"],
-    timeMin: 10, protein: 12, carbs: 62, fiber: 13, equip: ["microwave"],
-    steps: [
-      "Combine cooked rice and drained beans in a microwave-safe bowl.",
-      "Microwave for 90 seconds, stir, and heat until steaming.",
-      "Top with salsa and diced onion."
-    ]
-  },
-  {
-    title: "Marinara veggie pasta cup",
-    needs: ["pasta", "marinara", "onion"],
-    timeMin: 15, protein: 10, carbs: 64, fiber: 7, equip: ["microwave"],
-    steps: [
-      "Put pasta in a large microwave-safe bowl and cover it with water by 1 inch.",
-      "Microwave in 2-minute bursts, stirring each time, until tender. Drain carefully.",
-      "Stir in marinara and diced onion, then heat for 60 seconds."
-    ]
-  },
-  {
-    title: "Chicken fried rice",
-    needs: ["chicken breast", "rice", "eggs", "soy sauce", "frozen peas", "onion"],
-    timeMin: 25, protein: 32, carbs: 48, fiber: 4, equip: ["stove"],
-    steps: ["Dice the chicken and onion.", "Cook the chicken fully, then add onion and peas.", "Add rice, egg, and soy sauce. Stir until the egg is set."]
-  },
-  {
-    title: "Chicken tacos",
-    needs: ["chicken breast", "tortillas", "onion", "cheddar", "salsa"],
-    timeMin: 20, protein: 30, carbs: 40, fiber: 6, equip: ["stove"],
-    steps: ["Dice and cook the chicken until no pink remains.", "Warm the tortillas in the same pan.", "Fill with chicken, onion, cheddar, and salsa."]
-  }
-];
-
-function pantryHas(have, ingredient) {
-  return [...have].some((item) => ingredient.includes(item) || item.includes(ingredient));
-}
-
-function combinations(items, size, start = 0, picked = [], result = []) {
-  if (picked.length === size) {
-    result.push([...picked]);
-    return result;
-  }
-  for (let i = start; i <= items.length - (size - picked.length); i++) {
-    picked.push(items[i]);
-    combinations(items, size, i + 1, picked, result);
-    picked.pop();
-  }
-  return result;
-}
-
-function estimatedLeftover(item, uses) {
-  const known = {
-    "black beans": uses > 1 ? "can used across the plan" : "about half a can",
-    bread: "most of the loaf",
-    cheddar: uses > 2 ? "about 2 oz" : "about half the block",
-    eggs: uses > 2 ? "about 6 eggs" : "most of the dozen",
-    "frozen peas": "most of the bag",
-    marinara: "about half the jar",
-    milk: "most of the gallon",
-    oats: "most of the canister",
-    pasta: "about half the box",
-    "peanut butter": "most of the jar",
-    potatoes: "most of the bag",
-    rice: "most of the bag",
-    salsa: uses > 2 ? "a few spoonfuls" : "about half the jar",
-    "soy sauce": "most of the bottle",
-    tortillas: uses > 1 ? "about 4 tortillas" : "about 8 tortillas"
-  };
-  return known[item] || (uses > 1 ? "a little left" : "most of the package");
-}
-
-function localPlan({
-  pantry = [], dinners = 3, maxTimeMin = 30, equipment = ["stove"], diet = "",
-  budget = 30, useSoon = [], exclude = []
-}) {
-  const pantryList = asStringArray(pantry, []);
-  const useSoonList = asStringArray(useSoon, []);
-  const excludeList = asStringArray(exclude, []);
-  const equipmentList = asStringArray(equipment, []).map((item) => item.toLowerCase());
-  const safeEquipment = equipmentList.length ? equipmentList : ["stove"];
-  const safeDinners = asDinners(dinners, 3);
-  const safeMaxTime = asPositiveNumber(maxTimeMin, 30) || 30;
-  const safeBudget = asPositiveNumber(budget, 30);
-  const dietStr = typeof diet === "string" ? diet : "";
-
-  const have = new Set(pantryList.map((item) => item.toLowerCase()));
-  const urgent = new Set(useSoonList.map((item) => item.toLowerCase()));
-  const excluded = new Set(excludeList.map((title) => title.toLowerCase()));
-  const dietQ = dietStr.toLowerCase();
-  const blockedForVegetarian = new Set(["chicken breast", "ground beef"]);
-  const blockedForVegan = new Set([...blockedForVegetarian, "eggs", "milk", "cheddar", "butter", "yogurt"]);
-  const blockedForDairyFree = new Set(["milk", "cheddar", "butter", "yogurt"]);
-  const blockedForGlutenFree = new Set(["bread", "pasta", "tortillas"]);
-
-  const candidates = RECIPES
-    .filter((recipe) => recipe.timeMin <= safeMaxTime)
-    .filter((recipe) => recipe.equip.every((item) => safeEquipment.includes(item)))
-    .filter((recipe) => !excluded.has(recipe.title.toLowerCase()))
-    .filter((recipe) => {
-      if (dietQ.includes("vegan") && recipe.needs.some((item) => blockedForVegan.has(item))) return false;
-      if (dietQ.includes("vegetarian") && recipe.needs.some((item) => blockedForVegetarian.has(item))) return false;
-      if (dietQ.includes("dairy-free") && recipe.needs.some((item) => blockedForDairyFree.has(item))) return false;
-      if ((dietQ.includes("gluten-free") || dietQ.includes("gluten free")) && recipe.needs.some((item) => blockedForGlutenFree.has(item))) return false;
-      if (dietQ.includes("peanut") && recipe.needs.includes("peanut butter")) return false;
-      return true;
-    })
-    .map((recipe) => ({
-      recipe,
-      missing: recipe.needs.filter((item) => !pantryHas(have, item)),
-      urgentUsed: recipe.needs.filter((item) => urgent.has(item))
-    }));
-
-  const planSize = Math.min(safeDinners, candidates.length);
-  if (candidates.length === 0 || planSize === 0) {
-    return {
-      dinners: [],
-      shoppingList: [],
-      leftovers: [],
-      totalCost: 0,
-      note: "No recipes match that combination of equipment, time, and diet. Try more time, more equipment, or fewer restrictions.",
-    };
-  }
-  const possiblePlans = combinations(candidates, planSize);
-  const evaluated = possiblePlans.map((group) => {
-    const missingReferences = group.flatMap((item) => item.missing);
-    const uniqueMissing = [...new Set(missingReferences)];
-    const cost = uniqueMissing.reduce((total, item) => total + (cheapestPack(item)?.packPrice ?? FALLBACK_PACK_PRICE), 0);
-    const urgentCovered = new Set(group.flatMap((item) => item.urgentUsed)).size;
-    const sharedUses = missingReferences.length - uniqueMissing.length;
-    const pantryUses = group.reduce((total, item) => total + item.recipe.needs.length - item.missing.length, 0);
-    const overBudget = Math.max(0, cost - safeBudget);
-    const score = overBudget * 1000 + uniqueMissing.length * 18 + cost - urgentCovered * 60 - sharedUses * 12 - pantryUses * 4;
-    return { group, cost, score };
-  }).sort((a, b) => a.score - b.score);
-
-  const picked = (evaluated[0]?.group || candidates.slice(0, planSize))
-    .sort((a, b) => b.urgentUsed.length - a.urgentUsed.length);
-
-  const listMap = {};
-  for (const selection of picked) {
-    for (const missing of selection.missing) {
-      if (!listMap[missing]) {
-        const pack = cheapestPack(missing) || { item: missing, store: FALLBACK_STORE, pack: "1 package", packPrice: FALLBACK_PACK_PRICE, estimated: true };
-        listMap[missing] = { ...pack, qty: 1, sharedBy: [] };
-      }
-      if (!listMap[missing].sharedBy.includes(selection.recipe.title)) {
-        listMap[missing].sharedBy.push(selection.recipe.title);
-      }
-    }
-  }
-
-  const shoppingList = Object.values(listMap);
-  const totalCost = +shoppingList.reduce((total, item) => total + item.packPrice * item.qty, 0).toFixed(2);
-  const leftovers = shoppingList.map((item) => ({
-    item: item.item,
-    amount: estimatedLeftover(item.item, item.sharedBy.length)
-  }));
-
-  return {
-    dinners: picked.map((selection) => ({
-      title: selection.recipe.title,
-      timeMin: selection.recipe.timeMin,
-      protein: selection.recipe.protein,
-      carbs: selection.recipe.carbs,
-      fiber: selection.recipe.fiber,
-      equip: selection.recipe.equip,
-      usesPantry: selection.recipe.needs.filter((item) => !selection.missing.includes(item)),
-      needs: selection.missing,
-      steps: selection.recipe.steps,
-      source: FALLBACK_RECIPE_SOURCE.name,
-      sourceUrl: FALLBACK_RECIPE_SOURCE.url
-    })),
-    shoppingList,
-    leftovers,
-    totalCost
-  };
-}
-
 function groundShoppingPlan(plan) {
+  const neededItems = [...new Set((plan.dinners || [])
+    .flatMap((dinner) => dinner.needs || [])
+    .map((item) => String(item).trim().toLowerCase())
+    .filter(Boolean))];
+  const unpricedItems = neededItems.filter((item) => !cheapestPack(item));
+  if (unpricedItems.length) {
+    throw new Error(`AI plan includes ingredients outside the price catalog: ${unpricedItems.join(", ")}`);
+  }
+
   const listMap = {};
   for (const dinner of plan.dinners || []) {
     for (const item of dinner.needs || []) {
-      const name = String(item).toLowerCase();
+      const name = String(item).trim().toLowerCase();
+      if (!name) continue;
       if (!listMap[name]) {
-        const pack = cheapestPack(name) || { item: name, store: FALLBACK_STORE, pack: "1 package", packPrice: FALLBACK_PACK_PRICE, estimated: true };
+        const pack = cheapestPack(name);
         listMap[name] = { ...pack, qty: 1, sharedBy: [] };
       }
       if (!listMap[name].sharedBy.includes(dinner.title)) listMap[name].sharedBy.push(dinner.title);
@@ -822,10 +566,7 @@ function groundShoppingPlan(plan) {
   return {
     ...plan,
     shoppingList,
-    leftovers: shoppingList.map((item) => ({
-      item: item.item,
-      amount: estimatedLeftover(item.item, item.sharedBy.length)
-    })),
+    leftovers: plan.leftovers,
     totalCost: +shoppingList.reduce((total, item) => total + item.packPrice * item.qty, 0).toFixed(2)
   };
 }
@@ -853,6 +594,12 @@ function parseAiPlan(content, expectedDinners) {
     }
     if (dinner.steps.length === 0) throw new Error(`Dinner ${index + 1} needs at least one cooking step`);
   }
+  if (!Array.isArray(plan.leftovers)) throw new Error("AI plan must contain a leftovers array");
+  for (const [index, leftover] of plan.leftovers.entries()) {
+    if (!leftover || typeof leftover !== "object" || typeof leftover.item !== "string" || !leftover.item.trim() || typeof leftover.amount !== "string" || !leftover.amount.trim()) {
+      throw new Error(`Leftover ${index + 1} needs an item and amount`);
+    }
+  }
   return plan;
 }
 
@@ -860,7 +607,7 @@ async function repairAiPlan(chat, content, expectedDinners, initialError, requir
   return chat([
     {
       role: "system",
-      content: `Repair a malformed FridgeFuse meal-plan response. Reply ONLY with valid JSON containing exactly ${expectedDinners} dinners. Each dinner must have a non-empty title, numeric timeMin, arrays named usesPantry, needs, and steps, and a source/sourceUrl pair matching one of these approved sources:\n${recipeSourcesContext()}\nPreserve the original meal ideas when possible. Do not add commentary or Markdown fences.`
+      content: `Repair a malformed FridgeFuse meal-plan response. Reply ONLY with valid JSON containing exactly ${expectedDinners} dinners, a shoppingList, a leftovers array, totalCost, and notes. Each dinner must have a non-empty title, numeric timeMin, arrays named usesPantry, needs, and steps, and a source/sourceUrl pair matching one of these approved sources:\n${recipeSourcesContext()} Each leftover must have a non-empty item and amount. Use only ingredient names from the supplied price catalog. Preserve the original meal ideas when possible. Do not add commentary or Markdown fences.`
     },
     {
       role: "user",
@@ -890,9 +637,10 @@ app.get("/api/health", (req, res) => {
 
 app.get("/api/models", async (req, res) => {
   if (!AIR_KEY) {
-    return res.json({ ok: false, mock: true, failure: reportFailure("asu-air", "models", {
+    const failure = reportFailure("asu-air", "models", {
       status: "no-key", message: "VOYAGER_KEY not set.", hint: "export VOYAGER_KEY=...",
-    })});
+    });
+    return res.status(aiFailureStatus(failure)).json({ ok: false, failure });
   }
   try {
     const ctrl = new AbortController();
@@ -1031,13 +779,7 @@ Rules: v=true only when the entire object is inside the frame, unobstructed, unm
     ]},
   ], { maxTokens: 650, model: AIR_VISION_MODEL });
   if (!out.ok) {
-    if (out.mock) {
-      return res.json({ ok: true, mock: true,
-        confirmed: [{ name: "eggs", confidence: 0.98 }, { name: "milk", confidence: 0.97 }],
-        uncertain: [],
-        note: "MOCK — set VOYAGER_KEY for live vision." });
-    }
-    return res.json({ ok: false, failure: out.failure });
+    return res.status(aiFailureStatus(out.failure)).json({ ok: false, failure: out.failure });
   }
   try {
     const content = out.data.choices[0].message.content;
@@ -1092,9 +834,10 @@ Set confirmed true only when the named grocery is visibly present, its entire ph
     return res.json({ ok: true, confirmed, uncertain: review, model: AIR_VISION_MODEL,
       ...(verificationWarning ? { verificationWarning } : {}) });
   } catch (e) {
-    res.json({ ok: false, failure: reportFailure("asu-air", "vision-parse", {
+    const failure = reportFailure("asu-air", "vision-parse", {
       status: "parse-error", message: `Could not parse vision JSON: ${e.message}`,
-    })});
+    });
+    res.status(aiFailureStatus(failure)).json({ ok: false, failure });
   }
 }
 
@@ -1102,15 +845,15 @@ app.post("/api/vision", handleVisionRequest);
 
 // System prompt for AI meal generation. Grounded to data/recipe-sources.json:
 // the model may only pull, adapt, or cite recipes from the approved sources,
-// must cite the source name/URL in every dinner, and must fall back to the
-// closest approved recipe (with an adaptation note) instead of inventing one.
+// must cite the source name/URL in every dinner, and must choose the closest
+// approved recipe (with an adaptation note) instead of inventing one.
 function buildPlanSystemPrompt(priceCtx) {
   const sourcesCtx = recipeSourcesContext();
   return `You are FridgeFuse, a student meal planner for Tempe AZ 85281. Reply ONLY with JSON:
 {"dinners":[{"title":"...","source":"...","sourceUrl":"...","adaptationNote":"","timeMin":20,"protein":25,"carbs":50,"fiber":6,"usesPantry":["..."],"needs":["..."],"steps":["..."]}],
 "shoppingList":[{"item":"...","pack":"...","packPrice":0.0,"store":"...","qty":1,"sharedBy":["..."]}],
-"totalCost":0.0,"notes":"..."}
-Rules: plan EXACTLY the requested number of dinners. The user is a freshman cook, so give concrete beginner-safe steps and only use the listed equipment. First use food marked use-soon, then minimize unique purchases, stay within budget, and keep cooking easy. Prefer purchases shared across dinners. Put only missing ingredients in needs; pantry items cost $0. The server will ground final prices against its catalog. Respect time, equipment, and dietary restrictions. Price context: ${priceCtx}.
+"leftovers":[{"item":"...","amount":"..."}],"totalCost":0.0,"notes":"..."}
+Rules: plan EXACTLY the requested number of dinners. The user is a freshman cook, so give concrete beginner-safe steps and only use the listed equipment. First use food marked use-soon, then minimize unique purchases, stay within budget, and keep cooking easy. Prefer purchases shared across dinners. Put only missing ingredients in needs; pantry items cost $0. Return a concise leftover estimate for each purchased package. Use only ingredient names from the price context so the server can price every need. The server will replace shopping prices with its catalog. Respect time, equipment, and dietary restrictions. Price context: ${priceCtx}.
 Recipe grounding (STRICT):
 - Pull, adapt, or cite recipes ONLY from the approved sources listed below. NEVER invent a new recipe from scratch and NEVER use a recipe from an unlisted source, even if the user asks for one.
 - Ground every dinner in a real recipe from one of these sources: base its ingredients and steps on that recipe, adjusting only for the user's pantry, budget, equipment, time, and diet.
@@ -1122,8 +865,7 @@ ${sourcesCtx}`;
 
 async function handlePlanRequest(req, res, { chat = airChat } = {}) {
   const { pantry = [], budget = 30, dinners = 3, maxTimeMin = 30,
-          equipment = ["stove"], diet = "", useSoon = [], request = "", exclude = [],
-          catalogOnly = false } = req.body || {};
+          equipment = ["stove"], diet = "", useSoon = [], request = "", exclude = [] } = req.body || {};
   if (pantry !== undefined && !Array.isArray(pantry)) {
     return res.status(400).json({ ok: false, failure: { message: "pantry must be an array of strings" } });
   }
@@ -1144,14 +886,6 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
   const safeUseSoon = asStringArray(useSoon, []);
   const safeExclude = asStringArray(exclude, []);
   const safeDiet = typeof diet === "string" ? diet : "";
-  if (catalogOnly) {
-    return res.json({
-      ok: true,
-      mock: true,
-      model: "grounded-catalog",
-      ...localPlan({ pantry: safePantry, dinners, maxTimeMin, equipment: safeEquipment, diet: safeDiet, budget, useSoon: safeUseSoon, exclude: safeExclude })
-    });
-  }
   const priceCtx = PRICES.items.map((i) => {
     const c = cheapestPack(i.name);
     return `${i.name} (~${c.pack} @ ${c.store} $${c.packPrice})`;
@@ -1162,13 +896,7 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
   ];
   const out = await chat(planningMessages, { maxTokens: 1800 });
   if (!out.ok) {
-    if (out.mock) {
-      return res.json({ ok: true, mock: true, ...localPlan({ pantry: safePantry, dinners, maxTimeMin, equipment: safeEquipment, diet: safeDiet, budget, useSoon: safeUseSoon, exclude: safeExclude }),
-        note: "MOCK planner — set VOYAGER_KEY for live AI planning." });
-    }
-    // Live AI failed: still return local plan AND the failure (demo never dies, failure visible).
-    return res.json({ ok: true, fallback: true, failure: out.failure,
-      ...localPlan({ pantry: safePantry, dinners, maxTimeMin, equipment: safeEquipment, diet: safeDiet, budget, useSoon: safeUseSoon, exclude: safeExclude }) });
+    return res.status(aiFailureStatus(out.failure)).json({ ok: false, failure: out.failure });
   }
   const expectedDinners = asDinners(dinners, 3);
   const content = out.data?.choices?.[0]?.message?.content;
@@ -1176,23 +904,25 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
     const plan = groundShoppingPlan(parseAiPlan(content, expectedDinners));
     return res.json({ ok: true, model: AIR_MODEL, ...plan });
   } catch (initialError) {
-    const repaired = await repairAiPlan(chat, content, expectedDinners, initialError, planningMessages[1].content);
+    const repaired = await repairAiPlan(chat, content, expectedDinners, initialError, `${planningMessages[1].content}\n\nPrice catalog:\n${priceCtx}`);
     if (!repaired.ok) {
-      return res.json({ ok: false, failure: repaired.failure || reportFailure("asu-air", "plan-repair", {
+      const failure = repaired.failure || reportFailure("asu-air", "plan-repair", {
         status: "repair-failed",
         message: `Could not repair AI plan: ${initialError.message}`,
-      }) });
+      });
+      return res.status(aiFailureStatus(failure)).json({ ok: false, failure });
     }
     try {
       const repairedContent = repaired.data?.choices?.[0]?.message?.content;
       const plan = groundShoppingPlan(parseAiPlan(repairedContent, expectedDinners));
       return res.json({ ok: true, model: AIR_MODEL, repaired: true, ...plan });
     } catch (repairError) {
-      return res.json({ ok: false, failure: reportFailure("asu-air", "plan-repair", {
+      const failure = reportFailure("asu-air", "plan-repair", {
         status: "parse-error",
         message: `Could not repair AI plan: ${repairError.message}`,
         initialMessage: initialError.message,
-      }) });
+      });
+      return res.status(aiFailureStatus(failure)).json({ ok: false, failure });
     }
   }
 }
@@ -1377,7 +1107,7 @@ app.get("/api/failures", (req, res) => res.json({ ok: true, count: failures.leng
 // and the Netlify wrapper can keep using the existing module API.
 module.exports = app;
 Object.assign(module.exports, {
-  app, localPlan, cheapestPack, findPrice, extractJson, PRICES, STORES, RECIPES,
+  app, cheapestPack, findPrice, extractJson, PRICES, STORES,
   RECIPE_SOURCES, buildPlanSystemPrompt, reportFailure, resolveDataPath,
   DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL,
   handlePlanRequest, handleVisionRequest, normalizeVisionResult,
@@ -1390,6 +1120,6 @@ if (require.main === module) {
   // 0.0.0.0 so a phone on the same WiFi can reach the demo.
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`FridgeFuse v0 on http://localhost:${PORT}`);
-    console.log(`AIR: ${AIR_BASE} text=${AIR_MODEL} vision=${AIR_VISION_MODEL} visionVerify=${AIR_VISION_VERIFY_MODEL} key=${AIR_KEY ? "set" : "MISSING (mock mode)"}`);
+    console.log(`AIR: ${AIR_BASE} text=${AIR_MODEL} vision=${AIR_VISION_MODEL} visionVerify=${AIR_VISION_VERIFY_MODEL} key=${AIR_KEY ? "set" : "MISSING (AI unavailable)"}`);
   });
 }

@@ -23,7 +23,7 @@ cd fridge-fuse
 npm install
 ```
 
-Optional, live AI mode for photo recognition and meal planning:
+AI setup for photo recognition and meal planning:
 
 ```bash
 cp .env.example .env
@@ -36,10 +36,9 @@ uses `qwen3-vl-32b-instruct`. A second, independent photo check uses the faster
 multimodal `llama4-scout-17b` by default; it can be overridden with
 `ASU_AIR_VISION_VERIFY_MODEL`.
 
-Without `VOYAGER_KEY` the app runs in deterministic MOCK demo mode using the
-grounded Tempe 85281 catalog in `data/prices.json`. This is expected and fine
-for the stage demo. With the key missing you will see
-`key=MISSING (mock mode)` in the server log.
+`VOYAGER_KEY` is required for meal planning and photo recognition. If it is
+missing, or Voyager is unavailable, those endpoints return an error instead of
+inventing a local plan or demo grocery results.
 
 `.env` is gitignored — never commit the real key.
 
@@ -61,7 +60,7 @@ curl http://localhost:3000/api/health
 
 `npm test` runs the in-process planner and contract checks (expects
 `ALL ... CHECKS PASSED`). `/api/health` should return
-`{"ok":true,...}` with `airConfigured: false` in mock mode,
+`{"ok":true,...}` with `airConfigured: false` when the key is missing and
 `true` when `VOYAGER_KEY` is set.
 
 ## Demo flow
@@ -98,11 +97,10 @@ comparison tests reduced latency at that size without weakening the conservative
 classification behavior. Smaller 640- and 768-pixel versions lost enough object
 detail to fail the safety target, so the app does not use them.
 
-Without `VOYAGER_KEY`, planning and photo recognition use deterministic mock
-responses. If a live planning call fails, the server returns a local plan so the
-demo can continue. If Voyager returns malformed plan JSON, the server asks the
-model to repair it once. A failed repair is reported to the interface instead of
-silently replacing the response with a local plan.
+Planning and photo recognition require Voyager. If Voyager returns malformed
+plan JSON, the server asks the model to repair it once. A failed request or
+repair is reported to the interface; the server does not replace it with a local
+response.
 
 ## Shop tab: cheapest-store comparison
 
@@ -164,13 +162,11 @@ stands and the failure is logged like any other external call.
 ## Recipe sources
 
 - AI meal generation is constrained to the approved source list in
-  `data/recipe-sources.json` (19 sources, v2). The server rejects recipe
+  `data/recipe-sources.json` (18 sources, v2). The server rejects recipe
   citations that do not match that list exactly.
 - Every returned dinner carries `source` and `sourceUrl`.
 - When no approved recipe fits the pantry/budget, the plan returns the closest
   approved recipe with an `adaptationNote`.
-- The fallback/mock planner tags its dinners with the "FridgeFuse Demo Catalog"
-  entry so mock plans carry citations too.
 - Edit the JSON to change the allowlist — the system prompt and citation checks
   are rebuilt from it at startup. A bad or empty file makes the server refuse to
   start, by design. The app does not fetch recipe pages; the model supplies the
@@ -198,7 +194,8 @@ prices and does not present them as live store quotes.
 ## Troubleshooting
 
 - `EADDRINUSE :::3000`: something already uses port 3000 — run `PORT=4000 npm start`.
-- `key=MISSING (mock mode)`: normal without `VOYAGER_KEY`. Add it to `.env` and restart for live AI.
+- `key=MISSING (AI unavailable)`: add `VOYAGER_KEY` to `.env` and restart. Plans
+  and photo recognition stay unavailable until the key is configured.
 - `npm test` fails: make sure you ran `npm install` first and did not edit
   `data/prices.json` or `data/recipe-sources.json`.
 - Slow live plans: check `/api/health` and confirm `airModel` is `llama4-scout-17b`.
@@ -233,9 +230,9 @@ npx vercel@latest env add ASU_AIR_VISION_VERIFY_MODEL
 npx vercel@latest --prod
 ```
 
-When prompted for an environment, add the variables to `production`. You can
-skip `VOYAGER_KEY` while testing. The deployed app then uses deterministic
-mock planning and photo responses.
+When prompted for an environment, add the variables to `production`.
+`VOYAGER_KEY` is required for plans and photo recognition; the deployed app does
+not include a local demo fallback.
 
 Set these values to enable live AI:
 

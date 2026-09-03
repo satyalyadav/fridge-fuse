@@ -3,7 +3,7 @@
 const assert = require("assert");
 const path = require("path");
 const {
-  localPlan, cheapestPack, findPrice, extractJson, PRICES,
+  cheapestPack, findPrice, extractJson, PRICES,
   DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL,
   resolveDataPath, RECIPE_SOURCES, buildPlanSystemPrompt,
   handlePlanRequest, handleVisionRequest, normalizeVisionResult, handleGeoPostal,
@@ -36,71 +36,7 @@ const eggs = cheapestPack("eggs");
 ok(eggs && eggs.store === "aldi" && eggs.packPrice === 2.99, `cheapest eggs = aldi 2.99 (${JSON.stringify(eggs)})`);
 ok(findPrice("EGGS").name === "eggs", "price lookup case-insensitive");
 ok(findPrice("xyz-nope") === null, "unknown item returns null");
-
-const plan = localPlan({ pantry: ["eggs", "rice", "onion"], dinners: 3, maxTimeMin: 30, equipment: ["stove", "microwave"], diet: "" });
-ok(plan.dinners.length === 3, "3 dinners planned");
-ok(plan.shoppingList.length > 0, "shopping list non-empty");
-// No double-counting: each need appears once even if shared.
-const names = plan.shoppingList.map((i) => i.item);
-ok(new Set(names).size === names.length, "no duplicate list items");
-ok(plan.shoppingList.every((i) => i.pack && i.packPrice > 0 && i.store && i.qty === 1), "full packages with price+store");
-const sum = +plan.shoppingList.reduce((t, i) => t + i.packPrice * i.qty, 0).toFixed(2);
-ok(Math.abs(sum - plan.totalCost) < 0.01, `total $${plan.totalCost} matches sum`);
-// Shared-ingredient merging: tortillas/cheddar-heavy pantry should share packs.
-const plan2 = localPlan({ pantry: ["tortillas", "cheddar", "salsa"], dinners: 3, maxTimeMin: 30, equipment: ["microwave", "stove"], diet: "" });
-const shared = plan2.shoppingList.filter((i) => i.sharedBy.length > 1);
-ok(shared.length >= 1, `shared packs merged (${shared.map((s) => s.item).join(", ")})`);
-
-const veg = localPlan({ pantry: [], dinners: 2, maxTimeMin: 30, equipment: ["stove"], diet: "vegetarian" });
-ok(veg.dinners.every((d) => !d.needs.includes("chicken breast")), "vegetarian filter respected");
-
-const micro = localPlan({ pantry: [], dinners: 2, maxTimeMin: 10, equipment: ["microwave", "stove"], diet: "" });
-ok(micro.dinners.length === 2 && micro.dinners.every((d) => d.timeMin <= 10), "time filter respected (max 10 min)");
-ok(require("./server.js").RECIPES.some((r) => r.timeMin > 10), "bank contains slower recipes so the time test is meaningful");
 ok(cheapestPack("spinach") && cheapestPack("spinach").packPrice > 0, "spinach is in the mock catalog");
-
-const vegan = localPlan({ pantry: [], dinners: 2, maxTimeMin: 30, equipment: ["microwave"], diet: "vegan" });
-ok(vegan.dinners.length === 2, "vegan microwave plan is non-empty");
-ok(vegan.dinners.every((d) => !d.needs.concat(d.usesPantry || []).some((x) => ["eggs", "milk", "cheddar"].includes(x))), "vegan filter respected");
-
-const dairyFree = localPlan({ pantry: [], dinners: 2, maxTimeMin: 30, equipment: ["microwave", "stove"], diet: "dairy-free" });
-ok(dairyFree.dinners.every((d) => !d.needs.concat(d.usesPantry || []).some((x) => ["milk", "cheddar"].includes(x))), "dairy-free filter respected");
-
-const glutenFree = localPlan({ pantry: [], dinners: 2, maxTimeMin: 30, equipment: ["microwave", "stove"], diet: "gluten-free" });
-ok(glutenFree.dinners.every((d) => !d.needs.concat(d.usesPantry || []).some((x) => ["bread", "pasta", "tortillas"].includes(x))), "gluten-free filter respected");
-
-ok(localPlan({ pantry: [], dinners: 2.5, maxTimeMin: 30, equipment: ["microwave", "stove"], diet: "" }).dinners.length >= 1, "fractional dinners do not crash");
-ok(localPlan({ pantry: null, dinners: 2, maxTimeMin: 30, equipment: null, diet: "" }).dinners.length >= 0, "null pantry/equipment do not throw");
-
-const dorm = localPlan({
-  pantry: ["eggs", "spinach", "rice", "tortillas", "cheddar", "salsa"],
-  useSoon: ["spinach", "eggs"],
-  dinners: 3,
-  budget: 18,
-  maxTimeMin: 20,
-  equipment: ["microwave"],
-});
-ok(dorm.dinners.length === 3 && dorm.dinners[0].usesPantry.includes("spinach"), "use-soon food is scheduled first");
-ok(dorm.totalCost <= 18, "dorm plan stays under budget ($" + dorm.totalCost + ")");
-ok(dorm.shoppingList.length === 2, "dorm plan minimizes unique package purchases");
-ok(dorm.leftovers.length === dorm.shoppingList.length, "purchased-package leftovers are reported");
-
-const swapped = localPlan({
-  pantry: ["eggs", "spinach", "rice", "tortillas", "cheddar", "salsa"],
-  dinners: 3,
-  budget: 18,
-  maxTimeMin: 20,
-  equipment: ["microwave"],
-  exclude: ["Spinach egg rice bowl"],
-});
-ok(swapped.dinners.every((d) => d.title !== "Spinach egg rice bowl"), "meal exclusion supports conversational swaps");
-
-// Fallback planner dinners must cite the demo catalog entry from the approved sources DB.
-const demoSource = RECIPE_SOURCES.sources.find((s) => s.name === "FridgeFuse Demo Catalog");
-ok(
-  demoSource && [plan, swapped].every((p) => p.dinners.every((d) => d.source === demoSource.name && d.sourceUrl === demoSource.url)),
-  "fallback dinners carry source/sourceUrl from the demo catalog entry"
-);
 
 ok(extractJson('```json\n{"a":1}\n```').a === 1, "fenced JSON parsed");
 ok(extractJson('{"a":2}').a === 2, "raw JSON parsed");
@@ -111,7 +47,8 @@ ok(RECIPE_SOURCES.sources.every((s) => s.name && /^https?:\/\//.test(s.url)), "e
 const planPrompt = buildPlanSystemPrompt("(price context)");
 ok(planPrompt.includes("ONLY") && planPrompt.includes("approved sources"), "plan prompt restricts recipes to approved sources");
 ok(planPrompt.includes('"source"') && planPrompt.includes('"sourceUrl"'), "plan prompt requires source name/URL in dinner data");
-ok(planPrompt.includes("adaptationNote") && planPrompt.includes("CLOSEST matching approved recipe"), "plan prompt falls back to closest approved recipe with an adaptation note");
+ok(planPrompt.includes('"leftovers"') && planPrompt.includes("leftover estimate"), "plan prompt asks AI for leftover estimates");
+ok(planPrompt.includes("adaptationNote") && planPrompt.includes("CLOSEST matching approved recipe"), "plan prompt chooses the closest approved recipe with an adaptation note");
 ok(planPrompt.includes("NEVER invent a new recipe from scratch"), "plan prompt forbids inventing recipes");
 for (const s of RECIPE_SOURCES.sources) {
   ok(planPrompt.includes(s.name) && planPrompt.includes(s.url), `plan prompt lists approved source: ${s.name}`);
@@ -141,8 +78,13 @@ ok(typeof vercelServer === "function" && vercelServer === vercelServer.app, "Ver
 const html = fs.readFileSync("public/index.html", "utf8");
 ok(html.includes("app.js") && html.includes("api/plan") === false, "index.html loads app.js");
 const appJs = fs.readFileSync("public/app.js", "utf8");
+const serverSrc = fs.readFileSync("server.js", "utf8");
+const recipeSourcesJson = fs.readFileSync("data/recipe-sources.json", "utf8");
 ok(appJs.includes("/api/plan"), "app.js calls /api/plan");
 ok(!/catalogOnly\s*:\s*true/.test(appJs), "frontend planning requests do not bypass the text model");
+ok(!/\b(?:localPlan|RECIPES|catalogOnly|FALLBACK_PACK_PRICE|FALLBACK_STORE|estimatedLeftover)\b/.test(serverSrc), "server has no local recipe planner or demo price fallback");
+ok(!recipeSourcesJson.includes("FridgeFuse Demo Catalog"), "approved sources contain no demo catalog entry");
+ok(/VOYAGER_KEY[\s\S]*required/i.test(fs.readFileSync(".env.example", "utf8")), "environment guidance requires the Voyager key");
 const buildPlanSource = appJs.replaceAll("\r\n", "\n").match(/async function buildPlan[\s\S]*?\n}\n\nfunction formatMoney/)?.[0] || "";
 const planAssignment = buildPlanSource.indexOf("state.plan =");
 const groceryRefresh = buildPlanSource.indexOf("renderGroceryList();");
@@ -249,7 +191,6 @@ ok(describeLocation(33.43, -111.95).text.includes("mi from"), "a fix between ref
 ok(/2\d{3} mi from/.test(describeLocation(40.7128, -74.006).text), "a far fix falls back to distance from the origin");
 ok(describeLocation(NaN, 5) === null && describeLocation(0, 0) === null, "invalid coordinates produce no description");
 // Every label the user can see must exist in the data file, not in the code.
-const serverSrc = fs.readFileSync("server.js", "utf8");
 const labels = [DEFAULT_ORIGIN.label, ...BRANCHES.map((b) => b.area)];
 ok(labels.every((label) => !serverSrc.includes(`"${label}"`)), "no place label is hardcoded in server.js");
 
@@ -411,6 +352,7 @@ const validAiPlan = {
     adaptationNote: ""
   }],
   shoppingList: [],
+  leftovers: [{ item: "soy sauce", amount: "most of the bottle" }],
   totalCost: 0,
   notes: ""
 };
@@ -436,7 +378,7 @@ async function runRouteChecks() {
     return aiEnvelope(validAiPlan);
   });
   ok(live.statusCode === 200 && live.payload.ok && live.payload.model === AIR_MODEL, "plan route returns the configured text model response");
-  ok(liveCalls === 1 && !live.payload.mock && !live.payload.fallback, "omitting catalogOnly calls the text model exactly once");
+  ok(liveCalls === 1 && !live.payload.mock && !live.payload.fallback, "a plan request calls the text model exactly once");
   ok(live.payload.shoppingList.length === 1 && live.payload.shoppingList[0].item === "soy sauce", "AI shopping needs are grounded against the price catalog");
   ok(
     live.payload.dinners[0].source === validAiPlan.dinners[0].source &&
@@ -458,14 +400,34 @@ async function runRouteChecks() {
     return aiEnvelope(unapprovedAiPlan);
   });
   ok(
-    unapprovedCalls === 2 && unapproved.payload.ok === false && /approved recipe list/.test(unapproved.payload.failure?.message || ""),
+    unapprovedCalls === 2 && unapproved.statusCode === 502 && unapproved.payload.ok === false && /approved recipe list/.test(unapproved.payload.failure?.message || ""),
     "unapproved AI recipe citations are rejected after repair"
   );
 
-  const catalog = await callPlan({ ...request, catalogOnly: true }, async () => {
-    throw new Error("catalog-only request must not call the text model");
+  let unavailableCalls = 0;
+  const unavailable = await callPlan(request, async () => {
+    unavailableCalls++;
+    return { ok: false, failure: { status: "no-key", message: "VOYAGER_KEY is required for AI planning." } };
   });
-  ok(catalog.payload.ok && catalog.payload.model === "grounded-catalog", "explicit catalogOnly requests still use the local planner");
+  ok(
+    unavailableCalls === 1 && unavailable.statusCode === 503 && unavailable.payload.ok === false && !unavailable.payload.dinners,
+    "AI planning failure returns an error instead of a local plan"
+  );
+
+  const unpricedAiPlan = {
+    ...validAiPlan,
+    dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: ["unobtainium"] })),
+    leftovers: [{ item: "unobtainium", amount: "unknown" }]
+  };
+  let unpricedCalls = 0;
+  const unpriced = await callPlan(request, async () => {
+    unpricedCalls++;
+    return aiEnvelope(unpricedAiPlan);
+  });
+  ok(
+    unpricedCalls === 2 && unpriced.statusCode === 502 && unpriced.payload.ok === false && /price catalog/.test(unpriced.payload.failure?.message || ""),
+    "AI plans with unpriced ingredients fail instead of using an estimated price"
+  );
 
   let repairCalls = 0;
   const repaired = await callPlan(request, async (messages) => {
@@ -483,7 +445,17 @@ async function runRouteChecks() {
     ok: true,
     data: { choices: [{ message: { content: "still not valid JSON" } }] }
   }));
-  ok(failedRepair.payload.ok === false && !failedRepair.payload.dinners, "failed AI repair returns an error instead of a local plan");
+  ok(failedRepair.statusCode === 502 && failedRepair.payload.ok === false && !failedRepair.payload.dinners, "failed AI repair returns an error instead of a local plan");
+
+  let visionUnavailableCalls = 0;
+  const visionUnavailable = await callVision({ imageDataUrl: "data:image/jpeg;base64,dGVzdA==" }, async () => {
+    visionUnavailableCalls++;
+    return { ok: false, failure: { status: "no-key", message: "VOYAGER_KEY is required for AI vision." } };
+  });
+  ok(
+    visionUnavailableCalls === 1 && visionUnavailable.statusCode === 503 && visionUnavailable.payload.ok === false && !visionUnavailable.payload.confirmed,
+    "AI photo failure returns an error instead of demo groceries"
+  );
 
   const classified = normalizeVisionResult({
     confirmed: [
