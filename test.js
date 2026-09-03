@@ -1,10 +1,15 @@
 // In-process verification (this sandbox blocks localhost TCP, so no live HTTP test).
 // Run: node test.js
 const assert = require("assert");
+const path = require("path");
 const {
   localPlan, cheapestPack, findPrice, extractJson, PRICES,
-  AIR_MODEL, AIR_VISION_MODEL, resolveDataPath
+  AIR_MODEL, AIR_VISION_MODEL, resolveDataPath, RECIPE_SOURCES, buildPlanSystemPrompt
 } = require("./server.js");
+
+// Normalize OS-native path separators to forward slashes so assertions are
+// cross-platform (path.join yields backslashes on Windows).
+const toSlashes = (p) => p.split(path.sep).join("/");
 
 let n = 0;
 const ok = (cond, msg) => { n++; assert(cond, msg); console.log(`ok ${n} - ${msg}`); };
@@ -14,7 +19,7 @@ ok(PRICES.items.length >= 20, `price DB has ${PRICES.items.length} items`);
 ok(Object.keys(PRICES.stores).length === 4, "4 stores");
 ok(
   typeof resolveDataPath === "function" &&
-    resolveDataPath("/var/task/netlify/functions", "/var/task", (candidate) => candidate === "/var/task/data/prices.json") === "/var/task/data/prices.json",
+    toSlashes(resolveDataPath("/var/task/netlify/functions", "/var/task", (candidate) => toSlashes(candidate) === "/var/task/data/prices.json")) === "/var/task/data/prices.json",
   "price data resolves from the Netlify task root"
 );
 ok(AIR_VISION_MODEL === "qwen3-vl-32b-instruct", "photo requests use the dedicated vision model");
@@ -83,8 +88,32 @@ const swapped = localPlan({
 });
 ok(swapped.dinners.every((d) => d.title !== "Spinach egg rice bowl"), "meal exclusion supports conversational swaps");
 
+// Fallback planner dinners must cite the demo catalog entry from the approved sources DB.
+const demoSource = RECIPE_SOURCES.sources.find((s) => s.name === "FridgeFuse Demo Catalog");
+ok(
+  demoSource && [plan, swapped].every((p) => p.dinners.every((d) => d.source === demoSource.name && d.sourceUrl === demoSource.url)),
+  "fallback dinners carry source/sourceUrl from the demo catalog entry"
+);
+
 ok(extractJson('```json\n{"a":1}\n```').a === 1, "fenced JSON parsed");
 ok(extractJson('{"a":2}').a === 2, "raw JSON parsed");
+
+// Approved recipe sources: the AI planner prompt is grounded to this DB.
+ok(Array.isArray(RECIPE_SOURCES.sources) && RECIPE_SOURCES.sources.length >= 3, `approved sources DB has ${RECIPE_SOURCES.sources.length} sources`);
+ok(RECIPE_SOURCES.sources.every((s) => s.name && /^https?:\/\//.test(s.url)), "every approved source has a name and URL");
+const planPrompt = buildPlanSystemPrompt("(price context)");
+ok(planPrompt.includes("ONLY") && planPrompt.includes("approved sources"), "plan prompt restricts recipes to approved sources");
+ok(planPrompt.includes('"source"') && planPrompt.includes('"sourceUrl"'), "plan prompt requires source name/URL in dinner data");
+ok(planPrompt.includes("adaptationNote") && planPrompt.includes("CLOSEST matching approved recipe"), "plan prompt falls back to closest approved recipe with an adaptation note");
+ok(planPrompt.includes("NEVER invent a new recipe from scratch"), "plan prompt forbids inventing recipes");
+for (const s of RECIPE_SOURCES.sources) {
+  ok(planPrompt.includes(s.name) && planPrompt.includes(s.url), `plan prompt lists approved source: ${s.name}`);
+}
+ok(
+  typeof resolveDataPath === "function" &&
+    toSlashes(resolveDataPath("/var/task/netlify/functions", "/var/task", (candidate) => toSlashes(candidate) === "/var/task/data/recipe-sources.json", "recipe-sources.json")) === "/var/task/data/recipe-sources.json",
+  "recipe sources resolve from the Netlify task root"
+);
 
 // Frontend files exist and wire up.
 const fs = require("fs");

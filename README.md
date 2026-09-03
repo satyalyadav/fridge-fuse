@@ -81,11 +81,25 @@ ASU AIR remains available for photo recognition. The text demo uses deterministi
 constraint extraction and a catalog optimizer so a slow model cannot stall the
 stage presentation.
 
+## Recipe sources
+
+- AI meal generation is grounded to the approved source list in
+  `data/recipe-sources.json` (19 sources, v2). The model may only pull, adapt,
+  or cite recipes from that list.
+- Every returned dinner carries `source` and `sourceUrl`.
+- When no approved recipe fits the pantry/budget, the plan returns the closest
+  approved recipe with an `adaptationNote`.
+- The fallback/mock planner tags its dinners with the "FridgeFuse Demo Catalog"
+  entry so mock plans carry citations too.
+- Edit the JSON to change the allowlist — the system prompt is rebuilt from it
+  at startup. A bad or empty file makes the server refuse to start, by design.
+
 ## API
 
 - `GET /api/health` reports server and catalog status.
 - `POST /api/vision {imageDataUrl}` identifies likely pantry items.
-- `POST /api/plan` builds and prices the dinner plan.
+- `POST /api/plan` builds and prices the dinner plan; dinners include
+  `source`, `sourceUrl`, and (when adapted) `adaptationNote`.
 - `GET /api/prices?item=` reads the Tempe 85281 mock catalog.
 - `GET /api/failures` returns recent external-service failures.
 
@@ -96,14 +110,16 @@ prices and does not present them as live store quotes.
 
 - `EADDRINUSE :::3000`: something already uses port 3000 — run `PORT=4000 npm start`.
 - `key=MISSING (mock mode)`: normal without `VOYAGER_KEY`. Add it to `.env` and restart for live AI.
-- `npm test` fails: make sure you ran `npm install` first and did not edit `data/prices.json`.
+- `npm test` fails: make sure you ran `npm install` first and did not edit `data/prices.json` or `data/recipe-sources.json`.
 - Phone on same WiFi can't reach demo: server binds `0.0.0.0`, use your laptop's LAN IP, e.g. `http://192.168.1.x:3000`.
 
 ## Deploy to Netlify
 
 The repository includes a Netlify Function wrapper for the Express API and a
 redirect that keeps the browser-facing `/api/*` URLs unchanged. Netlify serves
-the static interface from `public/`.
+the static interface from `public/`. `netlify.toml` `included_files` ships both
+`data/prices.json` and `data/recipe-sources.json` so the function can read them
+at runtime.
 
 ```bash
 npx netlify-cli deploy --prod

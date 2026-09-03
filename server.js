@@ -154,14 +154,25 @@ function extractJson(content) {
   return JSON.parse(raw);
 }
 
-// ---------- mock price DB (Tempe 85281, dev-harvested mock) ----------
-function resolveDataPath(runtimeDir = __dirname, taskRoot = process.env.LAMBDA_TASK_ROOT, exists = fs.existsSync) {
-  const candidates = [path.join(runtimeDir, "data", "prices.json")];
-  if (taskRoot) candidates.push(path.join(taskRoot, "data", "prices.json"));
+// ---------- data files (work both locally and from the Netlify task root) ----------
+function resolveDataPath(runtimeDir = __dirname, taskRoot = process.env.LAMBDA_TASK_ROOT, exists = fs.existsSync, filename = "prices.json") {
+  const candidates = [path.join(runtimeDir, "data", filename)];
+  if (taskRoot) candidates.push(path.join(taskRoot, "data", filename));
   return candidates.find((candidate) => exists(candidate)) || candidates[0];
 }
 
 const PRICES = JSON.parse(fs.readFileSync(resolveDataPath(), "utf8"));
+
+// ---------- approved recipe sources (grounds AI meal generation) ----------
+// The /api/plan system prompt is built from this list: the model may only
+// pull, adapt, or cite recipes from these sources.
+const RECIPE_SOURCES = JSON.parse(fs.readFileSync(resolveDataPath(__dirname, process.env.LAMBDA_TASK_ROOT, fs.existsSync, "recipe-sources.json"), "utf8"));
+if (!Array.isArray(RECIPE_SOURCES.sources) || RECIPE_SOURCES.sources.length === 0) {
+  throw new Error("data/recipe-sources.json must contain a non-empty sources array");
+}
+for (const s of RECIPE_SOURCES.sources) {
+  if (!s.name || !s.url) throw new Error("every approved recipe source needs a name and url");
+}
 const STORES = Object.keys(PRICES.stores);
 
 function findPrice(itemName) {
@@ -184,6 +195,12 @@ function cheapestPack(itemName) {
 }
 
 // ---------- small, grounded recipe bank for the stable demo planner ----------
+// The fallback planner's dinners cite the demo catalog entry from
+// data/recipe-sources.json so mock/fallback plans carry citations too.
+const FALLBACK_RECIPE_SOURCE =
+  RECIPE_SOURCES.sources.find((s) => s.url === "https://github.com/local/fridge-fuse-demo-recipes") ||
+  { name: "FridgeFuse Demo Catalog", url: "https://github.com/local/fridge-fuse-demo-recipes" };
+
 const RECIPES = [
   {
     title: "Spinach egg rice bowl",
@@ -434,7 +451,9 @@ function localPlan({
       equip: selection.recipe.equip,
       usesPantry: selection.recipe.needs.filter((item) => !selection.missing.includes(item)),
       needs: selection.missing,
-      steps: selection.recipe.steps
+      steps: selection.recipe.steps,
+      source: FALLBACK_RECIPE_SOURCE.name,
+      sourceUrl: FALLBACK_RECIPE_SOURCE.url
     })),
     shoppingList,
     leftovers,
@@ -540,6 +559,28 @@ app.post("/api/vision", async (req, res) => {
   }
 });
 
+// System prompt for AI meal generation. Grounded to data/recipe-sources.json:
+// the model may only pull, adapt, or cite recipes from the approved sources,
+// must cite the source name/URL in every dinner, and must fall back to the
+// closest approved recipe (with an adaptation note) instead of inventing one.
+function buildPlanSystemPrompt(priceCtx) {
+  const sourcesCtx = RECIPE_SOURCES.sources
+    .map((s) => `- ${s.name} — ${s.url} (${s.focus})`)
+    .join("\n");
+  return `You are FridgeFuse, a student meal planner for Tempe AZ 85281. Reply ONLY with JSON:
+{"dinners":[{"title":"...","source":"...","sourceUrl":"...","adaptationNote":"","timeMin":20,"protein":25,"carbs":50,"fiber":6,"usesPantry":["..."],"needs":["..."],"steps":["..."]}],
+"shoppingList":[{"item":"...","pack":"...","packPrice":0.0,"store":"...","qty":1,"sharedBy":["..."]}],
+"totalCost":0.0,"notes":"..."}
+Rules: plan EXACTLY the requested number of dinners. The user is a freshman cook, so give concrete beginner-safe steps and only use the listed equipment. First use food marked use-soon, then minimize unique purchases, stay within budget, and keep cooking easy. Prefer purchases shared across dinners. Put only missing ingredients in needs; pantry items cost $0. The server will ground final prices against its catalog. Respect time, equipment, and dietary restrictions. Price context: ${priceCtx}.
+Recipe grounding (STRICT):
+- Pull, adapt, or cite recipes ONLY from the approved sources listed below. NEVER invent a new recipe from scratch and NEVER use a recipe from an unlisted source, even if the user asks for one.
+- Ground every dinner in a real recipe from one of these sources: base its ingredients and steps on that recipe, adjusting only for the user's pantry, budget, equipment, time, and diet.
+- For every dinner, set "source" to the source's exact name and "sourceUrl" to its exact URL from the list below. Both fields are required and must match the list verbatim.
+- If NO approved recipe fits the user's pantry and budget constraints, return the CLOSEST matching approved recipe instead of inventing one, and describe the minor changes in "adaptationNote" (e.g. "Adapted from Budget Bytes black bean quesadillas: swapped cheddar for the mozzarella the user has"). Set "adaptationNote" to "" when the recipe needs no changes.
+Approved sources:
+${sourcesCtx}`;
+}
+
 app.post("/api/plan", async (req, res) => {
   const { pantry = [], budget = 30, dinners = 3, maxTimeMin = 30,
           equipment = ["stove"], diet = "", useSoon = [], request = "", exclude = [],
@@ -577,11 +618,7 @@ app.post("/api/plan", async (req, res) => {
     return `${i.name} (~${c.pack} @ ${c.store} $${c.packPrice})`;
   }).join("; ");
   const out = await airChat([
-    { role: "system", content: `You are FridgeFuse, a student meal planner for Tempe AZ 85281. Reply ONLY with JSON:
-{"dinners":[{"title":"...","timeMin":20,"protein":25,"carbs":50,"fiber":6,"usesPantry":["..."],"needs":["..."],"steps":["..."]}],
-"shoppingList":[{"item":"...","pack":"...","packPrice":0.0,"store":"...","qty":1,"sharedBy":["..."]}],
-"totalCost":0.0,"notes":"..."}
-Rules: plan EXACTLY the requested number of dinners. The user is a freshman cook, so give concrete beginner-safe steps and only use the listed equipment. First use food marked use-soon, then minimize unique purchases, stay within budget, and keep cooking easy. Prefer purchases shared across dinners. Put only missing ingredients in needs; pantry items cost $0. The server will ground final prices against its catalog. Respect time, equipment, and dietary restrictions. Price context: ${priceCtx}.` },
+    { role: "system", content: buildPlanSystemPrompt(priceCtx) },
     { role: "user", content: `Pantry: ${safePantry.join(", ") || "(empty)"}. Use soon: ${safeUseSoon.join(", ") || "none"}. Budget total $${budget} for the whole plan. Dinners: ${dinners}. Max ${maxTimeMin} min each. Equipment: ${safeEquipment.join(", ")}. Diet/notes: ${safeDiet || "none"}. Avoid these meals: ${safeExclude.join(", ") || "none"}. Latest request: ${request || "build the best plan"}.` },
   ], { maxTokens: 1800 });
   if (!out.ok) {
@@ -664,7 +701,7 @@ app.get("/api/failures", (req, res) => res.json({ ok: true, count: failures.leng
 // Exported for in-process tests (require without side effects).
 module.exports = {
   app, localPlan, cheapestPack, findPrice, extractJson, PRICES, STORES, RECIPES,
-  reportFailure, resolveDataPath, AIR_MODEL, AIR_VISION_MODEL
+  RECIPE_SOURCES, buildPlanSystemPrompt, reportFailure, resolveDataPath, AIR_MODEL, AIR_VISION_MODEL
 };
 
 if (require.main === module) {
