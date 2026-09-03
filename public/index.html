@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f3f6f2">
+  <title>FridgeFuse | Make dinner from what you have</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700&family=IBM+Plex+Mono:wght@500;600&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#chatInput">Skip to conversation</a>
+
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="FridgeFuse home">
+        <span class="brand-mark" aria-hidden="true"><span></span><span></span></span>
+        <span>FridgeFuse</span>
+      </a>
+      <div class="trip-status" id="tripStatus" aria-label="Current plan summary">
+        <span class="trip-dot"></span>
+        <span id="tripLabel">No grocery run planned</span>
+      </div>
+      <button class="avatar-button" aria-label="Open student profile">JF</button>
+    </header>
+
+    <nav class="desktop-nav" aria-label="Main navigation">
+      <button class="nav-item active" data-view="plan" aria-current="page">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 3h10M5 6h14v15H5zM8 10h8M8 14h5"/></svg>
+        <span>Plan</span>
+      </button>
+      <button class="nav-item" data-view="chat">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v12H8l-4 3z"/></svg>
+        <span>Chat</span>
+      </button>
+      <button class="nav-item" data-view="pantry">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 3h12v18H6zM6 9h12M15 6h.01M15 13h.01"/></svg>
+        <span>Pantry</span>
+        <span class="nav-count" id="pantryNavCount">0</span>
+      </button>
+      <div class="nav-spacer"></div>
+      <button class="nav-item" id="resetDemoButton">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8M4 3v5h5"/></svg>
+        <span>Reset</span>
+      </button>
+    </nav>
+
+    <main class="workspace">
+      <section class="conversation-panel" id="chatView" aria-label="Conversation with FridgeFuse">
+        <div class="conversation-heading">
+          <div>
+            <p class="eyebrow">Your kitchen copilot</p>
+            <h1>What are we working with?</h1>
+          </div>
+          <button class="icon-button mobile-pantry-button" id="openPantryButton" aria-label="Open pantry">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 3h12v18H6zM6 9h12M15 6h.01M15 13h.01"/></svg>
+          </button>
+        </div>
+
+        <div class="messages" id="messages" aria-live="polite">
+          <article class="message assistant-message">
+            <div class="assistant-symbol" aria-hidden="true">F</div>
+            <div class="message-copy">
+              <p>Tell me what you have and what this week looks like. Messy is fine.</p>
+              <p class="message-example">"I have eggs, rice and half a bag of spinach. I need 3 easy dinners under $20, microwave only."</p>
+            </div>
+          </article>
+        </div>
+
+        <div class="starter-prompts" id="starterPrompts">
+          <button data-prompt="I need 3 easy dinners under $20. I only have a microwave.">Plan my next 3 dinners</button>
+          <button data-prompt="I need something cheap I can make tonight in 15 minutes.">Help me eat tonight</button>
+          <button id="samplePantryButton">Try a sample mini-fridge</button>
+        </div>
+
+        <form class="composer" id="chatForm">
+          <label class="sr-only" for="chatInput">Message FridgeFuse</label>
+          <textarea id="chatInput" rows="1" placeholder="Tell me what you have, need, or want to change"></textarea>
+          <div class="composer-actions">
+            <div class="composer-tools">
+              <button class="tool-button" type="button" id="photoButton" aria-label="Add a fridge photo">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h3l1.5-2h7L17 7h3v12H4z"/><circle cx="12" cy="13" r="3"/></svg>
+                <span>Photo</span>
+              </button>
+              <input id="photoInput" type="file" accept="image/*" capture="environment" hidden>
+              <span class="composer-hint">Enter to send</span>
+            </div>
+            <button class="send-button" type="submit" aria-label="Send message">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m5 12 14-7-5 14-2-6z"/></svg>
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section class="plan-panel" id="planView" aria-label="Meal plan">
+        <div class="use-first-strip" id="useFirstStrip">
+          <div class="tape-label">
+            <span class="tape-kicker">USE FIRST</span>
+            <strong id="useFirstText">Nothing marked yet</strong>
+          </div>
+          <button id="markUseSoonButton">Mark an item</button>
+        </div>
+
+        <div class="plan-scroll">
+          <div class="plan-header">
+            <div>
+              <p class="eyebrow">Your next few nights</p>
+              <h2 id="planTitle">Build your first plan</h2>
+              <p id="planSubtitle">Your dinners, full-package grocery cost, and leftovers will show up here.</p>
+            </div>
+            <div class="budget-stamp" id="budgetStamp" hidden>
+              <span>CHECKOUT</span>
+              <strong id="budgetTotal">$0.00</strong>
+              <small id="budgetLimit">of $20</small>
+            </div>
+          </div>
+
+          <div class="empty-plan" id="emptyPlan">
+            <div class="empty-receipt" aria-hidden="true">
+              <span></span><span></span><span></span>
+              <b>TOTAL&nbsp;&nbsp; $—</b>
+            </div>
+            <h3>Start with whatever you know</h3>
+            <p>A few ingredients and a dollar limit are enough. FridgeFuse will ask if anything important is missing.</p>
+          </div>
+
+          <div id="planContent" hidden>
+            <div class="plan-logic" id="planLogic"></div>
+            <div class="meal-list" id="mealList"></div>
+
+            <section class="shopping-section">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">One trip, full packages</p>
+                  <h3>Grocery list</h3>
+                </div>
+                <span class="mock-label">Mock Tempe prices</span>
+              </div>
+              <div class="receipt" id="shoppingList"></div>
+            </section>
+
+            <section class="leftovers-section">
+              <div class="section-heading compact">
+                <div>
+                  <p class="eyebrow">After dinner three</p>
+                  <h3>Still in your kitchen</h3>
+                </div>
+              </div>
+              <div class="leftover-list" id="leftoverList"></div>
+            </section>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <aside class="pantry-drawer" id="pantryDrawer" aria-labelledby="pantryTitle" aria-hidden="true">
+      <div class="drawer-scrim" data-close-drawer></div>
+      <div class="drawer-sheet">
+        <div class="drawer-header">
+          <div>
+            <p class="eyebrow">Saved on this device</p>
+            <h2 id="pantryTitle">Your pantry</h2>
+          </div>
+          <button class="icon-button" data-close-drawer aria-label="Close pantry">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>
+          </button>
+        </div>
+        <p class="drawer-intro">Rough amounts are enough. Mark anything that needs using soon.</p>
+        <form class="pantry-add" id="pantryForm">
+          <label class="sr-only" for="pantryInput">Add pantry item</label>
+          <input id="pantryInput" type="text" placeholder="Add eggs, some rice…" autocomplete="off">
+          <button type="submit">Add</button>
+        </form>
+        <div class="pantry-list" id="pantryList"></div>
+        <button class="photo-wide-button" id="drawerPhotoButton" type="button">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h3l1.5-2h7L17 7h3v12H4z"/><circle cx="12" cy="13" r="3"/></svg>
+          Add from a fridge photo
+        </button>
+      </div>
+    </aside>
+
+    <nav class="mobile-nav" aria-label="Mobile navigation">
+      <button class="active" data-view="plan"><span>Plan</span></button>
+      <button data-view="chat"><span>Chat</span></button>
+      <button data-view="pantry"><span>Pantry</span><b id="mobilePantryCount">0</b></button>
+    </nav>
+
+    <div class="toast-region" id="toastRegion" aria-live="assertive"></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "name": "fridge-fuse",
+  "version": "0.1.0",
+  "description": "FridgeFuse: fuse what you have into a meal you can afford. Hackathon prototype.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.js",
+    "dev:netlify": "npx netlify-cli dev --offline"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "express": "^5.2.1",
+    "serverless-http": "^4.0.0"
+  }
+}

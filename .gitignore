@@ -1,0 +1,9 @@
+node_modules/
+.env
+.env.*
+!.env.example
+.netlify/
+deno.lock
+server.log
+.DS_Store
+npm-debug.log*
