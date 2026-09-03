@@ -198,6 +198,24 @@ ok(
     /pendingZipLookup = null/.test(postalLookupBlock),
   "declined place lookup consent is respected for later ZIP searches"
 );
+ok(
+  html.includes('id="resetDemoButton"') &&
+    html.includes('id="resetMobileButton"') &&
+    !html.includes('id="resetProfileButton"'),
+  "reset is available from the desktop navigation and mobile header"
+);
+ok(
+  appJs.includes('$("resetDemoButton").addEventListener("click", resetDemo)') &&
+    appJs.includes('$("resetMobileButton").addEventListener("click", resetDemo)') &&
+    appJs.includes("Reset the demo? This clears your profile, pantry, meal plan, chat history, Shop list, and saved location."),
+  "desktop and mobile reset controls share the full-data confirmation handler"
+);
+const resetSource = appJs.match(/function resetDemo\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+ok(
+  resetSource.indexOf("window.confirm") !== -1 &&
+  resetSource.indexOf("window.confirm") < resetSource.indexOf("state = clone(DEFAULT_STATE)"),
+  "reset cancellation is checked before saved state changes"
+);
 
 // ---------- grocery optimizer ----------
 ok(fs.existsSync("data/stores.json"), "data/stores.json exists");
