@@ -172,6 +172,17 @@
           <input id="pantryInput" type="text" placeholder="Add eggs, some rice…" autocomplete="off">
           <button type="submit">Add</button>
         </form>
+        <section class="vision-review" id="visionReview" aria-labelledby="visionReviewTitle" hidden>
+          <div class="vision-review-heading">
+            <div>
+              <p class="eyebrow">Check the photo</p>
+              <h3 id="visionReviewTitle">Confirm uncertain items</h3>
+            </div>
+            <span id="visionReviewCount"></span>
+          </div>
+          <p>I did not add these automatically. Confirm the name, correct it, or dismiss the crop.</p>
+          <div class="vision-review-list" id="visionReviewList"></div>
+        </section>
         <div class="pantry-list" id="pantryList"></div>
         <button class="photo-wide-button" id="drawerPhotoButton" type="button">
           <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h3l1.5-2h7L17 7h3v12H4z"/><circle cx="12" cy="13" r="3"/></svg>

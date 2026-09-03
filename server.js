@@ -19,6 +19,7 @@ const AIR_KEY = process.env.VOYAGER_KEY || "";
 const DEFAULT_AIR_MODEL = "llama4-scout-17b";
 const AIR_MODEL = process.env.ASU_AIR_MODEL || DEFAULT_AIR_MODEL;
 const AIR_VISION_MODEL = process.env.ASU_AIR_VISION_MODEL || "qwen3-vl-32b-instruct";
+const AIR_VISION_VERIFY_MODEL = process.env.ASU_AIR_VISION_VERIFY_MODEL || AIR_MODEL;
 
 // Fallback pack price for items outside the mock catalog (e.g. free-form AI
 // output). Named so a made-up price is easy to find and replace with live data.
@@ -510,6 +511,7 @@ app.get("/api/health", (req, res) => {
     airBase: AIR_BASE,
     airModel: AIR_MODEL,
     airVisionModel: AIR_VISION_MODEL,
+    airVisionVerifyModel: AIR_VISION_VERIFY_MODEL,
     stores: STORES,
     priceItems: PRICES.items.length,
     zip: PRICES.zip,
@@ -545,34 +547,189 @@ app.get("/api/models", async (req, res) => {
   }
 });
 
-app.post("/api/vision", async (req, res) => {
+function normalizeVisionBbox(value) {
+  if (!Array.isArray(value) || value.length !== 4) return [0, 0, 1, 1];
+  let coords = value.map(Number);
+  if (!coords.every(Number.isFinite)) return [0, 0, 1, 1];
+  // Qwen-family vision models commonly return coordinates on a 0..1000 grid.
+  if (Math.max(...coords.map(Math.abs)) > 1 && Math.max(...coords.map(Math.abs)) <= 1000) {
+    coords = coords.map((coord) => coord / 1000);
+  }
+  const [x1, y1, x2, y2] = coords.map((coord) => Math.min(1, Math.max(0, coord)));
+  if (x2 <= x1 || y2 <= y1) return [0, 0, 1, 1];
+  return [x1, y1, x2, y2];
+}
+
+function isAutoConfirmableVisionBbox(value) {
+  if (!Array.isArray(value) || value.length !== 4 || !value.map(Number).every(Number.isFinite)) return false;
+  const [x1, y1, x2, y2] = normalizeVisionBbox(value);
+  // Touching the frame is strong evidence that part of the object may be cropped.
+  return x1 > 0.005 && y1 > 0.005 && x2 < 0.995 && y2 < 0.995 && x2 - x1 >= 0.01 && y2 - y1 >= 0.01;
+}
+
+function isSpecificVisionName(value) {
+  const name = String(value || "").trim().toLowerCase();
+  if (!name || /\b(unknown|unidentified|mystery|beverage|packaged item|jarred (?:item|food)|canned goods)\b/.test(name)) return false;
+  return !/^(?:[a-z -]+ )?(?:bottles?|containers?|jars?|packages?|cartons?|cans?|bags?)(?: \([^)]*\))?$/.test(name);
+}
+
+function hasSpecificVisionEvidence(name, evidence) {
+  const packagedFood = /\b(water|soda|juice|milk|cream|sauce|dressing|condiment|yogurt|cheese|butter|mayonnaise|mustard|ketchup|oil|vinegar)\b/i.test(name);
+  if (!packagedFood) return true;
+  return /\b(label|brand|printed|text|reads|logo)\b/i.test(evidence);
+}
+
+function normalizeVisionResult(payload) {
+  const confirmed = [];
+  const uncertain = [];
+  const confirmedNames = new Set();
+  const reviewNames = new Set();
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  const isCompactItem = (item) => item && ("n" in item || "b" in item || "v" in item || "c" in item);
+  const expandCompactItem = (item) => ({
+    name: item?.n,
+    guess: item?.n,
+    confidence: item?.c,
+    fullyVisible: item?.v,
+    bbox: item?.b,
+    evidence: item?.why,
+    reason: item?.why,
+    alternatives: item?.alt,
+  });
+  const compactItems = items.filter(isCompactItem).map(expandCompactItem);
+  const confirmedInput = [
+    ...(Array.isArray(payload?.confirmed) ? payload.confirmed : []),
+    ...compactItems.filter((item) => item.fullyVisible === true),
+  ];
+  const uncertainInput = [
+    ...(Array.isArray(payload?.uncertain) ? payload.uncertain : []),
+    ...compactItems.filter((item) => item.fullyVisible !== true),
+  ];
+
+  const addUncertain = (item, fallbackReason) => {
+    const guess = String(item?.guess || item?.name || "unknown item").trim().slice(0, 80) || "unknown item";
+    const key = guess.toLowerCase();
+    if (confirmedNames.has(key) || reviewNames.has(key) || confirmed.length + uncertain.length >= 25) return;
+    reviewNames.add(key);
+    uncertain.push({
+      guess,
+      confidence: Math.min(1, Math.max(0, Number(item?.confidence) || 0)),
+      bbox: normalizeVisionBbox(item?.bbox),
+      reason: String(item?.reason || fallbackReason || "The item is not fully clear.").trim().slice(0, 160),
+      alternatives: asStringArray(item?.alternatives, []).slice(0, 3),
+    });
+  };
+
+  for (const item of confirmedInput) {
+    const name = String(item?.name || "").trim().slice(0, 80);
+    const confidence = Math.min(1, Math.max(0, Number(item?.confidence) || 0));
+    const evidence = String(item?.evidence || "").trim().slice(0, 160);
+    if (!name) continue;
+    if (item?.fullyVisible === true && confidence >= 0.95 && evidence && isSpecificVisionName(name) && hasSpecificVisionEvidence(name, evidence) && isAutoConfirmableVisionBbox(item?.bbox) && confirmed.length + uncertain.length < 25) {
+      const key = name.toLowerCase();
+      if (!confirmedNames.has(key)) {
+        confirmedNames.add(key);
+        confirmed.push({ name, confidence, bbox: normalizeVisionBbox(item.bbox), evidence });
+      }
+    } else {
+      addUncertain(item, item?.fullyVisible === true
+        ? "The item lacked reliable visual evidence or a safe crop."
+        : "The item is partly hidden or cropped.");
+    }
+  }
+
+  for (const item of uncertainInput) {
+    addUncertain(item);
+  }
+  // Old or malformed model responses never get auto-added. They require review.
+  for (const item of items.filter((item) => !isCompactItem(item))) {
+    addUncertain(item, "The model used the old response format, so confirmation is required.");
+  }
+
+  return { confirmed, uncertain };
+}
+
+async function handleVisionRequest(req, res, { chat = airChat } = {}) {
   const { imageDataUrl } = req.body || {};
   if (!imageDataUrl) return res.status(400).json({ ok: false, failure: { message: "imageDataUrl required" } });
-  const out = await airChat([
-    { role: "system", content: 'You identify grocery ingredients visible in a fridge/pantry photo. Reply ONLY with JSON: {"items":[{"name":"...","confidence":0.0-1.0}]}. Use common grocery names (e.g. "eggs", "milk", "chicken breast", "rice"). Max 25 items.' },
+  const out = await chat([
+    { role: "system", content: `Identify groceries in this fridge or pantry photo. Be conservative and never guess. Return ONLY compact JSON:
+{"items":[{"n":"specific grocery or unknown item","c":0.0,"v":true,"b":[0,0,1,1],"why":"visible proof or doubt","alt":[]}]}
+Rules: v=true only when the entire object is inside the frame, unobstructed, unmistakable, and c>=0.95. Packaged food or drink needs a readable label; container color or shape is insufficient. Use v=false for anything partially visible, edge-cropped, occluded, blurry, label-hidden, generic, inferred, or doubtful. b is a tight normalized [left,top,right,bottom] crop. why is under 8 words. Return the 8 most useful objects at most.` },
     { role: "user", content: [
-      { type: "text", text: "List the ingredients you can see. When unsure, include with low confidence." },
+      { type: "text", text: "Identify only fully visible, unmistakable groceries as confirmed. Put partially visible or uncertain objects in uncertain so the user can review a crop." },
       { type: "image_url", image_url: { url: imageDataUrl } },
     ]},
-  ], { maxTokens: 800, model: AIR_VISION_MODEL });
+  ], { maxTokens: 650, model: AIR_VISION_MODEL });
   if (!out.ok) {
     if (out.mock) {
-      return res.json({ ok: true, mock: true, items: [
-        { name: "eggs", confidence: 0.9 }, { name: "milk", confidence: 0.85 },
-        { name: "rice", confidence: 0.7 }, { name: "onion", confidence: 0.6 },
-      ], note: "MOCK — set VOYAGER_KEY for live vision." });
+      return res.json({ ok: true, mock: true,
+        confirmed: [{ name: "eggs", confidence: 0.98 }, { name: "milk", confidence: 0.97 }],
+        uncertain: [],
+        note: "MOCK — set VOYAGER_KEY for live vision." });
     }
     return res.json({ ok: false, failure: out.failure });
   }
   try {
     const content = out.data.choices[0].message.content;
-    res.json({ ok: true, ...extractJson(content), model: AIR_VISION_MODEL });
+    const proposed = normalizeVisionResult(extractJson(content));
+    if (!proposed.confirmed.length) {
+      return res.json({ ok: true, ...proposed, model: AIR_VISION_MODEL });
+    }
+
+    const candidates = proposed.confirmed.map(({ name, bbox, evidence }) => ({ name, bbox, evidence }));
+    const verification = await chat([
+      { role: "system", content: `Act as a skeptical verifier, independent of the first detector. Check only the supplied candidates against the image. Reply ONLY with compact JSON:
+{"verified":[{"name":"exact supplied name","confirmed":false,"confidence":0.0,"fullyVisible":false,"evidence":"visible proof or rejection reason"}]}
+Set confirmed true only when the named grocery is visibly present, its entire physical outline is inside the image, it is not blocked by another object, and its identity is unmistakable. A container whose contents or label cannot be identified is not confirmed. Reject hallucinated, inferred, partly hidden, frame-cropped, or ambiguous candidates. Include every supplied candidate exactly once and add no new candidates.` },
+      { role: "user", content: [
+        { type: "text", text: `Verify these proposed automatic additions: ${JSON.stringify(candidates)}` },
+        { type: "image_url", image_url: { url: imageDataUrl } },
+      ]},
+    ], { maxTokens: 900, model: AIR_VISION_VERIFY_MODEL });
+
+    let verified = [];
+    let verificationWarning = null;
+    if (verification.ok) {
+      try {
+        verified = Array.isArray(extractJson(verification.data.choices[0].message.content)?.verified)
+          ? extractJson(verification.data.choices[0].message.content).verified : [];
+      } catch (error) {
+        verificationWarning = `Verification response was invalid: ${error.message}`;
+      }
+    } else {
+      verificationWarning = verification.failure?.message || "Verification request failed.";
+    }
+
+    const verdicts = new Map(verified.map((item) => [String(item?.name || "").trim().toLowerCase(), item]));
+    const confirmed = [];
+    const rejected = [];
+    for (const candidate of proposed.confirmed) {
+      const verdict = verdicts.get(candidate.name.toLowerCase());
+      const verifierConfidence = Math.min(1, Math.max(0, Number(verdict?.confidence) || 0));
+      const verifierEvidence = String(verdict?.evidence || "").trim();
+      if (verdict?.confirmed === true && verdict?.fullyVisible === true && verifierConfidence >= 0.95 && verifierEvidence && hasSpecificVisionEvidence(candidate.name, verifierEvidence)) {
+        confirmed.push({ name: candidate.name, confidence: Math.min(candidate.confidence, verifierConfidence) });
+      } else {
+        rejected.push({
+          guess: candidate.name,
+          confidence: Math.min(candidate.confidence, verifierConfidence),
+          bbox: candidate.bbox,
+          reason: String(verdict?.evidence || verificationWarning || "A second visual check could not confirm this item."),
+        });
+      }
+    }
+    const review = normalizeVisionResult({ uncertain: [...proposed.uncertain, ...rejected] }).uncertain;
+    return res.json({ ok: true, confirmed, uncertain: review, model: AIR_VISION_MODEL,
+      ...(verificationWarning ? { verificationWarning } : {}) });
   } catch (e) {
     res.json({ ok: false, failure: reportFailure("asu-air", "vision-parse", {
       status: "parse-error", message: `Could not parse vision JSON: ${e.message}`,
     })});
   }
-});
+}
+
+app.post("/api/vision", handleVisionRequest);
 
 async function handlePlanRequest(req, res, { chat = airChat } = {}) {
   const { pantry = [], budget = 30, dinners = 3, maxTimeMin = 30,
@@ -717,13 +874,14 @@ app.get("/api/failures", (req, res) => res.json({ ok: true, count: failures.leng
 // Exported for in-process tests (require without side effects).
 module.exports = {
   app, localPlan, cheapestPack, findPrice, extractJson, PRICES, STORES, RECIPES,
-  reportFailure, resolveDataPath, handlePlanRequest, DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL
+  reportFailure, resolveDataPath, handlePlanRequest, handleVisionRequest, normalizeVisionResult,
+  DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL
 };
 
 if (require.main === module) {
   // 0.0.0.0 so a phone on the same WiFi can reach the demo.
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`FridgeFuse v0 on http://localhost:${PORT}`);
-    console.log(`AIR: ${AIR_BASE} text=${AIR_MODEL} vision=${AIR_VISION_MODEL} key=${AIR_KEY ? "set" : "MISSING (mock mode)"}`);
+    console.log(`AIR: ${AIR_BASE} text=${AIR_MODEL} vision=${AIR_VISION_MODEL} visionVerify=${AIR_VISION_VERIFY_MODEL} key=${AIR_KEY ? "set" : "MISSING (mock mode)"}`);
   });
 }

@@ -1,5 +1,6 @@
 const $ = (id) => document.getElementById(id);
 const STORAGE_KEY = "fridgefuse-state-v2";
+const MAX_VISION_IMAGE_EDGE = 1024;
 
 const KNOWN_INGREDIENTS = [
   "banana", "black beans", "bread", "butter", "carrots", "cheddar",
@@ -43,6 +44,7 @@ function addExclusion(title) {
 
 let state = loadState();
 let activeMobileView = state.plan ? "plan" : "chat";
+let visionReviewItems = [];
 
 function loadState() {
   try {
@@ -543,18 +545,89 @@ function loadSamplePantry() {
   buildPlan("Prioritize the spinach and eggs, minimize extra purchases, and keep every dinner beginner-friendly.");
 }
 
+function cropImage(imageDataUrl, bbox) {
+  return new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => {
+      const [x1, y1, x2, y2] = Array.isArray(bbox) && bbox.length === 4 ? bbox : [0, 0, 1, 1];
+      const sx = Math.max(0, x1 * image.naturalWidth);
+      const sy = Math.max(0, y1 * image.naturalHeight);
+      const sw = Math.max(1, Math.min(image.naturalWidth - sx, (x2 - x1) * image.naturalWidth));
+      const sh = Math.max(1, Math.min(image.naturalHeight - sy, (y2 - y1) * image.naturalHeight));
+      const scale = Math.min(1, 320 / Math.max(sw, sh));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(sw * scale));
+      canvas.height = Math.max(1, Math.round(sh * scale));
+      canvas.getContext("2d").drawImage(image, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL("image/jpeg", 0.82));
+    };
+    image.onerror = () => resolve(imageDataUrl);
+    image.src = imageDataUrl;
+  });
+}
+
+function resizeImageForVision(file, maxEdge = MAX_VISION_IMAGE_EDGE) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = () => {
+      const originalDataUrl = reader.result;
+      const image = new Image();
+      image.onerror = () => resolve(originalDataUrl);
+      image.onload = () => {
+        const longestEdge = Math.max(image.naturalWidth, image.naturalHeight);
+        if (longestEdge <= maxEdge) return resolve(originalDataUrl);
+        const scale = maxEdge / longestEdge;
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", 0.88));
+      };
+      image.src = originalDataUrl;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderVisionReview() {
+  const section = $("visionReview");
+  section.hidden = visionReviewItems.length === 0;
+  $("visionReviewCount").textContent = visionReviewItems.length || "";
+  $("visionReviewList").innerHTML = visionReviewItems.map((item, index) => `
+    <article class="vision-review-card">
+      <img class="vision-review-crop" src="${item.cropDataUrl}" alt="Photo crop for ${escapeHtml(item.guess)}">
+      <div class="vision-review-fields">
+        <label for="visionGuess${index}">What is this?</label>
+        <input id="visionGuess${index}" value="${escapeHtml(item.guess === "unknown item" ? "" : item.guess)}" placeholder="Type the item name" autocomplete="off">
+        <p class="vision-review-reason">${escapeHtml(item.reason || "The item was not clear enough to add.")}</p>
+        ${item.alternatives?.length ? `<p class="vision-review-alternatives">Other possibilities: ${escapeHtml(item.alternatives.join(", "))}</p>` : ""}
+        <div class="vision-review-actions">
+          <button type="button" data-vision-action="confirm" data-index="${index}">Add item</button>
+          <button type="button" data-vision-action="dismiss" data-index="${index}">Dismiss</button>
+        </div>
+      </div>
+    </article>
+  `).join("");
+}
+
+async function prepareVisionReview(items, imageDataUrl) {
+  visionReviewItems = await Promise.all((items || []).map(async (item) => ({
+    ...item,
+    cropDataUrl: await cropImage(imageDataUrl, item.bbox)
+  })));
+  renderVisionReview();
+}
+
 async function handlePhoto(file) {
   if (!file) return;
   addUserMessage(`I added a photo: ${file.name}`);
   showThinking();
+  visionReviewItems = [];
+  renderVisionReview();
 
   try {
-    const imageDataUrl = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
+    const imageDataUrl = await resizeImageForVision(file);
     const response = await fetch("/api/vision", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -564,13 +637,17 @@ async function handlePhoto(file) {
     hideThinking();
     if (!result.ok) throw new Error(result.failure?.message || "The photo could not be read");
 
-    const confident = (result.items || []).filter((item) => Number(item.confidence) >= 0.65);
-    confident.forEach((item) => addPantryItem(item.name, "amount unknown", false));
+    const confirmed = result.confirmed || [];
+    const uncertain = result.uncertain || [];
+    confirmed.forEach((item) => addPantryItem(item.name, "amount unknown", false));
+    await prepareVisionReview(uncertain, imageDataUrl);
     saveState();
     renderPantry();
     addAssistantMessage(
-      confident.length ? `I found ${confident.map((item) => item.name).join(", ")}.` : "I could not identify anything clearly enough to add.",
-      confident.length ? "I added the clear matches. Check the pantry to correct anything before I plan." : "Try a closer photo with labels facing the camera."
+      confirmed.length ? `I clearly found ${confirmed.map((item) => item.name).join(", ")}.` : "I did not add anything I could not clearly identify.",
+      uncertain.length
+        ? `${uncertain.length} item${uncertain.length === 1 ? " needs" : "s need"} your confirmation. Check the cropped photo${uncertain.length === 1 ? "" : "s"} in the pantry.`
+        : confirmed.length ? "I added only the fully visible matches." : "Try a closer photo with the whole item and label visible."
     );
     openPantry();
   } catch (error) {
@@ -635,6 +712,27 @@ $("pantryList").addEventListener("click", (event) => {
   if (button.dataset.pantryAction === "remove") state.pantry.splice(index, 1);
   saveState();
   renderPantry();
+});
+
+$("visionReviewList").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-vision-action]");
+  if (!button) return;
+  const index = Number(button.dataset.index);
+  const item = visionReviewItems[index];
+  if (!item) return;
+  if (button.dataset.visionAction === "confirm") {
+    const name = $(`visionGuess${index}`).value.trim();
+    if (!name) {
+      toast("Type the item name before adding it.", "error");
+      return;
+    }
+    addPantryItem(name, "confirmed from photo", false);
+    saveState();
+    renderPantry();
+    toast(`${titleCase(name)} added`);
+  }
+  visionReviewItems.splice(index, 1);
+  renderVisionReview();
 });
 
 $("mealList").addEventListener("click", async (event) => {

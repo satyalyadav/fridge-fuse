@@ -32,7 +32,9 @@ cp .env.example .env
 Then edit `.env` and set `VOYAGER_KEY` to your ASU AIR (Voyager) API key.
 `ASU_AIR_BASE_URL`, `ASU_AIR_MODEL`, and `ASU_AIR_VISION_MODEL` already have
 working defaults. Text planning uses `llama4-scout-17b`, while photo recognition
-uses `qwen3-vl-32b-instruct`.
+uses `qwen3-vl-32b-instruct`. A second, independent photo check uses the faster
+multimodal `llama4-scout-17b` by default; it can be overridden with
+`ASU_AIR_VISION_VERIFY_MODEL`.
 
 Without `VOYAGER_KEY` the app runs in deterministic MOCK demo mode using the
 grounded Tempe 85281 catalog in `data/prices.json`. This is expected and fine
@@ -83,6 +85,19 @@ The demo flow is:
 5. Swap a meal without resetting the pantry or budget.
 6. Open the pantry to edit rough amounts or mark another item “use soon.”
 
+Photo recognition is intentionally conservative. A grocery is added
+automatically only when Voyager supplies a safe object crop, identifies the
+whole unobstructed item at high confidence, and a second visual pass independently
+confirms it. Partial, cropped, generic-container, and lower-confidence matches
+appear as image crops for the user to rename, add, or dismiss. If the verification
+pass fails, proposed automatic additions also go to review rather than being
+silently accepted.
+
+Before upload, the browser scales large photos to a maximum 1024-pixel edge. Live
+comparison tests reduced latency at that size without weakening the conservative
+classification behavior. Smaller 640- and 768-pixel versions lost enough object
+detail to fail the safety target, so the app does not use them.
+
 Without `VOYAGER_KEY`, planning and photo recognition use deterministic mock
 responses. If a live planning call fails, the server returns a local plan so the
 demo can continue. If Voyager returns malformed plan JSON, the server asks the
@@ -92,7 +107,8 @@ silently replacing the response with a local plan.
 ## API
 
 - `GET /api/health` reports server and catalog status.
-- `POST /api/vision {imageDataUrl}` identifies likely pantry items.
+- `POST /api/vision {imageDataUrl}` returns independently verified `confirmed`
+  pantry items plus `uncertain` items with bounding boxes for user review.
 - `POST /api/plan` builds and prices the dinner plan.
 - `GET /api/prices?item=` reads the Tempe 85281 mock catalog.
 - `GET /api/failures` returns recent external-service failures.
@@ -120,6 +136,7 @@ npx netlify-cli deploy --prod
 
 Set `VOYAGER_KEY`, `ASU_AIR_BASE_URL`, `ASU_AIR_MODEL`, and
 `ASU_AIR_VISION_MODEL` under Site settings > Environment variables to enable
-live planning and photo recognition. Use `llama4-scout-17b` for
+live planning and photo recognition. `ASU_AIR_VISION_VERIFY_MODEL` is optional
+and defaults to `ASU_AIR_MODEL`. Use `llama4-scout-17b` for
 `ASU_AIR_MODEL`. Without the key, the app keeps working in deterministic demo
 mode.
