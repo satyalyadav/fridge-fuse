@@ -133,10 +133,8 @@ const vercelFunction = vercelConfig.functions?.["server.js"] || {};
 ok(vercelConfig.framework === "express", "Vercel uses the Express framework preset");
 ok(vercelConfig.buildCommand === "npm test", "Vercel runs the contract checks during builds");
 ok(
-  Array.isArray(vercelFunction.includeFiles) &&
-    vercelFunction.includeFiles.includes("data/prices.json") &&
-    vercelFunction.includeFiles.includes("data/stores.json"),
-  "Vercel bundles both catalog data files with the API"
+  vercelFunction.includeFiles === "data/*.json",
+  "Vercel bundles the catalog JSON files with the API"
 );
 ok(/geolocation=\(self\)/.test(JSON.stringify(vercelConfig)), "Vercel allows browser geolocation");
 ok(typeof vercelServer === "function" && vercelServer === vercelServer.app, "Vercel receives the Express app export");
@@ -145,6 +143,13 @@ ok(html.includes("app.js") && html.includes("api/plan") === false, "index.html l
 const appJs = fs.readFileSync("public/app.js", "utf8");
 ok(appJs.includes("/api/plan"), "app.js calls /api/plan");
 ok(!/catalogOnly\s*:\s*true/.test(appJs), "frontend planning requests do not bypass the text model");
+const buildPlanSource = appJs.replaceAll("\r\n", "\n").match(/async function buildPlan[\s\S]*?\n}\n\nfunction formatMoney/)?.[0] || "";
+const planAssignment = buildPlanSource.indexOf("state.plan =");
+const groceryRefresh = buildPlanSource.indexOf("renderGroceryList();");
+ok(
+  planAssignment !== -1 && groceryRefresh > planAssignment,
+  "building a plan refreshes the Shop meal-plan button after assigning the plan"
+);
 const photoInputTag = html.match(/<input[^>]*id="photoInput"[^>]*>/)?.[0] || "";
 ok(
   photoInputTag.includes('accept="image/*"') && !photoInputTag.includes("capture"),
