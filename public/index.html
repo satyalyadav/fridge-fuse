@@ -23,6 +23,9 @@
         <span class="trip-dot"></span>
         <span id="tripLabel">No grocery run planned</span>
       </div>
+      <button class="avatar-button" id="profileButton" type="button" aria-label="Open profile">
+        ME
+      </button>
     </header>
 
     <nav class="desktop-nav" aria-label="Main navigation">
@@ -179,7 +182,155 @@
         </button>
       </div>
     </aside>
+    <aside
+      class="pantry-drawer profile-drawer"
+      id="profileDrawer"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="profileTitle"
+      aria-hidden="true"
+    >
+      <div class="drawer-scrim" data-close-profile></div>
 
+      <div class="drawer-sheet">
+        <div class="drawer-header">
+          <div>
+            <p class="eyebrow">Saved on this device</p>
+            <h2 id="profileTitle">Your profile</h2>
+          </div>
+
+          <button
+            class="icon-button"
+            type="button"
+            data-close-profile
+            aria-label="Close profile"
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <path d="m6 6 12 12M18 6 6 18"/>
+            </svg>
+          </button>
+        </div>
+
+        <p class="drawer-intro">
+          Set defaults for your meal plans. You can still change them in the chat.
+        </p>
+
+        <form class="profile-form" id="profileForm">
+          <label class="profile-field">
+            <span>Display name</span>
+            <input
+              id="profileName"
+              type="text"
+              maxlength="40"
+              autocomplete="name"
+              placeholder="Your name"
+            >
+          </label>
+
+          <label class="profile-field">
+            <span class="profile-field-heading">
+              <span>Plan budget cap</span>
+              <output id="profileBudgetValue">$20</output>
+            </span>
+
+            <input
+              id="profileBudget"
+              type="range"
+              min="5"
+              max="100"
+              step="1"
+              value="20"
+            >
+
+            <small>Choose between $5 and $100.</small>
+          </label>
+
+          <fieldset class="profile-field">
+            <legend>Cooking equipment</legend>
+
+            <div class="profile-options">
+              <label class="profile-choice">
+                <input
+                  type="checkbox"
+                  name="equipment"
+                  value="microwave"
+                >
+                <span>Microwave</span>
+              </label>
+
+              <label class="profile-choice">
+                <input
+                  type="checkbox"
+                  name="equipment"
+                  value="stove"
+                >
+                <span>Stovetop / hot plate</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset class="profile-field">
+            <legend>Dietary preferences</legend>
+
+            <div class="profile-options">
+              <label class="profile-choice">
+                <input type="checkbox" name="diet" value="vegetarian">
+                <span>Vegetarian</span>
+              </label>
+
+              <label class="profile-choice">
+                <input type="checkbox" name="diet" value="vegan">
+                <span>Vegan</span>
+              </label>
+
+              <label class="profile-choice">
+                <input type="checkbox" name="diet" value="dairy-free">
+                <span>Dairy-free</span>
+              </label>
+
+              <label class="profile-choice">
+                <input type="checkbox" name="diet" value="gluten-free">
+                <span>Gluten-free</span>
+              </label>
+
+              <label class="profile-choice">
+                <input type="checkbox" name="diet" value="no peanuts">
+                <span>No peanuts</span>
+              </label>
+            </div>
+
+            <small>
+              Preferences help filter suggestions but are not an allergy-safety guarantee.
+            </small>
+          </fieldset>
+
+          <label class="profile-field">
+            <span>ZIP code <small>optional</small></span>
+            <input
+              id="profilePostalCode"
+              type="text"
+              inputmode="numeric"
+              autocomplete="postal-code"
+              maxlength="5"
+              pattern="[0-9]{5}"
+              placeholder="85281"
+            >
+            <small>
+              Optional — saved on this device for future nearby-store recommendations.
+            </small>
+          </label>
+
+          <div class="profile-actions">
+            <button type="button" class="secondary-button" data-close-profile>
+              Cancel
+            </button>
+            <button type="submit" class="primary-button">
+              Save profile
+            </button>
+          </div>
+        </form>
+      </div>
+    </aside>
     <nav class="mobile-nav" aria-label="Mobile navigation">
       <button class="active" data-view="plan"><span>Plan</span></button>
       <button data-view="chat"><span>Chat</span></button>

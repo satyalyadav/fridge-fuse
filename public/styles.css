@@ -788,7 +788,131 @@ button.mobile-pantry-button { display: none; }
   30% { transform: translateY(-4px); opacity: 1; }
 }
 @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
+.profile-form {
+  display: grid;
+  gap: 22px;
+}
 
+.profile-field {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.profile-field > span,
+.profile-field legend {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.profile-field legend {
+  margin-bottom: 10px;
+}
+
+.profile-field-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.profile-field-heading output {
+  color: var(--spinach);
+  font-family: var(--utility);
+  font-weight: 700;
+}
+
+.profile-field input[type="text"] {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid #bfc9c3;
+  border-radius: 10px;
+  outline: 0;
+}
+
+.profile-field input[type="range"] {
+  width: 100%;
+  accent-color: var(--spinach);
+}
+
+.profile-field small {
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.profile-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.profile-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.profile-choice:has(input:checked) {
+  border-color: var(--spinach);
+  background: var(--cold-blue);
+  color: var(--spinach-dark);
+}
+
+.profile-choice input {
+  accent-color: var(--spinach);
+}
+
+.profile-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+  margin-top: 6px;
+}
+
+.profile-actions button {
+  min-height: 44px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-weight: 700;
+}
+
+.secondary-button {
+  border: 1px solid var(--line);
+  background: white;
+}
+
+.primary-button {
+  border: 1px solid var(--spinach);
+  background: var(--spinach);
+  color: white;
+}
+
+.message-author {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--spinach-dark);
+  font-family: var(--utility);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+@media (max-width: 420px) {
+  .profile-options {
+    grid-template-columns: 1fr;
+  }
+}
 @media (max-width: 980px) {
   body { overflow: auto; }
   .app-shell {
