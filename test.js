@@ -3,7 +3,8 @@
 const assert = require("assert");
 const {
   localPlan, cheapestPack, findPrice, extractJson, PRICES,
-  DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, resolveDataPath, handlePlanRequest
+  DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL, resolveDataPath,
+  handlePlanRequest, handleVisionRequest, normalizeVisionResult
 } = require("./server.js");
 
 let n = 0;
@@ -20,6 +21,7 @@ ok(
 ok(AIR_VISION_MODEL === "qwen3-vl-32b-instruct", "photo requests use the dedicated vision model");
 ok(DEFAULT_AIR_MODEL === "llama4-scout-17b", "tracked text-model default uses the verified fast model");
 ok(AIR_VISION_MODEL !== AIR_MODEL, "text and photo requests do not silently share a model");
+ok(AIR_VISION_VERIFY_MODEL === AIR_MODEL, "photo verification uses the tested fast multimodal model");
 
 const eggs = cheapestPack("eggs");
 ok(eggs && eggs.store === "aldi" && eggs.packPrice === 2.99, `cheapest eggs = aldi 2.99 (${JSON.stringify(eggs)})`);
@@ -122,6 +124,23 @@ function callPlan(body, chat) {
   });
 }
 
+function callVision(body, chat) {
+  return new Promise((resolve, reject) => {
+    let statusCode = 200;
+    const req = { body };
+    const res = {
+      status(code) {
+        statusCode = code;
+        return this;
+      },
+      json(payload) {
+        resolve({ statusCode, payload });
+      }
+    };
+    Promise.resolve(handleVisionRequest(req, res, { chat })).catch(reject);
+  });
+}
+
 const validAiPlan = {
   dinners: [{
     title: "AI spinach rice bowl",
@@ -185,6 +204,69 @@ async function runRouteChecks() {
     data: { choices: [{ message: { content: "still not valid JSON" } }] }
   }));
   ok(failedRepair.payload.ok === false && !failedRepair.payload.dinners, "failed AI repair returns an error instead of a local plan");
+
+  const classified = normalizeVisionResult({
+    confirmed: [
+      { name: "eggs", confidence: 0.98, fullyVisible: true, bbox: [0.1, 0.1, 0.3, 0.3], evidence: "whole carton and readable egg label" },
+      { name: "milk", confidence: 0.7, fullyVisible: true, bbox: [0.1, 0.1, 0.4, 0.8] },
+      { name: "yogurt", confidence: 0.99, fullyVisible: false, bbox: [0.5, 0.2, 0.9, 0.7] }
+    ],
+    uncertain: [
+      { guess: "jar", confidence: 0.45, bbox: [0.2, 0.3, 0.5, 0.9], reason: "label is hidden" }
+    ]
+  });
+  ok(classified.confirmed.length === 1 && classified.confirmed[0].name === "eggs", "vision only confirms fully visible items at high confidence");
+  ok(classified.uncertain.map((item) => item.guess).sort().join(",") === "jar,milk,yogurt", "partial and low-confidence objects require user confirmation");
+  ok(classified.uncertain.every((item) => item.bbox.length === 4), "uncertain vision items include crop coordinates");
+
+  const unsafeBoxes = normalizeVisionResult({ confirmed: [
+    { name: "invented jar", confidence: 0.99, fullyVisible: true, evidence: "looks like a jar" },
+    { name: "cropped bottle", confidence: 0.99, fullyVisible: true, bbox: [0, 0.1, 0.2, 0.8], evidence: "bottle shape" },
+    { name: "bottled beverage (green glass)", confidence: 0.99, fullyVisible: true, bbox: [0.2, 0.1, 0.4, 0.8], evidence: "whole green bottle" },
+    { name: "bottled water", confidence: 0.99, fullyVisible: true, bbox: [0.3, 0.1, 0.5, 0.8], evidence: "green color and bottle shape" },
+    { name: "green glass bottles", confidence: 0.99, fullyVisible: true, bbox: [0.3, 0.1, 0.6, 0.8], evidence: "whole green bottles" }
+  ] });
+  ok(unsafeBoxes.confirmed.length === 0 && unsafeBoxes.uncertain.length === 5, "missing, edge-cropped, and unsupported container contents can never auto-confirm");
+
+  const scaledBox = normalizeVisionResult({ uncertain: [
+    { guess: "carton", confidence: 0.6, bbox: [100, 200, 500, 800], reason: "label hidden" }
+  ] });
+  ok(scaledBox.uncertain[0].bbox.join(",") === "0.1,0.2,0.5,0.8", "common 0-to-1000 vision coordinates produce a useful crop");
+
+  const compactVision = normalizeVisionResult({ items: [
+    { n: "tomatoes", c: 0.98, v: true, b: [100, 100, 400, 400], why: "whole tomatoes clearly visible", alt: [] },
+    { n: "green glass bottles", c: 0.99, v: true, b: [450, 100, 700, 800], why: "whole green bottles", alt: [] },
+    { n: "carrots", c: 0.8, v: false, b: [0, 500, 250, 900], why: "partly outside frame", alt: ["sweet potato"] }
+  ] });
+  ok(compactVision.confirmed.map((item) => item.name).join(",") === "tomatoes", "compact vision output preserves safe automatic additions");
+  ok(compactVision.uncertain.map((item) => item.guess).sort().join(",") === "carrots,green glass bottles", "compact vision output keeps generic and partial objects in review");
+
+  let visionPrompt = "";
+  let visionCalls = 0;
+  const vision = await callVision({ imageDataUrl: "data:image/jpeg;base64,dGVzdA==" }, async (messages, options) => {
+    visionCalls++;
+    visionPrompt += ` ${messages.map((message) => typeof message.content === "string" ? message.content : JSON.stringify(message.content)).join(" ")}`;
+    assert.strictEqual(options.model, visionCalls === 1 ? AIR_VISION_MODEL : AIR_VISION_VERIFY_MODEL);
+    if (visionCalls === 1) return aiEnvelope({
+      confirmed: [
+        { name: "banana", confidence: 0.97, fullyVisible: true, bbox: [0.1, 0.2, 0.3, 0.8], evidence: "whole yellow banana" },
+        { name: "milk", confidence: 0.98, fullyVisible: true, bbox: [0.4, 0.1, 0.7, 0.8], evidence: "carton" }
+      ],
+      uncertain: [{ guess: "apple", confidence: 0.6, bbox: [0.7, 0.2, 0.9, 0.6], reason: "partly hidden" }]
+    });
+    return aiEnvelope({ verified: [
+      { name: "banana", confirmed: true, confidence: 0.98, fullyVisible: true, evidence: "outline is complete and fruit is unmistakable" },
+      { name: "milk", confirmed: false, confidence: 0.5, fullyVisible: false, reason: "label is not readable" }
+    ] });
+  });
+  ok(visionCalls === 2, "vision route independently verifies proposed automatic additions");
+  ok(vision.payload.ok && vision.payload.confirmed.map((item) => item.name).join(",") === "banana" && vision.payload.uncertain.map((item) => item.guess).sort().join(",") === "apple,milk", "failed verification becomes user review instead of an automatic addition");
+  ok(/partially visible/i.test(visionPrompt) && /uncertain/i.test(visionPrompt), "vision prompt sends partial objects to user review instead of guessing");
+
+  const updatedHtml = fs.readFileSync("public/index.html", "utf8");
+  const updatedAppJs = fs.readFileSync("public/app.js", "utf8");
+  ok(updatedHtml.includes("visionReviewList") && updatedAppJs.includes("data-vision-action"), "frontend includes an uncertain-item confirmation interface");
+  ok(/MAX_VISION_IMAGE_EDGE\s*=\s*1024/.test(updatedAppJs) && /resizeImageForVision\(file\)/.test(updatedAppJs), "frontend caps large vision uploads at the tested 1024-pixel edge");
 
   console.log(`\nALL ${n} CHECKS PASSED`);
 }

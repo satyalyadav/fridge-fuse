@@ -699,6 +699,65 @@ button.mobile-pantry-button { display: none; }
   font-size: 13px;
   font-weight: 700;
 }
+.vision-review {
+  margin: 0 0 20px;
+  padding: 14px;
+  border: 1px solid #d5b94e;
+  border-radius: 12px;
+  background: #fff9df;
+}
+.vision-review-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.vision-review-heading h3 { margin-top: 3px; font-size: 17px; }
+.vision-review-heading > span {
+  min-width: 25px;
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: var(--tape);
+  font-family: var(--utility);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+}
+.vision-review > p { margin: 8px 0 12px; color: var(--ink-soft); font-size: 12px; line-height: 1.4; }
+.vision-review-list { display: grid; gap: 10px; }
+.vision-review-card {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 11px;
+  padding: 9px;
+  border: 1px solid rgba(83, 73, 30, 0.22);
+  border-radius: 10px;
+  background: white;
+}
+.vision-review-crop {
+  width: 88px;
+  height: 88px;
+  object-fit: cover;
+  border-radius: 8px;
+  background: var(--enamel);
+}
+.vision-review-fields { min-width: 0; }
+.vision-review-fields label { display: block; color: var(--ink-soft); font-size: 10px; font-weight: 700; }
+.vision-review-fields input {
+  width: 100%;
+  margin-top: 4px;
+  padding: 7px 8px;
+  border: 1px solid #bfc9c3;
+  border-radius: 7px;
+  font-size: 12px;
+}
+.vision-review-reason { margin-top: 5px; color: var(--ink-soft); font-size: 10px; line-height: 1.35; }
+.vision-review-alternatives { margin-top: 3px; color: var(--ink-soft); font-size: 10px; }
+.vision-review-actions { display: flex; gap: 6px; margin-top: 7px; }
+.vision-review-actions button {
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: white;
+  font-size: 10px;
+  font-weight: 700;
+}
+.vision-review-actions button:first-child { border-color: var(--spinach); background: var(--spinach); color: white; }
 .pantry-list { display: grid; gap: 8px; }
 .pantry-item {
   display: grid;
