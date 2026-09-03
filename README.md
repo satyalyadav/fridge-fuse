@@ -6,6 +6,8 @@ FridgeFuse is a chat-first meal planner for a freshman cooking in a dorm. It
 turns a rough pantry, a grocery limit, and limited equipment into three simple
 dinners, one full-package shopping list, and a view of what will remain.
 
+Live demo: [fridge-fuse-374.netlify.app](https://fridge-fuse-374.netlify.app)
+
 ## Run
 
 ```bash
