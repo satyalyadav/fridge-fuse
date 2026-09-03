@@ -94,7 +94,7 @@
     },
     {
       "name": "FridgeFuse Demo Catalog",
-      "url": "https://github.com/local/fridge-fuse-demo-recipes",
+      "url": "https://github.com/satyalyadav/fridge-fuse",
       "focus": "built-in beginner microwave/stove recipes shipped with the app (fallback planner)"
     }
   ]

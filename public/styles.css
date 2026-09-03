@@ -533,6 +533,8 @@ button.mobile-pantry-button { display: none; }
 .meal-main h3 { margin-bottom: 5px; font-size: 18px; }
 .meal-meta { margin: 0; color: var(--ink-soft); font-size: 12px; }
 .meal-reason { margin: 10px 0 0; color: var(--spinach-dark); font-size: 12px; font-weight: 600; }
+.meal-source { display: inline-block; margin-top: 8px; color: var(--spinach-dark); font-size: 12px; font-weight: 600; }
+.meal-source:hover { color: var(--ink); }
 .meal-details {
   display: none;
   grid-column: 2 / -1;

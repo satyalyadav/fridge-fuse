@@ -485,6 +485,9 @@ function renderPlan() {
         ? `Uses ${pantryUsed.join(", ")} from your pantry`
         : "Built from the same grocery run";
     const steps = (meal.steps || []).map((step) => `<li>${escapeHtml(step)}</li>`).join("");
+    const recipeSource = meal.source && meal.sourceUrl
+      ? `<a class="meal-source" href="${escapeHtml(meal.sourceUrl)}" target="_blank" rel="noopener noreferrer">Recipe source: ${escapeHtml(meal.source)}</a>`
+      : "";
     return `
       <article class="meal-card" data-meal-index="${index}">
         <div class="meal-day">${dayLabels[index] || `DAY ${index + 1}`}</div>
@@ -492,6 +495,7 @@ function renderPlan() {
           <h3>${escapeHtml(meal.title)}</h3>
           <p class="meal-meta">${Number(meal.timeMin) || "—"} min · beginner · ${escapeHtml((meal.equip || []).join(" + ") || planConstraints.equipment[0] || "simple equipment")}</p>
           <p class="meal-reason">${escapeHtml(reason)}</p>
+          ${recipeSource}
         </div>
         <div class="meal-actions">
           <button data-action="details" data-index="${index}">Steps</button>

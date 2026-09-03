@@ -4,8 +4,8 @@ const assert = require("assert");
 const path = require("path");
 const {
   localPlan, cheapestPack, findPrice, extractJson, PRICES,
-  AIR_MODEL, AIR_VISION_MODEL, resolveDataPath, RECIPE_SOURCES, buildPlanSystemPrompt
-  DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL, resolveDataPath,
+  DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL,
+  resolveDataPath, RECIPE_SOURCES, buildPlanSystemPrompt,
   handlePlanRequest, handleVisionRequest, normalizeVisionResult, handleGeoPostal,
   haversineMiles, isValidCoordinate, resolveCatalogItem, optimizeCart,
   describeLocation, handleGeoDescribe,
@@ -124,7 +124,7 @@ ok(
 
 // Frontend files exist and wire up.
 const fs = require("fs");
-for (const f of ["public/index.html", "public/app.js", "public/styles.css", "data/prices.json", ".env.example"]) {
+for (const f of ["public/index.html", "public/app.js", "public/styles.css", "data/prices.json", "data/recipe-sources.json", ".env.example"]) {
   ok(fs.existsSync(f), `${f} exists`);
 }
 const vercelConfig = JSON.parse(fs.readFileSync("vercel.json", "utf8"));
@@ -160,6 +160,10 @@ ok(
     appJs.includes('$("drawerPhotoButton").addEventListener("click", () => $("photoInput").click())'),
   "chat and pantry photo buttons open the native image picker directly"
 );
+ok(
+  appJs.includes("meal.sourceUrl") && appJs.includes("meal.source"),
+  "meal cards expose approved recipe citations"
+);
 
 // ---------- grocery optimizer ----------
 ok(fs.existsSync("data/stores.json"), "data/stores.json exists");
@@ -168,6 +172,11 @@ ok(
   "store data resolves from the Netlify task root"
 );
 ok(fs.readFileSync("netlify.toml", "utf8").includes("data/stores.json"), "netlify bundles the store data with the function");
+ok(
+  (fs.readFileSync("netlify.toml", "utf8").match(/^\s*included_files\s*=/gm) || []).length === 1 &&
+    fs.readFileSync("netlify.toml", "utf8").includes("data/recipe-sources.json"),
+  "netlify bundles all catalog data in one included_files setting"
+);
 // geolocation=() silently disables the browser location API — the Shop tab needs it.
 ok(/geolocation=\(self\)/.test(fs.readFileSync("server.js", "utf8")), "server Permissions-Policy allows geolocation");
 ok(/geolocation=\(self\)/.test(fs.readFileSync("netlify.toml", "utf8")), "netlify Permissions-Policy allows geolocation");
@@ -396,7 +405,10 @@ const validAiPlan = {
     equip: ["microwave"],
     usesPantry: ["spinach", "rice", "eggs"],
     needs: ["soy sauce"],
-    steps: ["Microwave the spinach, rice, and eggs until the eggs are fully set."]
+    steps: ["Microwave the spinach, rice, and eggs until the eggs are fully set."],
+    source: "Budget Bytes",
+    sourceUrl: "https://www.budgetbytes.com",
+    adaptationNote: ""
   }],
   shoppingList: [],
   totalCost: 0,
@@ -426,6 +438,29 @@ async function runRouteChecks() {
   ok(live.statusCode === 200 && live.payload.ok && live.payload.model === AIR_MODEL, "plan route returns the configured text model response");
   ok(liveCalls === 1 && !live.payload.mock && !live.payload.fallback, "omitting catalogOnly calls the text model exactly once");
   ok(live.payload.shoppingList.length === 1 && live.payload.shoppingList[0].item === "soy sauce", "AI shopping needs are grounded against the price catalog");
+  ok(
+    live.payload.dinners[0].source === validAiPlan.dinners[0].source &&
+      live.payload.dinners[0].sourceUrl === validAiPlan.dinners[0].sourceUrl,
+    "AI plans preserve approved recipe citations"
+  );
+
+  const unapprovedAiPlan = {
+    ...validAiPlan,
+    dinners: validAiPlan.dinners.map((dinner) => ({
+      ...dinner,
+      source: "Unapproved Recipe Blog",
+      sourceUrl: "https://example.com/recipe"
+    }))
+  };
+  let unapprovedCalls = 0;
+  const unapproved = await callPlan(request, async () => {
+    unapprovedCalls++;
+    return aiEnvelope(unapprovedAiPlan);
+  });
+  ok(
+    unapprovedCalls === 2 && unapproved.payload.ok === false && /approved recipe list/.test(unapproved.payload.failure?.message || ""),
+    "unapproved AI recipe citations are rejected after repair"
+  );
 
   const catalog = await callPlan({ ...request, catalogOnly: true }, async () => {
     throw new Error("catalog-only request must not call the text model");
