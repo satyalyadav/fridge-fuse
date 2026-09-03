@@ -277,8 +277,54 @@
                 >
                 <span>Stovetop / hot plate</span>
               </label>
+
+              <label class="profile-choice">
+                <input
+                  type="checkbox"
+                  name="equipment"
+                  value="oven"
+                >
+                <span>Oven</span>
+              </label>
+
+              <label class="profile-choice">
+                <input
+                  type="checkbox"
+                  name="equipment"
+                  value="air fryer"
+                >
+                <span>Air fryer</span>
+              </label>
             </div>
           </fieldset>
+
+          <div class="profile-grid">
+            <label class="profile-field">
+              <span>Dinners</span>
+              <input
+                id="profileDinners"
+                type="number"
+                min="1"
+                max="7"
+                step="1"
+                value="3"
+              >
+              <small>1 to 7.</small>
+            </label>
+
+            <label class="profile-field">
+              <span>Max minutes each</span>
+              <input
+                id="profileMaxTime"
+                type="number"
+                min="10"
+                max="60"
+                step="5"
+                value="20"
+              >
+              <small>10 to 60.</small>
+            </label>
+          </div>
 
           <fieldset class="profile-field">
             <legend>Dietary preferences</legend>

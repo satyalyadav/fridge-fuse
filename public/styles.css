@@ -883,12 +883,19 @@ button.mobile-pantry-button { display: none; }
   font-weight: 700;
 }
 
-.profile-field input[type="text"] {
+.profile-field input[type="text"],
+.profile-field input[type="number"] {
   width: 100%;
   padding: 11px 12px;
   border: 1px solid #bfc9c3;
   border-radius: 10px;
   outline: 0;
+}
+
+.profile-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
 }
 
 .profile-field input[type="range"] {

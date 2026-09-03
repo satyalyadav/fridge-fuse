@@ -40,6 +40,9 @@ const DEFAULT_STATE = {
 
 const MAX_EXCLUDED = 20;
 const MAX_MESSAGES = 30;
+const PROFILE_EQUIPMENT_OPTIONS = ["microwave", "stove", "oven", "air fryer"];
+const PROFILE_DIET_OPTIONS = ["vegetarian", "vegan", "dairy-free", "gluten-free", "no peanuts"];
+const PROFILE_EXTRA_DIET_TERMS = ["peanut allergy"];
 
 function addExclusion(title) {
   if (!title) return;
@@ -561,18 +564,24 @@ function openProfile() {
   $("profileBudget").value = budget;
   $("profileBudgetValue").textContent = `$${budget}`;
 
-  const equipment = new Set(state.constraints.equipment || []);
+  const dinners = Math.min(7, Math.max(1, Math.floor(Number(state.constraints.dinners)) || 3));
+  $("profileDinners").value = dinners;
+
+  const maxTimeMin = Math.min(60, Math.max(10, Number(state.constraints.maxTimeMin) || 20));
+  $("profileMaxTime").value = maxTimeMin;
+
+  const equipment = new Set((state.constraints.equipment || []).map((item) => String(item).toLowerCase()));
 
   document
     .querySelectorAll('#profileForm input[name="equipment"]')
     .forEach((input) => {
-      input.checked = equipment.has(input.value);
+      input.checked = equipment.has(String(input.value).toLowerCase());
     });
 
   const diets = new Set(
     String(state.constraints.diet || "")
       .split(",")
-      .map((item) => item.trim())
+      .map((item) => item.trim().toLowerCase())
       .filter(Boolean)
   );
 
@@ -583,7 +592,7 @@ function openProfile() {
   document
     .querySelectorAll('#profileForm input[name="diet"]')
     .forEach((input) => {
-      input.checked = diets.has(input.value);
+      input.checked = diets.has(input.value.toLowerCase());
     });
 
   $("profileDrawer").classList.add("open");
@@ -774,7 +783,7 @@ $("profileBudget").addEventListener("input", () => {
 $("profileForm").addEventListener("submit", (event) => {
   event.preventDefault();
 
-  const displayName = $("profileName").value.trim();
+  const displayName = $("profileName").value.trim().slice(0, 40);
   const postalCode = $("profilePostalCode").value.trim();
 
   if (postalCode && !/^\d{5}$/.test(postalCode)) {
@@ -783,22 +792,54 @@ $("profileForm").addEventListener("submit", (event) => {
     return;
   }
 
-  const equipment = [
+  const dinners = Math.floor(Number($("profileDinners").value));
+  if (!Number.isFinite(dinners) || dinners < 1 || dinners > 7) {
+    toast("Choose 1 to 7 dinners.", "error");
+    $("profileDinners").focus();
+    return;
+  }
+
+  const maxTimeMin = Number($("profileMaxTime").value);
+  if (!Number.isFinite(maxTimeMin) || maxTimeMin < 10 || maxTimeMin > 60) {
+    toast("Choose 10 to 60 minutes per dinner.", "error");
+    $("profileMaxTime").focus();
+    return;
+  }
+
+  const checkedEquipment = [
     ...document.querySelectorAll(
       '#profileForm input[name="equipment"]:checked'
     )
   ].map((input) => input.value);
 
-  if (!equipment.length) {
+  if (!checkedEquipment.length) {
     toast("Choose at least one cooking option.", "error");
     return;
   }
 
-  const diets = [
+  const knownEquipment = new Set(PROFILE_EQUIPMENT_OPTIONS);
+  const preservedEquipment = (state.constraints.equipment || [])
+    .map((item) => String(item))
+    .filter((item) => item && !knownEquipment.has(item.toLowerCase()));
+  const equipment = [...new Set([...checkedEquipment, ...preservedEquipment])];
+
+  const checkedDiets = [
     ...document.querySelectorAll(
       '#profileForm input[name="diet"]:checked'
     )
   ].map((input) => input.value);
+
+  const knownDiets = new Set([...PROFILE_DIET_OPTIONS, ...PROFILE_EXTRA_DIET_TERMS].map((item) => item.toLowerCase()));
+  const preservedDiets = String(state.constraints.diet || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item && !knownDiets.has(item.toLowerCase()));
+  if (checkedDiets.includes("no peanuts")) {
+    for (let i = preservedDiets.length - 1; i >= 0; i -= 1) {
+      if (preservedDiets[i].toLowerCase() === "peanut allergy") preservedDiets.splice(i, 1);
+    }
+  }
+  const diets = [...checkedDiets, ...preservedDiets];
 
   state.profile = {
     displayName,
@@ -809,9 +850,11 @@ $("profileForm").addEventListener("submit", (event) => {
     state.plan.constraints = structuredClone(state.constraints);
   }
 
-  state.constraints.budget = Number($("profileBudget").value);
+  state.constraints.budget = Math.min(100, Math.max(5, Number($("profileBudget").value) || 20));
   state.constraints.equipment = equipment;
   state.constraints.diet = diets.join(", ");
+  state.constraints.dinners = dinners;
+  state.constraints.maxTimeMin = maxTimeMin;
 
   saveState();
   renderProfile();
