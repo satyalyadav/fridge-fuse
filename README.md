@@ -1,4 +1,4 @@
-# FridgeFuse prototype
+# FridgeFuse prototype test
 
 Fuse what you have into a meal you can afford.
 
