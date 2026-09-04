@@ -82,6 +82,11 @@ ok(
   "plan prompt limits recipe adaptations by ingredients and verified time"
 );
 ok(planPrompt.includes("NEVER invent a source recipe"), "plan prompt forbids invented recipe citations");
+const twentyFiveMinutePrompt = buildPlanSystemPrompt("(price context)", "", 25);
+ok(
+  !twentyFiveMinutePrompt.includes("Mexican Rice and Beans") && twentyFiveMinutePrompt.includes("Hearty Black Bean Quesadillas"),
+  "a 25-minute prompt does not offer recipes with longer verified times"
+);
 for (const recipe of APPROVED_RECIPES) {
   ok(
     planPrompt.includes(recipe.title) && planPrompt.includes(recipe.source) && planPrompt.includes(recipe.url) && planPrompt.includes(recipe.method),
@@ -1068,6 +1073,34 @@ async function runRouteChecks() {
     "a cited recipe cannot claim an implausibly shorter cooking time"
   );
 
+  const tooSlowForRequest = {
+    dinners: [{
+      title: "Mexican Rice and Beans",
+      sourceRecipe: "Mexican Rice and Beans",
+      source: "Nora Cooks",
+      sourceUrl: "https://www.noracooks.com/spanish-rice-and-beans/",
+      adaptationNote: "",
+      timeMin: 40,
+      servings: 1,
+      usesPantry: ["rice", "black beans", "salsa", "onion", "garlic", "olive oil"],
+      needs: [],
+      steps: ["Saute the aromatics, add rice, beans, salsa, and liquid, then cook until the rice is tender."]
+    }],
+    notes: ""
+  };
+  let maxTimeCalls = 0;
+  const maxTimeRequest = await callPlan(
+    { ...request, maxTimeMin: 25, pantry: ["rice", "black beans", "salsa", "onion", "garlic", "olive oil"] },
+    async () => {
+      maxTimeCalls++;
+      return aiEnvelope(maxTimeCalls === 1 ? tooSlowForRequest : validAiPlan);
+    }
+  );
+  ok(
+    maxTimeCalls === 2 && maxTimeRequest.statusCode === 200 && maxTimeRequest.payload.repaired === true,
+    "a recipe longer than the requested per-dinner limit is repaired instead of being served"
+  );
+
   const fabricatedCitationPlan = {
     ...validAiPlan,
     dinners: validAiPlan.dinners.map((dinner) => ({
@@ -1615,7 +1648,7 @@ async function runRouteChecks() {
     }))
   };
   let dietPrompt = "";
-  const dietPlan = await callPlan({ ...request, diet: "vegan, halal" }, async (messages) => {
+  const dietPlan = await callPlan({ ...request, maxTimeMin: 25, diet: "vegan, halal" }, async (messages) => {
     dietPrompt = messages.map((m) => String(m.content)).join(" ");
     return aiEnvelope(veganSafePlan);
   });

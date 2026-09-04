@@ -215,8 +215,15 @@ for (const source of RECIPE_SOURCES.sources) {
   }
 }
 
-function recipeSourcesContext() {
-  return APPROVED_RECIPES
+function recipesWithinTime(maxTimeMin) {
+  const limit = Number(maxTimeMin);
+  return Number.isFinite(limit) && limit > 0
+    ? APPROVED_RECIPES.filter((recipe) => Number(recipe.timeMin) <= limit)
+    : APPROVED_RECIPES;
+}
+
+function recipeSourcesContext(recipes = APPROVED_RECIPES) {
+  return recipes
     .map((recipe) => `- sourceRecipe: ${JSON.stringify(recipe.title)}; source: ${JSON.stringify(recipe.source)}; sourceUrl: ${recipe.url}; verified time: ${recipe.timeMin} min; equipment: ${recipe.equipment.join(", ")}; catalog-ready ingredients: ${recipe.ingredients.join(", ")}; method outline: ${recipe.method}`)
     .join("\n");
 }
@@ -1096,7 +1103,7 @@ function groundShoppingPlan(plan) {
   };
 }
 
-function parseAiPlan(content, expectedDinners, { strictAmounts = true } = {}) {
+function parseAiPlan(content, expectedDinners, { strictAmounts = true, maxTimeMin = null } = {}) {
   const plan = extractJson(String(content || ""));
   if (!plan || typeof plan !== "object" || !Array.isArray(plan.dinners)) {
     throw new Error("AI plan must contain a dinners array");
@@ -1135,17 +1142,20 @@ function parseAiPlan(content, expectedDinners, { strictAmounts = true } = {}) {
       }
     }
     assertDinnerMatchesRecipe(dinner, approvedRecipe, index + 1);
+    if (Number.isFinite(Number(maxTimeMin)) && Number(dinner.timeMin) > Number(maxTimeMin)) {
+      throw new Error(`Dinner ${index + 1} exceeds the requested ${maxTimeMin}-minute limit: cited recipe "${approvedRecipe.title}" takes ${approvedRecipe.timeMin} minutes`);
+    }
   }
   // Leftovers are computed from the requirements in groundShoppingPlan, so
   // whatever the model guessed for them is ignored rather than validated.
   return plan;
 }
 
-async function repairAiPlan(chat, content, expectedDinners, initialError, requirements) {
+async function repairAiPlan(chat, content, expectedDinners, initialError, requirements, maxTimeMin = null) {
   return chat([
     {
       role: "system",
-      content: `Repair a malformed FridgeFuse meal-plan response. Reply ONLY with valid JSON containing exactly ${expectedDinners} dinners and notes. Each dinner must have a non-empty title, numeric timeMin, arrays named usesPantry, needs, and steps, and an exact sourceRecipe/source/sourceUrl triple from this curated recipe catalog. The safest repair is to use one record's exact ingredient list: put only ingredients the user owns in usesPantry, put every remaining record ingredient in needs, and add no other ingredients. Do not force unrelated pantry items into a dinner. Choose another curated record when the malformed meal does not fit its citation. Keep timeMin within 25% of the record's verified time, base steps on its method, and state any ingredient change in adaptationNote. If you do change ingredients, at least half of the cited ingredients and at least half of the dinner ingredients must still match:\n${recipeSourcesContext()} Every entry in needs must be an object {"item","amount","unit"} giving how much the dinner uses, with an ingredient name from the supplied price catalog and a unit from the family that catalog lists for it. Do not return shoppingList, leftovers, or totalCost — the server computes them. Do not add commentary or Markdown fences.`
+      content: `Repair a malformed FridgeFuse meal-plan response. Reply ONLY with valid JSON containing exactly ${expectedDinners} dinners and notes. Each dinner must have a non-empty title, numeric timeMin, arrays named usesPantry, needs, and steps, and an exact sourceRecipe/source/sourceUrl triple from this curated recipe catalog. The safest repair is to use one record's exact ingredient list: put only ingredients the user owns in usesPantry, put every remaining record ingredient in needs, and add no other ingredients. Do not force unrelated pantry items into a dinner. Choose another curated record when the malformed meal does not fit its citation. Keep timeMin within 25% of the record's verified time, base steps on its method, and state any ingredient change in adaptationNote. If you do change ingredients, at least half of the cited ingredients and at least half of the dinner ingredients must still match. Every selected record's verified time must fit the user's requested maximum; do not lower timeMin to disguise a recipe that takes too long — choose a different curated record instead:\n${recipeSourcesContext(recipesWithinTime(maxTimeMin))} Every entry in needs must be an object {"item","amount","unit"} giving how much the dinner uses, with an ingredient name from the supplied price catalog and a unit from the family that catalog lists for it. Do not return shoppingList, leftovers, or totalCost — the server computes them. Do not add commentary or Markdown fences.`
     },
     {
       role: "user",
@@ -1385,8 +1395,8 @@ app.post("/api/vision", handleVisionRequest);
 // System prompt for AI meal generation. Grounded to exact, curated recipe
 // records in data/recipe-sources.json rather than publisher homepages, and
 // carrying the user's dietary restrictions when they have any.
-function buildPlanSystemPrompt(priceCtx, dietCtx = "") {
-  const sourcesCtx = recipeSourcesContext();
+function buildPlanSystemPrompt(priceCtx, dietCtx = "", maxTimeMin = null) {
+  const sourcesCtx = recipeSourcesContext(recipesWithinTime(maxTimeMin));
   const dietSection = dietCtx
     ? `\nDietary restrictions (STRICT — these are safety constraints):
 - The restrictions below are absolute. NEVER put a forbidden ingredient in a title, usesPantry, needs, steps, leftovers, or notes — not as a garnish, not as an optional topping, not as a "serve with" suggestion.
@@ -1458,7 +1468,7 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
     ? ` Pantry items you must NOT cook with or mention (they break the diet): ${offLimitsPantry.join(", ")}.`
     : "";
   const planningMessages = [
-    { role: "system", content: buildPlanSystemPrompt(priceCtx, dietCtx) },
+    { role: "system", content: buildPlanSystemPrompt(priceCtx, dietCtx, maxTimeMin) },
     { role: "user", content: `Pantry: ${cookablePantry.join(", ") || "(empty)"}. Use soon: ${cookableUseSoon.join(", ") || "none"}. Budget total $${budget} for the whole plan. Dinners: ${dinners}. Max ${maxTimeMin} min each. Equipment: ${safeEquipment.join(", ")}. Diet/notes: ${safeDiet || "none"}.${dietGuidance}${offLimitsCtx} Do NOT use these recipes again, under any title: ${safeExclude.join(", ") || "none"}. Choose a different curated record instead. Latest request: ${request || "build the best plan"}.` },
   ];
   const out = await chat(planningMessages, { maxTokens: 1800 });
@@ -1468,12 +1478,12 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
   const expectedDinners = asDinners(dinners, 3);
   const content = out.data?.choices?.[0]?.message?.content;
   try {
-    const plan = groundShoppingPlan(assertPlanRespectsDiet(parseAiPlan(content, expectedDinners), dietRules));
+    const plan = groundShoppingPlan(assertPlanRespectsDiet(parseAiPlan(content, expectedDinners, { maxTimeMin }), dietRules));
     const repeated = findRepeatedExclusion(plan, safeExclude);
     if (repeated) throw new Error(repeated);
     return res.json({ ok: true, model: AIR_MODEL, diet: safeDiet, dietRules: dietRules.map((rule) => rule.id), offLimitsPantry, ...plan });
   } catch (initialError) {
-    const repaired = await repairAiPlan(chat, content, expectedDinners, initialError, `${planningMessages[1].content}\n\nPrice catalog:\n${priceCtx}${dietCtx ? `\n\nDietary restrictions (absolute):\n${dietCtx}` : ""}`);
+    const repaired = await repairAiPlan(chat, content, expectedDinners, initialError, `${planningMessages[1].content}\n\nPrice catalog:\n${priceCtx}${dietCtx ? `\n\nDietary restrictions (absolute):\n${dietCtx}` : ""}`, maxTimeMin);
     if (!repaired.ok) {
       const failure = repaired.failure || reportFailure("asu-air", "plan-repair", {
         status: "repair-failed",
@@ -1483,7 +1493,7 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
     }
     try {
       const repairedContent = repaired.data?.choices?.[0]?.message?.content;
-      const plan = groundShoppingPlan(assertPlanRespectsDiet(parseAiPlan(repairedContent, expectedDinners, { strictAmounts: false }), dietRules));
+      const plan = groundShoppingPlan(assertPlanRespectsDiet(parseAiPlan(repairedContent, expectedDinners, { strictAmounts: false, maxTimeMin }), dietRules));
       // The curated catalog is small, and equipment and budget narrow it
       // further. When nothing else fits, saying so beats a silent no-op.
       const stillRepeated = findRepeatedExclusion(plan, safeExclude);
