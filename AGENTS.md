@@ -103,6 +103,13 @@ and `totalCost` are ignored — do not start trusting them again. Units convert 
 within a family (count/mass/volume); a cross-family requirement is refused rather
 than converted through a guessed density.
 
+**Amount checks are plausibility, not accuracy.** `perServing` bands in
+`data/prices.json` plus `MAX_PACKAGES_PER_DINNER` catch magnitude errors, scaled by
+`dinner.servings`. `parseAiPlan` is strict on the first pass so the model can correct
+itself, and lenient on the repaired pass so a stubborn amount degrades to one package
+instead of 502-ing the plan. Widen a band rather than deleting it if it fires on a
+legitimate portion.
+
 **Prices are always re-grounded server-side.** The model may propose a shopping list,
 but `groundShoppingPlan()` replaces its prices with real packs from `data/prices.json`.
 Never let model-supplied prices reach the client.

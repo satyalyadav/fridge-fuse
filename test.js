@@ -14,7 +14,8 @@ const {
   DIET_RULES, resolveDietRules, findForbiddenTerm, findDietViolations,
   pantryDietConflicts, dietRulesContext, catalogTagsFor, findIngredientConflict,
   DIET_OPTIONS, EQUIPMENT_OPTIONS, parseDietSelections, blockedIngredientsForDiet,
-  unitInfo, toBaseAmount, packSizeOf, normalizeRequirement, groundShoppingPlan
+  unitInfo, toBaseAmount, packSizeOf, normalizeRequirement, groundShoppingPlan,
+  servingBandOf, amountImplausibility, servingsOf, MAX_PACKAGES_PER_DINNER
 } = require("./server.js");
 
 // Normalize OS-native path separators to forward slashes so assertions are
@@ -113,7 +114,7 @@ ok(normalizeRequirement({ item: "chicken breast", amount: 8, unit: "oz" }).base 
 const twoDinners = groundShoppingPlan({
   dinners: [
     { title: "A", needs: [{ item: "eggs", amount: 3, unit: "each" }, { item: "spinach", amount: 2, unit: "oz" }] },
-    { title: "B", needs: [{ item: "eggs", amount: 11, unit: "each" }] }
+    { title: "B", servings: 3, needs: [{ item: "eggs", amount: 11, unit: "each" }] }
   ]
 });
 const eggLine = twoDinners.shoppingList.find((entry) => entry.item === "eggs");
@@ -124,10 +125,44 @@ const eggLeftover = twoDinners.leftovers.find((entry) => entry.item === "eggs");
 ok(eggLeftover.remaining === 10, `leftovers are computed: 2 dozen minus 14 leaves ${eggLeftover.remaining}`);
 ok(twoDinners.leftovers.find((entry) => entry.item === "spinach").remaining === 3, "a partly used package reports the remainder in its own unit");
 
-const exact = groundShoppingPlan({ dinners: [{ title: "A", needs: [{ item: "eggs", amount: 12, unit: "each" }] }] });
+const exact = groundShoppingPlan({ dinners: [{ title: "A", servings: 4, needs: [{ item: "eggs", amount: 12, unit: "each" }] }] });
 ok(exact.shoppingList[0].qty === 1 && exact.leftovers.length === 0, "a plan that uses a package exactly reports no leftovers");
-const lbs = groundShoppingPlan({ dinners: [{ title: "A", needs: [{ item: "chicken breast", amount: 20, unit: "oz" }] }] });
+const lbs = groundShoppingPlan({ dinners: [{ title: "A", servings: 3, needs: [{ item: "chicken breast", amount: 20, unit: "oz" }] }] });
 ok(lbs.shoppingList[0].qty === 2, "a weight requirement crossing a pack boundary buys two packs");
+
+// ---------- amount plausibility ----------
+const unbanded = PRICES.items.filter((item) => !servingBandOf(item)).map((item) => item.name);
+ok(unbanded.length === 0, `every catalog item has a per-serving band${unbanded.length ? ` (missing: ${unbanded.join(", ")})` : ""}`);
+const invertedBands = PRICES.items.filter((item) => item.perServing.max < item.perServing.min).map((item) => item.name);
+ok(invertedBands.length === 0, "no band has a maximum below its minimum");
+// A band that excluded a whole package would make every single-package plan
+// look implausible, so each band has to sit inside what a package holds.
+const impossibleBands = PRICES.items
+  .filter((item) => item.perServing.min > packSizeOf(item).base)
+  .map((item) => item.name);
+ok(impossibleBands.length === 0, `no band demands more than a whole package per serving${impossibleBands.length ? ` (${impossibleBands.join(", ")})` : ""}`);
+
+const spinach = findPrice("spinach");
+ok(amountImplausibility(spinach, 2, 1) === null, "a normal portion passes the band");
+ok(/above the plausible/.test(amountImplausibility(spinach, 40, 1) || ""), "forty ounces of spinach for one serving is caught");
+ok(/below the plausible/.test(amountImplausibility(spinach, 0.01, 1) || ""), "a fraction of an ounce of spinach is caught");
+ok(amountImplausibility(spinach, 12, 4) === null, "the same total passes when the dinner says it serves four");
+ok(servingsOf({ servings: 4 }) === 4 && servingsOf({}) === 1 && servingsOf({ servings: 0 }) === 1, "a dinner feeds one unless it says otherwise");
+
+// The backstop for an item with no band of its own.
+const unbandedItem = { name: "mystery", size: { amount: 10, unit: "oz" }, prices: {}, tags: [] };
+ok(amountImplausibility(unbandedItem, 10, 1) === null, "one package of an unbanded item is fine");
+ok(
+  /more than a dinner plausibly uses/.test(amountImplausibility(unbandedItem, 10 * (MAX_PACKAGES_PER_DINNER + 1), 1) || ""),
+  `more than ${MAX_PACKAGES_PER_DINNER} packages of an unbanded item for one serving is caught`
+);
+
+// Strict on the first pass so the model can correct itself; lenient after, so a
+// stubborn amount costs a rough estimate rather than the whole plan.
+assert.throws(() => normalizeRequirement({ item: "spinach", amount: 40, unit: "oz" }, { strict: true }), /above the plausible/);
+n++; console.log(`ok ${n} - an implausible amount is raised for correction on the first pass`);
+const degraded = normalizeRequirement({ item: "spinach", amount: 40, unit: "oz" });
+ok(degraded.assumed && /above the plausible/.test(degraded.assumedReason || ""), "an implausible amount degrades to one package and records why");
 
 // ---------- gluten-free catalog + diet tags ----------
 const untagged = PRICES.items.filter((item) => !Array.isArray(item.tags)).map((item) => item.name);
@@ -864,6 +899,7 @@ async function runRouteChecks() {
     ...validAiPlan,
     dinners: validAiPlan.dinners.map((dinner) => ({
       ...dinner,
+      servings: 6,
       needs: [{ item: "eggs", amount: 18, unit: "each" }]
     })),
     shoppingList: [{ item: "eggs", pack: "free eggs", packPrice: 0.01, store: "nowhere", qty: 1 }],
@@ -926,7 +962,7 @@ async function runRouteChecks() {
         ...dinner,
         title: "Spinach rice bowl",
         usesPantry: ["spinach", "rice"],
-        needs: [{ item: "black beans", amount: 15, unit: "oz" }],
+        needs: [{ item: "black beans", amount: 6, unit: "oz" }],
         steps: ["Microwave the spinach and rice, then stir in the black beans."]
       }))
     });
@@ -951,7 +987,7 @@ async function runRouteChecks() {
       ...dinner,
       title: "Gluten-free pasta bowl",
       usesPantry: ["spinach"],
-      needs: [{ item: "gluten free pasta", amount: 8, unit: "oz" }, { item: "marinara", amount: 12, unit: "oz" }],
+      needs: [{ item: "gluten free pasta", amount: 4, unit: "oz" }, { item: "marinara", amount: 8, unit: "oz" }],
       steps: ["Boil the gluten free pasta, then stir in the marinara and spinach."]
     }))
   };
@@ -970,7 +1006,7 @@ async function runRouteChecks() {
     dinners: validAiPlan.dinners.map((dinner) => ({
       ...dinner,
       usesPantry: ["spinach"],
-      needs: [{ item: "pasta", amount: 8, unit: "oz" }],
+      needs: [{ item: "pasta", amount: 4, unit: "oz" }],
       steps: ["Boil the pasta."]
     }))
   };
@@ -978,6 +1014,40 @@ async function runRouteChecks() {
   ok(
     celiacBlocked.statusCode === 502 && /gluten/.test(celiacBlocked.payload.failure?.message || ""),
     "wheat pasta in a celiac plan is rejected by the catalog tag, naming gluten"
+  );
+
+  // End to end: the model's implausible amount gets one correction attempt.
+  let bandCalls = 0;
+  const bandFixed = await callPlan(request, async (messages) => {
+    bandCalls++;
+    if (bandCalls === 1) {
+      return aiEnvelope({
+        ...validAiPlan,
+        dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "spinach", amount: 40, unit: "oz" }] }))
+      });
+    }
+    assert(/above the plausible/.test(messages.map((m) => String(m.content)).join(" ")));
+    return aiEnvelope({
+      ...validAiPlan,
+      dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "spinach", amount: 3, unit: "oz" }] }))
+    });
+  });
+  ok(bandCalls === 2 && bandFixed.statusCode === 200, "an implausible amount is sent back for correction");
+  ok(
+    bandFixed.payload.shoppingList[0].assumedWholePackage !== true && bandFixed.payload.shoppingList[0].required === 3,
+    "the corrected amount is used"
+  );
+
+  // A model that will not correct it still gets the student a usable plan.
+  const bandStubborn = await callPlan(request, async () => aiEnvelope({
+    ...validAiPlan,
+    dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "spinach", amount: 40, unit: "oz" }] }))
+  }));
+  ok(bandStubborn.statusCode === 200 && bandStubborn.payload.ok, "a stubbornly implausible amount does not fail the plan");
+  ok(
+    bandStubborn.payload.shoppingList[0].assumedWholePackage === true &&
+      /stated amount was not usable/.test(bandStubborn.payload.shoppingList[0].requiredLabel),
+    "the receipt says the stated amount was not usable rather than repeating it"
   );
 
   // A celiac who says "I have pasta" must be told their pasta was left out,
@@ -1038,7 +1108,7 @@ async function runRouteChecks() {
     peanutCalls++;
     return aiEnvelope({
       ...validAiPlan,
-      dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "peanut butter", amount: 4, unit: "oz" }] }))
+      dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "peanut butter", amount: 2, unit: "oz" }] }))
     });
   });
   ok(
@@ -1057,7 +1127,7 @@ async function runRouteChecks() {
       dinners: validAiPlan.dinners.map((dinner) => ({
         ...dinner,
         usesPantry: ["spinach", "rice"],
-        needs: [{ item: "black beans", amount: 15, unit: "oz" }],
+        needs: [{ item: "black beans", amount: 6, unit: "oz" }],
         steps: ["Microwave the spinach and rice, then stir in the black beans."]
       }))
     });

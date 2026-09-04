@@ -62,6 +62,10 @@
       "size": {
         "amount": 6,
         "unit": "each"
+      },
+      "perServing": {
+        "min": 0.5,
+        "max": 2
       }
     },
     {
@@ -92,6 +96,10 @@
       "size": {
         "amount": 15,
         "unit": "oz"
+      },
+      "perServing": {
+        "min": 2,
+        "max": 8
       }
     },
     {
@@ -124,6 +132,10 @@
       "size": {
         "amount": 20,
         "unit": "oz"
+      },
+      "perServing": {
+        "min": 1,
+        "max": 6
       }
     },
     {
@@ -156,6 +168,10 @@
       "size": {
         "amount": 8,
         "unit": "oz"
+      },
+      "perServing": {
+        "min": 0.1,
+        "max": 2
       }
     },
     {
@@ -186,6 +202,10 @@
       "size": {
         "amount": 2,
         "unit": "lb"
+      },
+      "perServing": {
+        "min": 1,
+        "max": 8
       }
     },
     {
@@ -218,6 +238,10 @@
       "size": {
         "amount": 8,
         "unit": "oz"
+      },
+      "perServing": {
+        "min": 0.5,
+        "max": 4
       }
     },
     {
@@ -251,6 +275,10 @@
       "size": {
         "amount": 1,
         "unit": "lb"
+      },
+      "perServing": {
+        "min": 3,
+        "max": 10
       }
     },
     {
@@ -263,6 +291,10 @@
       "size": {
         "amount": 18,
         "unit": "each"
+      },
+      "perServing": {
+        "min": 1,
+        "max": 4
       },
       "prices": {
         "aldi": {
@@ -313,6 +345,10 @@
       "size": {
         "amount": 1,
         "unit": "dozen"
+      },
+      "perServing": {
+        "min": 1,
+        "max": 4
       }
     },
     {
@@ -343,6 +379,10 @@
       "size": {
         "amount": 12,
         "unit": "oz"
+      },
+      "perServing": {
+        "min": 1,
+        "max": 6
       }
     },
     {
@@ -373,6 +413,10 @@
       "size": {
         "amount": 3,
         "unit": "each"
+      },
+      "perServing": {
+        "min": 0.05,
+        "max": 1
       }
     },
     {
@@ -385,6 +429,10 @@
       "size": {
         "amount": 18,
         "unit": "oz"
+      },
+      "perServing": {
+        "min": 1,
+        "max": 6
       },
       "prices": {
         "aldi": {
@@ -415,6 +463,10 @@
       "size": {
         "amount": 12,
         "unit": "oz"
+      },
+      "perServing": {
+        "min": 2,
+        "max": 6
       },
       "prices": {
         "aldi": {
@@ -466,6 +518,10 @@
       "size": {
         "amount": 1,
         "unit": "lb"
+      },
+      "perServing": {
+        "min": 3,
+        "max": 10
       }
     },
     {
@@ -496,6 +552,10 @@
       "size": {
         "amount": 24,
         "unit": "oz"
+      },
+      "perServing": {
+        "min": 2,
+        "max": 10
       }
     },
     {
@@ -528,6 +588,10 @@
       "size": {
         "amount": 1,
         "unit": "gallon"
+      },
+      "perServing": {
+        "min": 1,
+        "max": 16
       }
     },
     {
@@ -558,6 +622,10 @@
       "size": {
         "amount": 42,
         "unit": "oz"
+      },
+      "perServing": {
+        "min": 1,
+        "max": 4
       }
     },
     {
@@ -588,6 +656,10 @@
       "size": {
         "amount": 17,
         "unit": "fl oz"
+      },
+      "perServing": {
+        "min": 0.1,
+        "max": 2
       }
     },
     {
@@ -618,6 +690,10 @@
       "size": {
         "amount": 3,
         "unit": "lb"
+      },
+      "perServing": {
+        "min": 1,
+        "max": 8
       }
     },
     {
@@ -650,6 +726,10 @@
       "size": {
         "amount": 16,
         "unit": "oz"
+      },
+      "perServing": {
+        "min": 2,
+        "max": 6
       }
     },
     {
@@ -682,6 +762,10 @@
       "size": {
         "amount": 16,
         "unit": "oz"
+      },
+      "perServing": {
+        "min": 0.5,
+        "max": 3
       }
     },
     {
@@ -712,6 +796,10 @@
       "size": {
         "amount": 5,
         "unit": "lb"
+      },
+      "perServing": {
+        "min": 4,
+        "max": 16
       }
     },
     {
@@ -742,6 +830,10 @@
       "size": {
         "amount": 2,
         "unit": "lb"
+      },
+      "perServing": {
+        "min": 1.5,
+        "max": 6
       }
     },
     {
@@ -772,6 +864,10 @@
       "size": {
         "amount": 16,
         "unit": "oz"
+      },
+      "perServing": {
+        "min": 1,
+        "max": 6
       }
     },
     {
@@ -806,6 +902,10 @@
       "size": {
         "amount": 15,
         "unit": "fl oz"
+      },
+      "perServing": {
+        "min": 0.1,
+        "max": 2
       }
     },
     {
@@ -836,6 +936,10 @@
       "size": {
         "amount": 5,
         "unit": "oz"
+      },
+      "perServing": {
+        "min": 0.5,
+        "max": 4
       }
     },
     {
@@ -851,6 +955,10 @@
       "size": {
         "amount": 10,
         "unit": "fl oz"
+      },
+      "perServing": {
+        "min": 0.1,
+        "max": 2
       },
       "prices": {
         "frys": {
@@ -897,6 +1005,10 @@
       "size": {
         "amount": 10,
         "unit": "each"
+      },
+      "perServing": {
+        "min": 1,
+        "max": 4
       }
     },
     {
@@ -929,6 +1041,10 @@
       "size": {
         "amount": 32,
         "unit": "oz"
+      },
+      "perServing": {
+        "min": 2,
+        "max": 12
       }
     }
   ],
@@ -941,5 +1057,6 @@
   },
   "zip": "85281",
   "tagNote": "tags mark what an item CONTAINS for diet enforcement (data/diet-rules.json excludesTags). Plain oats are a gluten-free grain, so they carry no gluten tag; a celiac who needs certified oats should say so. codes.foodon is an EBI FoodOn ontology id, verified by exact label match — null where the ontology had no unambiguous match.",
-  "sizeNote": "size is the canonical pack quantity, read off the pack label. A recipe requirement must use a unit from the same family (count / mass / volume); the server converts within a family and refuses across families rather than guessing a density."
+  "sizeNote": "size is the canonical pack quantity, read off the pack label. A recipe requirement must use a unit from the same family (count / mass / volume); the server converts within a family and refuses across families rather than guessing a density.",
+  "perServingNote": "perServing is the plausible amount for ONE serving, in the same family base unit as size (count, oz, or fl oz). These are judgement calls, not measured values: they catch order-of-magnitude mistakes, not portion preferences, so they are deliberately wide. An amount outside its band is sent back to the model once; if it comes back wrong again the plan buys one package and says the amount was not usable."
 }
