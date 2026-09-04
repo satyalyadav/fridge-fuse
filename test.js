@@ -84,6 +84,7 @@ ok(appJs.includes("/api/plan"), "app.js calls /api/plan");
 ok(!/catalogOnly\s*:\s*true/.test(appJs), "frontend planning requests do not bypass the text model");
 ok(!/\b(?:localPlan|RECIPES|catalogOnly|FALLBACK_PACK_PRICE|FALLBACK_STORE|estimatedLeftover)\b/.test(serverSrc), "server has no local recipe planner or demo price fallback");
 ok(!recipeSourcesJson.includes("FridgeFuse Demo Catalog"), "approved sources contain no demo catalog entry");
+ok(!recipeSourcesJson.toLowerCase().includes("github.com"), "approved recipe sources do not link to GitHub");
 ok(/VOYAGER_KEY[\s\S]*required/i.test(fs.readFileSync(".env.example", "utf8")), "environment guidance requires the Voyager key");
 const buildPlanSource = appJs.replaceAll("\r\n", "\n").match(/async function buildPlan[\s\S]*?\n}\n\nfunction formatMoney/)?.[0] || "";
 const planAssignment = buildPlanSource.indexOf("state.plan =");
@@ -105,6 +106,37 @@ ok(
 ok(
   appJs.includes("meal.sourceUrl") && appJs.includes("meal.source"),
   "meal cards expose approved recipe citations"
+);
+const recipeSourceHandling = appJs.match(/function isLegacyRecipeCitation[\s\S]*?function recordMessage/)?.[0] || "";
+ok(
+  /function isLegacyRecipeCitation/.test(recipeSourceHandling) &&
+    /function sanitizeStoredPlan/.test(recipeSourceHandling) &&
+    /plan:\s*sanitizeStoredPlan\(stored\.plan/.test(appJs) &&
+    /sourceUnavailable/.test(recipeSourceHandling),
+  "legacy saved recipe citations are removed instead of linking to the project repository"
+);
+
+const grocerySummaryBlock = appJs.match(/const best = options\[0\];[\s\S]*?const cards =/)?.[0] || "";
+ok(
+  /const completeOptions/.test(grocerySummaryBlock) &&
+    /const priciest/.test(grocerySummaryBlock) &&
+    /priciest\.distanceMi/.test(grocerySummaryBlock),
+  "grocery savings summary uses the priciest complete store's distance"
+);
+const locationFailureBlock = appJs.match(/function requestLocation\([\s\S]*?async function compareStores/)?.[0] || "";
+ok(
+  /const hadPreviousLocation = Boolean\(state\.location\)/.test(locationFailureBlock) &&
+    /const reportLocationFailure/.test(locationFailureBlock) &&
+    /reportLocationFailure\("This browser has no location support\."\)/.test(locationFailureBlock) &&
+    /reportLocationFailure\("Location needs HTTPS or localhost\."\)/.test(locationFailureBlock) &&
+    /Keeping your previous location/.test(locationFailureBlock),
+  "failed location refreshes distinguish a retained location from the fallback origin"
+);
+const postalLookupBlock = appJs.match(/async function resolveProfileZip[\s\S]*?function requestLocation/)?.[0] || "";
+ok(
+  /state\.allowPlaceLookup === false/.test(postalLookupBlock) &&
+    /pendingZipLookup = null/.test(postalLookupBlock),
+  "declined place lookup consent is respected for later ZIP searches"
 );
 
 // ---------- grocery optimizer ----------

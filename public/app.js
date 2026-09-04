@@ -55,6 +55,28 @@ function addExclusion(title) {
   state.excludedTitles = [...new Set([...state.excludedTitles, title])].slice(-MAX_EXCLUDED);
 }
 
+function isLegacyRecipeCitation(dinner) {
+  if (String(dinner?.source || "").trim() === "FridgeFuse Demo Catalog") return true;
+  try {
+    const hostname = new URL(String(dinner?.sourceUrl || "")).hostname.toLowerCase();
+    return hostname === "github.com" || hostname.endsWith(".github.com");
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeStoredPlan(plan) {
+  if (!plan || !Array.isArray(plan.dinners)) return plan;
+  let changed = false;
+  const dinners = plan.dinners.map((dinner) => {
+    if (!isLegacyRecipeCitation(dinner)) return dinner;
+    changed = true;
+    const { source, sourceUrl, ...rest } = dinner;
+    return { ...rest, sourceUnavailable: true };
+  });
+  return changed ? { ...plan, dinners } : plan;
+}
+
 // structuredClone is missing on Safari < 15.4 and other older browsers, and the
 // whole app runs through it on load — fall back rather than fail to start.
 const clone = typeof structuredClone === "function"
@@ -77,6 +99,7 @@ function loadState() {
         ...(stored.profile || {})
       },
       constraints: { ...DEFAULT_STATE.constraints, ...(stored.constraints || {}) },
+      plan: sanitizeStoredPlan(stored.plan || null),
       pantry: Array.isArray(stored.pantry) ? stored.pantry : [],
       excludedTitles: Array.isArray(stored.excludedTitles) ? stored.excludedTitles.slice(-MAX_EXCLUDED) : [],
       messages: Array.isArray(stored.messages) ? stored.messages.slice(-MAX_MESSAGES) : [],
@@ -485,7 +508,9 @@ function renderPlan() {
         ? `Uses ${pantryUsed.join(", ")} from your pantry`
         : "Built from the same grocery run";
     const steps = (meal.steps || []).map((step) => `<li>${escapeHtml(step)}</li>`).join("");
-    const recipeSource = meal.source && meal.sourceUrl
+    const recipeSource = meal.sourceUnavailable
+      ? `<span class="meal-source unavailable">Recipe source unavailable — regenerate this plan</span>`
+      : meal.source && meal.sourceUrl && !isLegacyRecipeCitation(meal)
       ? `<a class="meal-source" href="${escapeHtml(meal.sourceUrl)}" target="_blank" rel="noopener noreferrer">Recipe source: ${escapeHtml(meal.source)}</a>`
       : "";
     return `
@@ -1094,6 +1119,11 @@ async function resolveProfileZip() {
     const result = await response.json();
 
     if (result.needsConsent) {
+      if (state.allowPlaceLookup === false) {
+        pendingZipLookup = null;
+        toast(`Kept local. ZIP ${zip} needs a place lookup; use ZIP ${originZip || "the catalog area"} or reset the demo to enable it.`, "error");
+        return;
+      }
       pendingZipLookup = zip;
       $("lookupConsent").hidden = false;
       toast(result.note || `ZIP ${zip} needs a lookup outside this app.`);
@@ -1123,14 +1153,21 @@ async function resolveProfileZip() {
 }
 
 function requestLocation() {
+  const hadPreviousLocation = Boolean(state.location);
+  const reportLocationFailure = (message) => {
+    const suffix = hadPreviousLocation
+      ? " Keeping your previous location."
+      : ` Distances will use ${originLabel} instead.`;
+    toast(`${message}${suffix}`, "error");
+  };
   if (!navigator.geolocation) {
-    toast(`This browser has no location support. Distances will use ${originLabel}.`, "error");
+    reportLocationFailure("This browser has no location support.");
     return;
   }
   // Every browser blocks geolocation outside a secure context, so the LAN-IP
   // demo path (http://192.168.x.x:3000) fails here no matter the permission.
   if (window.isSecureContext === false) {
-    toast(`Location needs HTTPS or localhost. On a phone over WiFi, distances use ${originLabel}.`, "error");
+    reportLocationFailure("Location needs HTTPS or localhost.");
     return;
   }
   const button = $("useLocationButton");
@@ -1163,7 +1200,7 @@ function requestLocation() {
         : error.code === error.TIMEOUT
           ? "Locating timed out."
           : "Location is unavailable.";
-      toast(`${reason} Distances will use ${originLabel} instead.`, "error");
+      reportLocationFailure(reason);
     },
     { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 }
   );
@@ -1221,9 +1258,13 @@ function renderGroceryResults(result) {
 
   const best = options[0];
   const savings = Number(result.savingsVsWorst) || 0;
+  const completeOptions = options.filter((option) => option.complete);
+  const priciest = completeOptions[completeOptions.length - 1] || options[options.length - 1];
   const summary = savings > 0
-    ? `${titleCase(best.name)} on ${best.area.replace(/^.*—\s*/, "")} fills the whole list for ${formatMoney(best.subtotal)} — ${formatMoney(savings)} less than the priciest nearby option, ${best.distanceMi} miles away.`
-    : `${titleCase(best.name)} fills the list for ${formatMoney(best.subtotal)}, ${best.distanceMi} miles away.`;
+    ? `${titleCase(best.name)} on ${best.area.replace(/^.*—\s*/, "")} fills the whole list for ${formatMoney(best.subtotal)} — ${formatMoney(savings)} less than the priciest nearby option, ${priciest.distanceMi} miles away.`
+    : best.complete
+      ? `${titleCase(best.name)} fills the list for ${formatMoney(best.subtotal)}, ${best.distanceMi} miles away.`
+      : `${titleCase(best.name)} covers ${best.itemCount} of ${(result.requested || []).length} items for ${formatMoney(best.subtotal)}, ${best.distanceMi} miles away.`;
 
   const cards = options.map((option, index) => {
     const rows = (option.lineItems || []).map((line) => `
