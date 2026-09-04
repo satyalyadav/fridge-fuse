@@ -660,6 +660,22 @@ ok(/offLimitsPantry/.test(appJs) && /I left \$\{offLimits\.join/.test(appJs), "t
 ok(/off-limits/.test(appJs) && /does not fit/.test(appJs), "the pantry marks an item the current diet rules out");
 ok(fs.readFileSync("public/styles.css", "utf8").includes(".pantry-item.off-limits"), "an off-limits pantry item is styled as excluded");
 
+// ---------- logo assets ----------
+for (const asset of ["logo-source.jpg", "logo-mark.png", "logo-mark-gold.png",
+                     "logo-lockup.png", "logo-lockup-light.png", "favicon-32.png", "apple-touch-icon.png"]) {
+  ok(fs.existsSync(`public/${asset}`), `public/${asset} is served with the app`);
+}
+// The gold mark sits on the maroon bar and the cream lockup on the maroon hero:
+// using either the wrong way round would put maroon on maroon.
+ok(/<img class="brand-mark" src="\/logo-mark-gold\.png"/.test(html), "the top bar carries the gold mark");
+ok(/<img class="welcome-logo" src="\/logo-lockup-light\.png"/.test(html), "the maroon hero carries the cream lockup");
+ok(/rel="icon"[^>]*favicon-32\.png/.test(html) && /apple-touch-icon\.png/.test(html), "the tab and home-screen icons are declared");
+ok(/theme-color" content="#8c1d40"/i.test(html), "the browser chrome matches the maroon bar");
+// Every derived asset comes from one drawing, so they cannot drift apart.
+ok(fs.existsSync("scripts/build-logo-assets.py"), "the assets are reproducible from the source artwork");
+const logoBytes = ["logo-mark-gold.png", "logo-lockup-light.png"].map((f) => fs.statSync(`public/${f}`).size);
+ok(logoBytes.every((size) => size < 60 * 1024), `logo assets stay small (${logoBytes.map((b) => `${Math.round(b / 1024)}KB`).join(", ")})`);
+
 // ---------- ASU palette ----------
 const css = fs.readFileSync("public/styles.css", "utf8");
 ok(/--maroon:\s*#8c1d40/i.test(css) && /--gold:\s*#ffc627/i.test(css), "the palette is built on ASU maroon and gold");
