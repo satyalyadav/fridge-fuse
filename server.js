@@ -271,6 +271,13 @@ const DIET_RULES = DIET_RULES_DATA.rules;
 // rules are checked against each other at startup rather than at dinner time.
 const DIET_TAGS = new Set(DIET_RULES.flatMap((rule) => rule.excludesTags));
 for (const item of PRICES.items) {
+  if (item.equivalents !== undefined) {
+    for (const [unit, weight] of Object.entries(item.equivalents)) {
+      if (!Number.isFinite(Number(weight)) || Number(weight) <= 0) {
+        throw new Error(`price catalog item ${item.name} has an unusable equivalent for "${unit}"`);
+      }
+    }
+  }
   if (!Array.isArray(item.tags)) {
     throw new Error(`price catalog item ${item.name} must declare a tags array (use [] when it contains none)`);
   }
@@ -913,6 +920,20 @@ function amountImplausibility(catalogItem, base, servings) {
   return null;
 }
 
+// "1 potato", "1 can", "2 tbsp of butter": the units people cook in, converted
+// through a per-item equivalence the catalog states outright. Approximate by
+// design, and used only to decide how much to buy.
+function convertViaEquivalents(catalogItem, amount, unit, pack) {
+  const table = catalogItem?.equivalents;
+  if (!table) return null;
+  const key = normalizeUnit(unit);
+  // "slices" must find "slice" without also turning it into "slic".
+  const candidates = [key, key.replace(/s$/, ""), key.replace(/es$/, "")];
+  const factor = Number(candidates.map((name) => table[name]).find((value) => value !== undefined));
+  if (!Number.isFinite(factor) || factor <= 0) return null;
+  return { family: pack.family, base: amount * factor };
+}
+
 // One dinner's demand for one ingredient: { item, amount, unit }.
 //
 // An ingredient the catalog does not sell is still a hard error — pricing it
@@ -942,21 +963,25 @@ function normalizeRequirement(raw, { servings = 1, strict = false } = {}) {
   const amount = Number(raw.amount);
   if (!Number.isFinite(amount) || amount <= 0) return wholePackage();
 
-  const required = toBaseAmount(amount, raw.unit);
-  // An unreadable unit, or one from the wrong family: a cup of rice cannot be
-  // converted without a density, so buy the package rather than guess at it.
-  if (!required || required.family !== pack.family) return wholePackage();
+  const required = toBaseAmount(amount, raw.unit) || null;
+  // People cook by the piece and the spoon but shops sell by weight. Where the
+  // catalog states what one of a thing weighs, use it; that is a reviewed number
+  // per ingredient, not a guessed universal density. Where it does not, buy the
+  // package rather than invent a conversion.
+  const measured = convertViaEquivalents(catalogItem, amount, raw.unit, pack)
+    || (required && required.family === pack.family ? required : null);
+  if (!measured) return wholePackage();
 
   // An amount that is dimensionally fine but the wrong size by an order of
   // magnitude: the model gets one chance to correct it, then the plan falls
   // back to a package rather than shopping for a number nobody believes.
-  const implausible = amountImplausibility(catalogItem, required.base, servings);
+  const implausible = amountImplausibility(catalogItem, measured.base, servings);
   if (implausible) {
     if (strict) throw new Error(implausible);
     return { ...wholePackage(), assumedReason: implausible };
   }
 
-  return { name: catalogItem.name, base: required.base, family: required.family, amount, unit: normalizeUnit(raw.unit), assumed: false };
+  return { name: catalogItem.name, base: measured.base, family: measured.family, amount, unit: normalizeUnit(raw.unit), assumed: false };
 }
 
 // A swap has to be enforced, not requested. The prompt lets a dinner's title
@@ -1618,7 +1643,7 @@ Object.assign(module.exports, {
   catalogTagsFor, findCatalogTagConflict, findIngredientConflict,
   DIET_OPTIONS, EQUIPMENT_OPTIONS, parseDietSelections, blockedIngredientsForDiet,
   unitInfo, toBaseAmount, packSizeOf, normalizeRequirement, groundShoppingPlan,
-  servingBandOf, amountImplausibility, servingsOf, MAX_PACKAGES_PER_DINNER,
+  servingBandOf, amountImplausibility, servingsOf, MAX_PACKAGES_PER_DINNER, convertViaEquivalents,
   findRepeatedExclusion
 });
 
