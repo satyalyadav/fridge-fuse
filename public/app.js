@@ -94,6 +94,18 @@ function loadState() {
   try {
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY));
     if (!stored) return clone(DEFAULT_STATE);
+    return normaliseState(stored);
+  } catch {
+    return clone(DEFAULT_STATE);
+  }
+}
+
+// Everything that reaches state goes through here — what the browser saved last
+// time, and any file a student restores. A truncated, edited or hostile file
+// therefore cannot put a shape in state that the renderers do not expect.
+function normaliseState(stored) {
+  if (!stored || typeof stored !== "object" || Array.isArray(stored)) return clone(DEFAULT_STATE);
+  {
     return {
       ...clone(DEFAULT_STATE),
       ...stored,
@@ -115,8 +127,59 @@ function loadState() {
       // Anything other than a stored true/false means the question is still open.
       allowPlaceLookup: typeof stored.allowPlaceLookup === "boolean" ? stored.allowPlaceLookup : null
     };
-  } catch {
-    return clone(DEFAULT_STATE);
+  }
+}
+
+// Export and restore. Accounts would sync this same object, so the file is the
+// state itself under a small envelope rather than a separate format that would
+// have to be kept in step.
+const EXPORT_FORMAT = "fridgefuse.kitchen";
+const EXPORT_VERSION = 1;
+
+function exportKitchen() {
+  const payload = {
+    format: EXPORT_FORMAT,
+    version: EXPORT_VERSION,
+    exportedAt: new Date().toISOString(),
+    state
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const stamp = new Date().toISOString().slice(0, 10);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `fridgefuse-${stamp}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // Revoking immediately can cancel the download in some browsers.
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  toast("Kitchen downloaded. Keep the file somewhere you can find it.");
+}
+
+async function importKitchen(file) {
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const payload = JSON.parse(text);
+    const incoming = payload?.format === EXPORT_FORMAT ? payload.state : payload;
+    if (!incoming || typeof incoming !== "object") {
+      throw new Error("That file is not a FridgeFuse kitchen.");
+    }
+    if (payload?.format === EXPORT_FORMAT && Number(payload.version) > EXPORT_VERSION) {
+      throw new Error("That file came from a newer version of FridgeFuse.");
+    }
+    const restored = normaliseState(incoming);
+    const summary = `${restored.pantry.length} pantry items, ${restored.savedRecipes.length} saved recipes`;
+    if (!window.confirm(`Restore this kitchen? It replaces what is on this device with ${summary}.`)) return;
+
+    state = restored;
+    saveState();
+    // Reload rather than re-render: the message history and every panel are
+    // rebuilt from scratch, with no chance of a half-restored screen.
+    window.location.reload();
+  } catch (error) {
+    toast(error.message || "That file could not be read.", "error");
   }
 }
 
@@ -1222,6 +1285,14 @@ async function handlePhoto(file) {
 }
 
 $("profileButton").addEventListener("click", openProfile);
+$("exportKitchenButton").addEventListener("click", exportKitchen);
+$("importKitchenButton").addEventListener("click", () => $("importKitchenInput").click());
+$("importKitchenInput").addEventListener("change", (event) => {
+  const [file] = event.target.files || [];
+  importKitchen(file);
+  // Let the same file be chosen twice in a row.
+  event.target.value = "";
+});
 
 document
   .querySelectorAll("[data-close-profile]")

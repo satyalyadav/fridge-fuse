@@ -660,6 +660,14 @@ ok(/offLimitsPantry/.test(appJs) && /I left \$\{offLimits\.join/.test(appJs), "t
 ok(/off-limits/.test(appJs) && /does not fit/.test(appJs), "the pantry marks an item the current diet rules out");
 ok(fs.readFileSync("public/styles.css", "utf8").includes(".pantry-item.off-limits"), "an off-limits pantry item is styled as excluded");
 
+// ---------- export and restore ----------
+ok(html.includes('id="exportKitchenButton"') && html.includes('id="importKitchenButton"'), "the profile offers download and restore");
+ok(/accept="application\/json,\.json"/.test(html), "restore only offers JSON files");
+ok(/function normaliseState\(/.test(appJs) && /return normaliseState\(stored\);/.test(appJs), "one validator guards both the stored state and a restored file");
+ok(/format: EXPORT_FORMAT/.test(appJs) && /payload\?\.format === EXPORT_FORMAT/.test(appJs), "the file carries a format marker that restore checks");
+ok(/window\.confirm\(`Restore this kitchen\?/.test(appJs), "restoring asks before replacing what is on the device");
+ok(/Number\(payload\.version\) > EXPORT_VERSION/.test(appJs), "a file from a newer version is refused rather than half-read");
+
 // ---------- saved recipes ----------
 // A dinner used to vanish the moment it was swapped or the plan rebuilt.
 ok(html.includes('id="savedRecipes"') && html.includes('id="savedRecipeList"'), "the rail has a saved-recipes section");
@@ -762,17 +770,18 @@ function runClient({ planPayload }) {
   vm.runInContext(appJs, sandbox, { filename: "app.js" });
   sandbox.addAssistantMessage = (text) => said.push(String(text));
   sandbox.toast = (text) => said.push(`TOAST:${text}`);
-  return sandbox.buildPlan("build me a plan").then(() => said);
+  return sandbox.buildPlan("build me a plan").then(() => ({ said, sandbox }));
 }
 
 const clientSaid = [];
+const clientSandbox = [];
 runClient({
   planPayload: {
     ok: true,
     dinners: [{ title: "T", usesPantry: [], needs: [], steps: ["step"], source: "s", sourceUrl: "u", sourceRecipe: "r" }],
     shoppingList: [], leftovers: [], totalCost: 3, offLimitsPantry: ["pasta"], dietRules: ["gluten-free"],
   },
-}).then((said) => clientSaid.push(...said));
+}).then(({ said, sandbox }) => { clientSaid.push(...said); clientSandbox.push(sandbox); });
 
 function aiEnvelope(plan) {
   return {
@@ -1353,6 +1362,32 @@ async function runRouteChecks() {
     clientSaid.some((line) => /I left pasta out of the cooking/.test(line)),
     "the off-limits explanation is produced by the real code path, not just present in the source"
   );
+
+  // ---------- export and restore ----------
+  // The validator that guards what the browser stored also guards a restored
+  // file, so it is worth running the real one against files nobody would write
+  // on purpose.
+  const client = clientSandbox[0];
+  ok(typeof client.normaliseState === "function", "the state validator is reachable as one shared function");
+  for (const [label, input] of [
+    ["null", null],
+    ["a string", "not a kitchen"],
+    ["an array", [1, 2, 3]],
+    ["wrong types throughout", { pantry: "eggs", messages: 7, savedRecipes: { a: 1 }, constraints: null, plan: "yesterday" }],
+  ]) {
+    const restored = client.normaliseState(input);
+    ok(
+      Array.isArray(restored.pantry) && Array.isArray(restored.savedRecipes) &&
+        Array.isArray(restored.messages) && restored.constraints && typeof restored.constraints === "object",
+      `restoring ${label} yields a usable state instead of a broken screen`
+    );
+  }
+  const bounded = client.normaliseState({
+    savedRecipes: Array.from({ length: 500 }, (_, i) => ({ title: `r${i}` })),
+    messages: Array.from({ length: 500 }, () => ({ role: "user", text: "hi" })),
+  });
+  ok(bounded.savedRecipes.length <= 40 && bounded.messages.length <= 30, "a restored file cannot grow the stored state without limit");
+  ok(client.normaliseState({ location: { lat: "x", lng: 4 } }).location === null, "a restored location with no usable coordinates is dropped");
 
   await runGeoConsentChecks();
 

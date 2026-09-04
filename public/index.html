@@ -433,6 +433,16 @@
           </fieldset>
 
 
+          <div class="profile-backup">
+            <h3>Your kitchen data</h3>
+            <p>Everything is saved on this device only. Download it to keep a copy, or move it to another browser or phone.</p>
+            <div class="profile-backup-actions">
+              <button type="button" class="ghost-button" id="exportKitchenButton">Download my kitchen</button>
+              <button type="button" class="ghost-button" id="importKitchenButton">Restore from a file</button>
+            </div>
+            <input class="sr-only" id="importKitchenInput" type="file" accept="application/json,.json" tabindex="-1" aria-hidden="true">
+          </div>
+
           <div class="profile-actions">
             <button type="button" class="secondary-button" data-close-profile>
               Cancel

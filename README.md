@@ -204,6 +204,25 @@ than silently handing back the same dinner. More microwave-only records in
   server from starting. Recipe pages are curated ahead of time rather than
   fetched during each request.
 
+## Your kitchen data
+
+Everything a student builds up — pantry, plan, saved recipes, preferences, Shop
+list — is saved in that browser under one key, with no account and nothing
+uploaded. The profile drawer can **download it as a JSON file** and **restore one
+back**, so the data survives a cleared browser and can be moved to another device
+by hand.
+
+Restoring goes through the same validator as the stored state (`normaliseState`),
+so a truncated, hand-edited or hostile file cannot put a shape into the app that
+the renderers do not expect: wrong types fall back to defaults, lists are bounded,
+and a location with no usable coordinates is dropped. The file carries a format
+marker and a version, and a file from a newer version is refused rather than
+half-read. Restoring asks before it replaces what is on the device.
+
+The exported file is the state object itself under a small envelope, so if
+accounts are added later they sync the same shape rather than a second format
+that would have to be kept in step.
+
 ## Recipes as typed requirements
 
 A dinner requires *quantities of ingredients*; a store sells *packages*. The plan

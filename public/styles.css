@@ -1397,6 +1397,18 @@ body[data-welcome-open="true"] { overflow: hidden; }
 .saved-recipe-actions button:first-child:hover { background: var(--maroon-wash); }
 .meal-actions button[aria-pressed="true"] { border-color: var(--maroon); background: var(--maroon-wash); color: var(--maroon); }
 
+.profile-backup {
+  margin: 22px 0 4px;
+  padding: 15px 16px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--enamel);
+}
+.profile-backup h3 { margin: 0 0 5px; font-family: var(--display); font-size: 15px; }
+.profile-backup p { margin: 0 0 12px; color: var(--ink-soft); font-size: 12.5px; line-height: 1.5; }
+.profile-backup-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.profile-backup-actions button { flex: 1 1 auto; }
+
 .mobile-nav { display: none; }
 
 .toast-region {
