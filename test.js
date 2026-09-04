@@ -659,6 +659,37 @@ ok(/swapUnavailable/.test(appJs), "the client tells the student when no other re
 ok(/offLimitsPantry/.test(appJs) && /I left \$\{offLimits\.join/.test(appJs), "the planner tells the student which pantry items it left out");
 ok(/off-limits/.test(appJs) && /does not fit/.test(appJs), "the pantry marks an item the current diet rules out");
 ok(fs.readFileSync("public/styles.css", "utf8").includes(".pantry-item.off-limits"), "an off-limits pantry item is styled as excluded");
+
+// ---------- ASU palette ----------
+const css = fs.readFileSync("public/styles.css", "utf8");
+ok(/--maroon:\s*#8c1d40/i.test(css) && /--gold:\s*#ffc627/i.test(css), "the palette is built on ASU maroon and gold");
+ok(!/--spinach|--tape\b|--cold-blue|--tomato/.test(css), "the old food-themed colour tokens are gone");
+// Contrast is the reason gold is never text on white and maroon is never text on maroon.
+const relLum = (hex) => {
+  const parts = [1, 3, 5].map((i) => parseInt(hex.substr(i, 2), 16) / 255)
+    .map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * parts[0] + 0.7152 * parts[1] + 0.0722 * parts[2];
+};
+const contrast = (a, b) => {
+  const [x, y] = [relLum(a), relLum(b)];
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+};
+for (const [fg, bg, what] of [
+  ["#ffffff", "#8c1d40", "white on the maroon bar"],
+  ["#ffc627", "#8c1d40", "gold on the maroon bar"],
+  ["#191919", "#ffc627", "ink on a gold band"],
+  ["#8c1d40", "#ffffff", "maroon on white"],
+]) {
+  ok(contrast(fg, bg) >= 4.5, `${what} meets AA contrast (${contrast(fg, bg).toFixed(2)}:1)`);
+}
+const strayHues = [...css.matchAll(/#[0-9a-fA-F]{6}/g)].map((m) => m[0].toLowerCase())
+  .filter((hex) => {
+    const r = parseInt(hex.substr(1, 2), 16), g = parseInt(hex.substr(3, 2), 16), b = parseInt(hex.substr(5, 2), 16);
+    // A green cast — more green than both red and blue — is what the old palette
+    // was built on and what should no longer appear anywhere.
+    return g > r + 8 && g > b + 8;
+  });
+ok(strayHues.length === 0, `no colour keeps the old green cast${strayHues.length ? ` (${[...new Set(strayHues)].join(", ")})` : ""}`);
 ok(/failure\?\.message/.test(buildPlanSource), "the planner surfaces the server's refusal reason, not just a status code");
 
 // ---------- the client actually runs ----------
