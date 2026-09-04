@@ -482,6 +482,11 @@ async function buildPlan(request = "") {
     if (!result) throw new Error("The planner did not return a plan");
     if (!result.ok && !result.dinners) throw new Error(result.failure?.message || "The planner did not return a plan");
 
+    // Leaving food out silently is what makes a diet feature untrustworthy: the
+    // student can see the item sitting in their pantry and cannot tell whether
+    // the planner respected it or forgot it.
+    const offLimits = Array.isArray(result.offLimitsPantry) ? result.offLimitsPantry : [];
+
     state.plan = {
       ...result,
       constraints: structuredClone(state.constraints)
@@ -505,10 +510,6 @@ async function buildPlan(request = "") {
       : `The cheapest full-package version is ${formatMoney(result.totalCost)}, which is over your ${formatMoney(state.constraints.budget)} limit.`;
     const soonText = soon.length ? ` I put ${soon.join(" and ")} first so it gets used.` : "";
     const dietText = state.constraints.diet ? ` Every dinner is ${state.constraints.diet}.` : "";
-    // Leaving food out silently is what makes a diet feature untrustworthy: the
-    // student can see the item sitting in their pantry and cannot tell whether
-    // the planner respected it or forgot it.
-    const offLimits = Array.isArray(result.offLimitsPantry) ? result.offLimitsPantry : [];
     const offLimitsText = offLimits.length
       ? ` I left ${offLimits.join(" and ")} out of the cooking — ${offLimits.length === 1 ? "it does not" : "they do not"} fit ${state.constraints.diet}. If yours is a safe version, add it under its own name (for example "gluten free pasta") and I will use it.`
       : "";
