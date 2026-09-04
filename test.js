@@ -7,7 +7,7 @@ const {
   cheapestPack, findPrice, extractJson, PRICES,
   DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL,
   resolveDataPath, RECIPE_SOURCES, APPROVED_RECIPES, isApprovedRecipeCitation, buildPlanSystemPrompt,
-  handlePlanRequest, handleVisionRequest, normalizeVisionResult, handleGeoPostal,
+  handlePlanRequest, handleVisionRequest, normalizeVisionResult,
   haversineMiles, isValidCoordinate, resolveCatalogItem, optimizeCart,
   describeLocation, handleGeoDescribe,
   STORE_DATA, BRANCHES, DEFAULT_ORIGIN, ITEM_ALIASES,
@@ -391,12 +391,6 @@ ok(
     /Keeping your previous location/.test(locationFailureBlock),
   "failed location refreshes distinguish a retained location from the fallback origin"
 );
-const postalLookupBlock = appJs.match(/async function resolveProfileZip[\s\S]*?function requestLocation/)?.[0] || "";
-ok(
-  /state\.allowPlaceLookup === false/.test(postalLookupBlock) &&
-    /pendingZipLookup = null/.test(postalLookupBlock),
-  "declined place lookup consent is respected for later ZIP searches"
-);
 ok(
   html.includes('id="resetDemoButton"') &&
     html.includes('id="resetMobileButton"') &&
@@ -623,54 +617,11 @@ async function runGeoConsentChecks() {
   ok((await callGeo({ lat: 999, lng: "x" }, fakeGeocode)).status === 400, "invalid coordinates are rejected with 400");
 }
 
-// The profile's saved ZIP is the non-geolocation way into the Shop tab.
-async function runPostalCodeChecks() {
-  async function callPostal(body, geocode) {
-    let payload = null;
-    let status = 200;
-    const res = {
-      status(code) { status = code; return this; },
-      json(value) { payload = value; return this; },
-    };
-    await handleGeoPostal({ body }, res, geocode ? { geocode } : undefined);
-    return { status, payload };
-  }
-
-  let postalCalls = 0;
-  const fakePostal = async (zip) => {
-    postalCalls++;
-    return { ok: true, lat: 41.88, lng: -87.63, label: `ZIP ${zip}`, source: "nominatim", lookupUsed: true };
-  };
-
-  // The catalog's own ZIP must resolve with no third-party call at all.
-  const local = await callPostal({ postalCode: STORE_DATA.zip }, fakePostal);
-  ok(local.payload.resolved && local.payload.lat === DEFAULT_ORIGIN.lat, "the catalog ZIP resolves to the store-data origin");
-  ok(postalCalls === 0, "the catalog ZIP never triggers a third-party lookup");
-  ok(local.payload.source === "local-store-data" && local.payload.lookupUsed === false, "the catalog ZIP reports itself as locally resolved");
-
-  const foreignNoConsent = await callPostal({ postalCode: "60601" }, fakePostal);
-  ok(foreignNoConsent.payload.needsConsent === true && postalCalls === 0, "a ZIP outside the catalog asks for consent before any lookup");
-  ok(foreignNoConsent.payload.resolved === false, "an unconsented ZIP is not silently resolved");
-
-  for (const value of [false, "true", 1, null]) {
-    await callPostal({ postalCode: "60601", allowLookup: value }, fakePostal);
-  }
-  ok(postalCalls === 0, "only a literal true unlocks the ZIP lookup");
-
-  const consented = await callPostal({ postalCode: "60601", allowLookup: true }, fakePostal);
-  ok(postalCalls === 1 && consented.payload.resolved === true, "explicit consent resolves a ZIP outside the catalog");
-
-  for (const bad of ["", "abc", "1234", "123456", "8528a", null, undefined]) {
-    ok((await callPostal({ postalCode: bad }, fakePostal)).status === 400, `malformed ZIP ${JSON.stringify(bad)} is rejected with 400`);
-  }
-
-  const failed = await callPostal({ postalCode: "60601", allowLookup: true }, async () => ({ ok: false, failure: { message: "down" } }));
-  ok(failed.payload.ok === false && failed.payload.resolved === false, "a failed ZIP lookup reports rather than inventing a location");
-
-  ok(/useProfileZipButton/.test(appJs) && html.includes('id="useProfileZipButton"'), "the Shop tab exposes the saved ZIP as a location source");
-  ok(/allowLookup:\s*state\.allowPlaceLookup === true/.test(appJs), "the client never asserts consent it does not have");
-}
-
+// FridgeFuse is for ASU students in the Phoenix metro, so there is no ZIP to
+// ask for: distances run from the catalog origin unless a live fix is shared.
+ok(!/postalCode|welcomeZip|profilePostalCode|useProfileZipButton/.test(appJs), "the client asks for no ZIP code");
+ok(!/ZIP code/i.test(html), "the profile and onboarding forms have no ZIP field");
+ok(!/geo\/postal/.test(appJs) && !/geo\/postal/.test(serverSrc), "the postal lookup endpoint is gone with its only caller");
 ok(/allowPlaceLookup:\s*null/.test(appJs), "the client defaults to never sending coordinates");
 ok(html.includes('id="lookupConsent"'), "the consent disclaimer exists in the markup");
 ok(/nominatim/i.test(serverSrc) && !/nominatim/i.test(appJs), "the third-party call is proxied by the server, not the browser");
@@ -1346,7 +1297,6 @@ async function runRouteChecks() {
   );
 
   await runGeoConsentChecks();
-  await runPostalCodeChecks();
 
   // With planning fully AI-driven and no local recipe filter, a diet
   // restriction only means something if it reaches the model as a concrete

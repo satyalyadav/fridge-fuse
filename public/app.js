@@ -23,7 +23,6 @@ const ALIASES = {
 const DEFAULT_STATE = {
   profile: {
     displayName: "",
-    postalCode: "",
     // false until the first-run wizard is completed once.
     onboarded: false
   },
@@ -858,7 +857,6 @@ async function openWelcome() {
   welcomeIndex = 0;
 
   $("welcomeName").value = state.profile?.displayName || "";
-  $("welcomeZip").value = state.profile?.postalCode || "";
 
   const budget = clampNumber(state.constraints.budget, PREFERENCES.limits.budget, 20);
   $("welcomeBudget").value = budget;
@@ -901,7 +899,6 @@ function commitWelcome({ markOnboarded }) {
   state.profile = {
     ...state.profile,
     displayName: $("welcomeName").value.trim().slice(0, 40),
-    postalCode: $("welcomeZip").value.trim(),
     onboarded: markOnboarded ? true : state.profile?.onboarded === true,
   };
 
@@ -916,15 +913,6 @@ function commitWelcome({ markOnboarded }) {
 
 function advanceWelcome() {
   const current = welcomeSteps[welcomeIndex];
-
-  if (current === "identity") {
-    const zip = $("welcomeZip").value.trim();
-    if (zip && !/^\d{5}$/.test(zip)) {
-      toast("Enter a five-digit ZIP code, or leave it blank.", "error");
-      $("welcomeZip").focus();
-      return;
-    }
-  }
 
   if (current === "kitchen" && !readCheckedValues("welcome-equipment").length) {
     $("equipmentError").hidden = false;
@@ -975,7 +963,6 @@ async function openProfile() {
   await loadPreferences();
 
   $("profileName").value = state.profile?.displayName || "";
-  $("profilePostalCode").value = state.profile?.postalCode || "";
 
   const budget = clampNumber(state.constraints.budget, PREFERENCES.limits.budget, 20);
   $("profileBudget").value = budget;
@@ -1183,13 +1170,6 @@ $("profileBudget").addEventListener("input", () => {
 $("profileForm").addEventListener("submit", (event) => {
   event.preventDefault();
 
-  const postalCode = $("profilePostalCode").value.trim();
-  if (postalCode && !/^\d{5}$/.test(postalCode)) {
-    toast("Enter a five-digit ZIP code.", "error");
-    $("profilePostalCode").focus();
-    return;
-  }
-
   const equipment = readCheckedValues("profile-equipment");
   if (!equipment.length) {
     toast("Choose at least one cooking option.", "error");
@@ -1203,7 +1183,6 @@ $("profileForm").addEventListener("submit", (event) => {
   state.profile = {
     ...state.profile,
     displayName: $("profileName").value.trim().slice(0, 40),
-    postalCode,
   };
 
   state.constraints.equipment = equipment;
@@ -1212,8 +1191,6 @@ $("profileForm").addEventListener("submit", (event) => {
 
   saveState();
   renderProfile();
-  // Keeps the Shop tab's "Shop near <ZIP>" button in step with the saved ZIP.
-  renderLocation();
   closeProfile();
 
   toast("Profile saved. New plans will use these preferences.");
@@ -1224,11 +1201,10 @@ $("profileForm").addEventListener("submit", (event) => {
 let catalogNames = [];
 let catalogLoaded = false;
 let comparing = false;
-// Where the server measures from without a fix, and the ZIP its catalog covers.
+// Where the server measures from when nobody shares a fix.
 // Both are fetched, never assumed, so the copy stays correct if
 // data/stores.json moves to another city.
 let originLabel = "the default area";
-let originZip = "";
 
 // Autocomplete source. Optional: a failure here must not block adding items,
 // because the server resolves names anyway.
@@ -1250,7 +1226,6 @@ async function loadCatalog() {
     const stores = await storesResponse.json();
     if (stores.ok) {
       if (stores.origin?.label) originLabel = stores.origin.label;
-      if (stores.zip) originZip = String(stores.zip);
       renderLocation();
     }
   } catch {
@@ -1320,12 +1295,6 @@ function renderLocation() {
     ? (state.location.label || `${state.location.lat.toFixed(4)}, ${state.location.lng.toFixed(4)}`)
     : `No location shared yet — distances from ${originLabel}`;
 
-  // The profile's saved ZIP is the way in for anyone who will not share a fix.
-  const zip = String(state.profile?.postalCode || "").trim();
-  const zipButton = $("useProfileZipButton");
-  zipButton.hidden = !/^\d{5}$/.test(zip);
-  if (!zipButton.hidden) zipButton.textContent = `Shop near ${zip}`;
-
   const detail = $("locationDetail");
   const parts = [];
   if (located) {
@@ -1370,77 +1339,15 @@ function showLookupConsent() {
   $("lookupConsent").hidden = state.allowPlaceLookup !== null;
 }
 
-// Set when a ZIP outside the catalog is waiting on the consent answer, so
-// saying yes resumes the action the user actually asked for.
-let pendingZipLookup = null;
-
 function answerLookupConsent(allow) {
   state.allowPlaceLookup = allow;
   saveState();
   $("lookupConsent").hidden = true;
 
-  const zip = pendingZipLookup;
-  pendingZipLookup = null;
-  if (zip) {
-    if (allow) resolveProfileZip();
-    else toast(`Kept local. FridgeFuse can only place ZIP ${originZip || "the catalog area"} without a lookup.`);
-    return;
-  }
-
   describeCurrentLocation(allow);
   toast(allow
     ? "Place-name lookup enabled. Reset the demo to change this."
     : "Kept local. Your coordinates stay on this machine.");
-}
-
-// Turns the profile's saved ZIP into the point we measure from. The catalog's
-// own ZIP resolves with no network call at all.
-async function resolveProfileZip() {
-  const zip = String(state.profile?.postalCode || "").trim();
-  if (!/^\d{5}$/.test(zip)) return;
-  const button = $("useProfileZipButton");
-  button.disabled = true;
-  button.textContent = "Locating…";
-  try {
-    const response = await fetch("/api/geo/postal", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ postalCode: zip, allowLookup: state.allowPlaceLookup === true })
-    });
-    const result = await response.json();
-
-    if (result.needsConsent) {
-      if (state.allowPlaceLookup === false) {
-        pendingZipLookup = null;
-        toast(`Kept local. ZIP ${zip} needs a place lookup; use ZIP ${originZip || "the catalog area"} or reset the demo to enable it.`, "error");
-        return;
-      }
-      pendingZipLookup = zip;
-      $("lookupConsent").hidden = false;
-      toast(result.note || `ZIP ${zip} needs a lookup outside this app.`);
-      return;
-    }
-    if (!result.ok || !result.resolved) {
-      throw new Error(result.failure?.message || `Could not place ZIP ${zip}`);
-    }
-
-    state.location = {
-      lat: result.lat,
-      lng: result.lng,
-      label: result.label || `ZIP ${zip}`,
-      detail: `From ZIP ${zip}`,
-      fromPostalCode: zip
-    };
-    saveState();
-    renderLocation();
-    toast(`Shopping from ZIP ${zip}. Distances are measured from there.`);
-    if (state.groceryList.length) compareStores();
-  } catch (error) {
-    toast(error.message, "error");
-  } finally {
-    button.disabled = false;
-    renderLocation();
-  }
 }
 
 function requestLocation() {
@@ -1665,7 +1572,6 @@ bindOptionToggles($("welcomeForm"), "welcome");
 bindOptionToggles($("profileForm"), "profile");
 
 $("useLocationButton").addEventListener("click", requestLocation);
-$("useProfileZipButton").addEventListener("click", resolveProfileZip);
 $("compareButton").addEventListener("click", compareStores);
 $("allowLookupButton").addEventListener("click", () => answerLookupConsent(true));
 $("declineLookupButton").addEventListener("click", () => answerLookupConsent(false));
