@@ -39,6 +39,7 @@ const DEFAULT_STATE = {
   plan: null,
   messages: [],
   groceryList: [],
+  offLimitsPantry: [],
   location: null,
   // null = never asked. Only true sends coordinates to the place-name service.
   allowPlaceLookup: null
@@ -485,6 +486,7 @@ async function buildPlan(request = "") {
       ...result,
       constraints: structuredClone(state.constraints)
     };
+    state.offLimitsPantry = offLimits;
     saveState();
     renderPlan();
     renderGroceryList();
@@ -503,8 +505,15 @@ async function buildPlan(request = "") {
       : `The cheapest full-package version is ${formatMoney(result.totalCost)}, which is over your ${formatMoney(state.constraints.budget)} limit.`;
     const soonText = soon.length ? ` I put ${soon.join(" and ")} first so it gets used.` : "";
     const dietText = state.constraints.diet ? ` Every dinner is ${state.constraints.diet}.` : "";
+    // Leaving food out silently is what makes a diet feature untrustworthy: the
+    // student can see the item sitting in their pantry and cannot tell whether
+    // the planner respected it or forgot it.
+    const offLimits = Array.isArray(result.offLimitsPantry) ? result.offLimitsPantry : [];
+    const offLimitsText = offLimits.length
+      ? ` I left ${offLimits.join(" and ")} out of the cooking — ${offLimits.length === 1 ? "it does not" : "they do not"} fit ${state.constraints.diet}. If yours is a safe version, add it under its own name (for example "gluten free pasta") and I will use it.`
+      : "";
     addAssistantMessage(
-      `I built ${result.dinners.length} beginner-friendly dinners for the equipment you have.${soonText}${dietText}`,
+      `I built ${result.dinners.length} beginner-friendly dinners for the equipment you have.${soonText}${dietText}${offLimitsText}`,
       `${budgetStatus} Say "swap dinner two," lower the budget, or tell me what you dislike.`
     );
     setMobileView("plan");
@@ -637,12 +646,16 @@ function renderPantry() {
     return;
   }
 
+  // Items the last plan could not cook with stay in the pantry — they belong to
+  // the student — but they are labelled, so nobody has to wonder whether the
+  // planner respected their diet or just forgot the item.
+  const offLimits = new Set((state.offLimitsPantry || []).map((name) => String(name).toLowerCase()));
   $("pantryList").innerHTML = state.pantry.map((item, index) => `
-    <div class="pantry-item ${item.soon ? "soon" : ""}">
+    <div class="pantry-item ${item.soon ? "soon" : ""}${offLimits.has(item.name.toLowerCase()) ? " off-limits" : ""}">
       <span class="pantry-icon" aria-hidden="true">${escapeHtml(item.name[0])}</span>
       <span class="pantry-info">
         <strong>${escapeHtml(item.name)}</strong>
-        <span>${escapeHtml(item.amount)}${item.soon ? " · use soon" : ""}</span>
+        <span>${escapeHtml(item.amount)}${item.soon ? " · use soon" : ""}${offLimits.has(item.name.toLowerCase()) ? ` · not cooked · does not fit ${escapeHtml(state.constraints.diet)}` : ""}</span>
       </span>
       <span class="pantry-actions">
         <button data-pantry-action="soon" data-index="${index}">${item.soon ? "Unmark" : "Use soon"}</button>

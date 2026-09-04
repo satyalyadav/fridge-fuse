@@ -240,6 +240,16 @@ told which family each item uses in the price context.
 all. It is asked for dinners and requirements; everything with a number in it is
 computed here.
 
+Amounts themselves cannot be verified — that would mean checking them against the
+cited recipe, and the app never fetches recipe pages. What can be checked is
+magnitude. Each catalog item carries a `perServing` band, each dinner may state
+`servings` (one student unless it says otherwise), and an amount outside its band is
+sent back to the model once with the specific complaint. Items with no band of their
+own fall back to a package-count guard: more than three packages of one ingredient
+for a single serving is a misplaced decimal whatever the ingredient. The bands are
+deliberately wide judgement calls — they catch "forty ounces of spinach", not
+someone who likes a big portion.
+
 A quantity the server cannot read — a bare `"soy sauce"`, a missing unit, a cup of
 something sold by weight — falls back to one whole package and labels the line
 "amount not given", with no leftover claimed for it. Guessing a quantity is
