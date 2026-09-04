@@ -660,6 +660,23 @@ ok(/offLimitsPantry/.test(appJs) && /I left \$\{offLimits\.join/.test(appJs), "t
 ok(/off-limits/.test(appJs) && /does not fit/.test(appJs), "the pantry marks an item the current diet rules out");
 ok(fs.readFileSync("public/styles.css", "utf8").includes(".pantry-item.off-limits"), "an off-limits pantry item is styled as excluded");
 
+// ---------- running it without a terminal ----------
+// Not every teammate works in a shell; the launchers are the supported path, so
+// they have to keep working.
+for (const launcher of ["start.command", "start.bat", ".vscode/tasks.json"]) {
+  ok(fs.existsSync(launcher), `${launcher} exists for teammates who do not use a terminal`);
+}
+ok((fs.statSync("start.command").mode & 0o111) !== 0, "start.command is executable, so double-clicking it runs it");
+const unixLauncher = fs.readFileSync("start.command", "utf8");
+const winLauncher = fs.readFileSync("start.bat", "utf8");
+for (const [name, text] of [["start.command", unixLauncher], ["start.bat", winLauncher]]) {
+  ok(/nodejs\.org/.test(text), `${name} says where to get Node when it is missing`);
+  ok(/npm install/.test(text) && /npm start/.test(text), `${name} installs before it starts`);
+  ok(/\.env/.test(text), `${name} sets up .env on first run`);
+}
+ok(!/\r\n/.test(unixLauncher), "start.command has Unix line endings, or the shell refuses to run it");
+ok(JSON.parse(fs.readFileSync(".vscode/tasks.json", "utf8")).tasks.some((task) => task.label === "Run FridgeFuse"), "VS Code offers a Run FridgeFuse task");
+
 // ---------- export and restore ----------
 ok(html.includes('id="exportKitchenButton"') && html.includes('id="importKitchenButton"'), "the profile offers download and restore");
 ok(/accept="application\/json,\.json"/.test(html), "restore only offers JSON files");

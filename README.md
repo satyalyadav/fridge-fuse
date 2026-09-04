@@ -44,6 +44,16 @@ inventing a local plan or demo grocery results.
 
 ## Run
 
+**Double-click `start.command`** (macOS or Linux) or **`start.bat`** (Windows). It
+installs anything missing, creates `.env` from the example on first run, starts the
+app and opens the browser. The only prerequisite is Node.js from
+[nodejs.org](https://nodejs.org).
+
+In VS Code you can instead run the **Run FridgeFuse** task (Terminal → Run Task, or
+Ctrl/Cmd+Shift+B), which does the same thing without touching a terminal.
+
+From a terminal:
+
 ```bash
 npm start
 ```
