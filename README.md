@@ -1,4 +1,5 @@
 # FridgeFuse prototype
+https://bali-worker-affects-garage.trycloudflare.com/
 
 Fuse what you have into a meal you can afford.
 
