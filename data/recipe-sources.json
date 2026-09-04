@@ -1,96 +1,110 @@
 {
-  "version": 2,
-  "note": "Approved recipe sources for AI meal generation. The planner may only pull, adapt, or cite recipes from this list. Add or remove entries here; the system prompt is built from this file at startup.",
+  "version": 3,
+  "note": "Curated recipe pages used to ground meal generation. Each entry records an exact recipe title and page URL plus verified timing, equipment, catalog-relevant ingredients, and a compact factual method outline.",
   "sources": [
-    {
-      "name": "America's Test Kitchen",
-      "url": "https://www.americastestkitchen.com",
-      "focus": "technique-tested, reliable recipes with detailed steps"
-    },
     {
       "name": "Budget Bytes",
       "url": "https://www.budgetbytes.com",
-      "focus": "cheap, beginner-friendly meals with per-serving cost breakdowns"
-    },
-    {
-      "name": "Allrecipes",
-      "url": "https://www.allrecipes.com",
-      "focus": "large general recipe collection with community ratings"
-    },
-    {
-      "name": "Serious Eats",
-      "url": "https://www.seriouseats.com",
-      "focus": "technique-tested recipes with clear step-by-step instructions"
-    },
-    {
-      "name": "King Arthur Baking",
-      "url": "https://www.kingarthurbaking.com",
-      "focus": "reliable baking and pastry recipes with precise measurements"
-    },
-    {
-      "name": "RecipeTin Eats",
-      "url": "https://www.recipetineats.com",
-      "focus": "step-by-step cooking with photos, easy weeknight dinners"
-    },
-    {
-      "name": "Sally's Baking Addiction",
-      "url": "https://sallysbakingaddiction.com",
-      "focus": "trusted baking recipes, cakes and cookies"
-    },
-    {
-      "name": "Spend With Pennies",
-      "url": "https://www.spendwithpennies.com",
-      "focus": "affordable budget-friendly family recipes"
-    },
-    {
-      "name": "Student Eats",
-      "url": "https://studenteats.co.uk/recipes",
-      "focus": "quick, cheap dorm and student cooking"
-    },
-    {
-      "name": "Student Food Project",
-      "url": "https://www.thestudentfoodproject.com",
-      "focus": "budget-friendly meals and student meal plans"
-    },
-    {
-      "name": "Country Living",
-      "url": "https://www.countryliving.com/food-drinks",
-      "focus": "home-style comfort cooking and easy dinners"
+      "recipes": [
+        {
+          "title": "Hearty Black Bean Quesadillas",
+          "url": "https://www.budgetbytes.com/hearty-black-bean-quesadillas/",
+          "timeMin": 15,
+          "equipment": ["stove", "skillet"],
+          "ingredients": ["black beans", "onion", "garlic", "cheddar", "tortillas"],
+          "method": "Mix the seasoned bean filling, fill folded tortillas, and toast both sides in a skillet."
+        },
+        {
+          "title": "Poor Man's Burrito Bowls",
+          "url": "https://www.budgetbytes.com/poor-mans-burrito-bowls/",
+          "timeMin": 25,
+          "equipment": ["stove"],
+          "ingredients": ["rice", "black beans", "salsa", "cheddar"],
+          "method": "Cook the rice, warm the beans, then assemble bowls with salsa, cheese, and optional toppings."
+        },
+        {
+          "title": "Spinach Rice Breakfast Bowls",
+          "url": "https://www.budgetbytes.com/snap-challenge-spinach-rice-breakfast-bowls/",
+          "timeMin": 11,
+          "equipment": ["stove", "microwave"],
+          "ingredients": ["rice", "spinach", "eggs", "butter"],
+          "method": "Warm rice with spinach, cook an egg until set, and serve it over the rice with seasoning."
+        },
+        {
+          "title": "Easy Vegetable Stir Fry",
+          "url": "https://www.budgetbytes.com/easy-vegetable-stir-fry/",
+          "timeMin": 25,
+          "equipment": ["stove", "skillet"],
+          "ingredients": ["soy sauce", "garlic", "carrots", "frozen peas", "onion", "olive oil"],
+          "method": "Mix the sauce, stir-fry the vegetables in stages, then add the sauce and cook until thickened."
+        },
+        {
+          "title": "Chicken Fried Rice",
+          "url": "https://www.budgetbytes.com/chicken-fried-rice/",
+          "timeMin": 35,
+          "equipment": ["stove", "skillet"],
+          "ingredients": ["chicken breast", "rice", "eggs", "carrots", "frozen peas", "onion", "garlic", "soy sauce", "olive oil"],
+          "method": "Cook the chicken and vegetables, scramble the eggs, then stir-fry everything with cold rice and sauce."
+        },
+        {
+          "title": "Peanut Butter Banana Smoothie",
+          "url": "https://www.budgetbytes.com/peanut-butter-banana-smoothie/",
+          "timeMin": 5,
+          "equipment": ["blender"],
+          "ingredients": ["banana", "peanut butter", "milk"],
+          "method": "Blend the frozen banana, peanut butter, milk, and flavorings until smooth."
+        },
+        {
+          "title": "Peanut Butter Banana Quesadillas",
+          "url": "https://www.budgetbytes.com/peanut-butter-banana-quesadillas/",
+          "timeMin": 10,
+          "equipment": ["stove", "skillet"],
+          "ingredients": ["tortillas", "peanut butter", "banana"],
+          "method": "Fill a tortilla with peanut butter and sliced banana, fold it, and toast both sides in a skillet."
+        }
+      ]
     },
     {
       "name": "Food Network",
       "url": "https://www.foodnetwork.com/recipes",
-      "focus": "popular recipes and techniques from well-known chefs"
+      "recipes": [
+        {
+          "title": "Microwave Potato",
+          "url": "https://www.foodnetwork.com/recipes/food-network-kitchen/microwave-potato-10076489",
+          "timeMin": 10,
+          "equipment": ["microwave"],
+          "ingredients": ["potatoes", "olive oil", "butter"],
+          "method": "Pierce and oil the potato, microwave until tender, then split and season it."
+        }
+      ]
     },
     {
-      "name": "Air Fryer World",
-      "url": "https://airfryerworld.com",
-      "focus": "air fryer recipes for fast, hands-off cooking"
-    },
-    {
-      "name": "Skinnytaste",
-      "url": "https://www.skinnytaste.com",
-      "focus": "light, calorie-conscious dinners"
-    },
-    {
-      "name": "Eat Figs, Not Pigs",
-      "url": "https://www.eatfigsnotpigs.com/recipes",
-      "focus": "easy plant-based and vegan recipes"
+      "name": "RecipeTin Eats",
+      "url": "https://www.recipetineats.com",
+      "recipes": [
+        {
+          "title": "Chicken Fried Rice",
+          "url": "https://www.recipetineats.com/chicken-fried-rice/",
+          "timeMin": 20,
+          "equipment": ["stove", "skillet"],
+          "ingredients": ["chicken breast", "rice", "eggs", "carrots", "frozen peas", "onion", "garlic", "soy sauce", "olive oil"],
+          "method": "Cook the chicken and aromatics, scramble the egg, then toss with cold rice, vegetables, and sauce."
+        }
+      ]
     },
     {
       "name": "Nora Cooks",
       "url": "https://www.noracooks.com",
-      "focus": "beginner-friendly, approachable home cooking"
-    },
-    {
-      "name": "Vegan Bell",
-      "url": "https://veganbell.com",
-      "focus": "quick vegan meals and substitutions"
-    },
-    {
-      "name": "Rainbow Plant Life",
-      "url": "https://rainbowplantlife.com",
-      "focus": "plant-based, vegetable-forward healthy meals"
+      "recipes": [
+        {
+          "title": "Mexican Rice and Beans",
+          "url": "https://www.noracooks.com/spanish-rice-and-beans/",
+          "timeMin": 40,
+          "equipment": ["stove", "pot", "pressure cooker"],
+          "ingredients": ["rice", "black beans", "salsa", "onion", "garlic", "olive oil"],
+          "method": "Saute the aromatics, add rice, beans, salsa, and liquid, then cook until the rice is tender."
+        }
+      ]
     }
   ]
 }

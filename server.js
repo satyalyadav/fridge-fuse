@@ -180,27 +180,55 @@ function resolveDataPath(runtimeDir = __dirname, taskRoot = process.env.LAMBDA_T
 
 const PRICES = JSON.parse(fs.readFileSync(resolveDataPath(), "utf8"));
 
-// ---------- approved recipe sources (grounds AI meal generation) ----------
-// The /api/plan system prompt is built from this list: the model may only
-// pull, adapt, or cite recipes from these sources.
+// ---------- approved recipes (grounds AI meal generation) ----------
+// The /api/plan system prompt is built from these exact recipe records. A
+// publisher homepage is not evidence that a generated recipe exists.
 const RECIPE_SOURCES = JSON.parse(fs.readFileSync(resolveDataPath(__dirname, process.env.LAMBDA_TASK_ROOT, fs.existsSync, "recipe-sources.json"), "utf8"));
 if (!Array.isArray(RECIPE_SOURCES.sources) || RECIPE_SOURCES.sources.length === 0) {
   throw new Error("data/recipe-sources.json must contain a non-empty sources array");
 }
+const APPROVED_RECIPES = [];
+const approvedRecipeUrls = new Set();
+const catalogIngredientNames = new Set(PRICES.items.map((item) => item.name));
 for (const source of RECIPE_SOURCES.sources) {
   if (!source || typeof source.name !== "string" || !source.name.trim() || typeof source.url !== "string" || !/^https?:\/\//.test(source.url)) {
     throw new Error("every approved recipe source needs a name and http(s) URL");
   }
+  if (!Array.isArray(source.recipes) || source.recipes.length === 0) {
+    throw new Error(`approved recipe source ${source.name} must contain recipes`);
+  }
+  const sourceOrigin = new URL(source.url).origin;
+  for (const recipe of source.recipes) {
+    const recipeUrl = typeof recipe?.url === "string" ? recipe.url : "";
+    const parsedRecipeUrl = /^https?:\/\//.test(recipeUrl) ? new URL(recipeUrl) : null;
+    const hasFacts = Number.isFinite(Number(recipe?.timeMin)) && Number(recipe.timeMin) > 0 &&
+      Array.isArray(recipe?.equipment) && recipe.equipment.length > 0 &&
+      Array.isArray(recipe?.ingredients) && recipe.ingredients.length > 0 &&
+      recipe.ingredients.every((ingredient) => catalogIngredientNames.has(ingredient)) &&
+      typeof recipe?.method === "string" && recipe.method.trim();
+    if (!recipe || typeof recipe.title !== "string" || !recipe.title.trim() || !parsedRecipeUrl || parsedRecipeUrl.origin !== sourceOrigin || recipeUrl.replace(/\/$/, "") === source.url.replace(/\/$/, "") || !hasFacts) {
+      throw new Error(`every approved recipe for ${source.name} needs an exact title, same-site recipe URL, time, equipment, catalog ingredients, and method`);
+    }
+    if (approvedRecipeUrls.has(recipeUrl)) throw new Error(`duplicate approved recipe URL: ${recipeUrl}`);
+    approvedRecipeUrls.add(recipeUrl);
+    APPROVED_RECIPES.push({ ...recipe, source: source.name });
+  }
 }
 
 function recipeSourcesContext() {
-  return RECIPE_SOURCES.sources
-    .map((source) => `- ${source.name} — ${source.url} (${source.focus || "approved recipe source"})`)
+  return APPROVED_RECIPES
+    .map((recipe) => `- sourceRecipe: ${JSON.stringify(recipe.title)}; source: ${JSON.stringify(recipe.source)}; sourceUrl: ${recipe.url}; verified time: ${recipe.timeMin} min; equipment: ${recipe.equipment.join(", ")}; catalog-ready ingredients: ${recipe.ingredients.join(", ")}; method outline: ${recipe.method}`)
     .join("\n");
 }
 
-function isApprovedRecipeCitation(source, sourceUrl) {
-  return RECIPE_SOURCES.sources.some((approved) => approved.name === source && approved.url === sourceUrl);
+function approvedRecipeForCitation(source, sourceRecipe, sourceUrl) {
+  return APPROVED_RECIPES.find((approved) =>
+    approved.source === source && approved.title === sourceRecipe && approved.url === sourceUrl
+  ) || null;
+}
+
+function isApprovedRecipeCitation(source, sourceRecipe, sourceUrl) {
+  return !!approvedRecipeForCitation(source, sourceRecipe, sourceUrl);
 }
 
 // Typed words a student uses -> catalog item ("cheese" -> "cheddar"). Lives in
@@ -924,34 +952,40 @@ function packSizeOf(item) {
 }
 
 // One dinner's demand for one ingredient: { item, amount, unit }.
+//
+// An ingredient the catalog does not sell is still a hard error — pricing it
+// would mean inventing a price. A quantity we cannot read is not: the plan falls
+// back to one whole package, which is what the planner did before quantities
+// existed, and says so. A model that phrases an amount badly should cost the
+// student a rougher leftover estimate, not their entire dinner plan.
 function normalizeRequirement(raw) {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error(`each need must be an object like {"item":"eggs","amount":2,"unit":"each"}, got ${JSON.stringify(raw)}`);
-  }
-  const name = String(raw.item ?? "").trim().toLowerCase();
+  const rawName = raw && typeof raw === "object" && !Array.isArray(raw) ? raw.item : raw;
+  const name = String(rawName ?? "").trim().toLowerCase();
   if (!name) throw new Error("a need is missing its item name");
-  const amount = Number(raw.amount);
-  if (!Number.isFinite(amount) || amount <= 0) {
-    throw new Error(`need "${name}" must have a positive numeric amount`);
-  }
-  const info = unitInfo(raw.unit);
-  if (!info) {
-    throw new Error(`need "${name}" uses unit "${raw.unit}", which is not a unit the catalog understands`);
-  }
+
   const catalogItem = findPrice(name);
   if (!catalogItem) {
     throw new Error(`AI plan includes ingredients outside the price catalog: ${name}`);
   }
   const pack = packSizeOf(catalogItem);
   if (!pack) throw new Error(`catalog item ${catalogItem.name} has no usable pack size`);
+
+  const wholePackage = () => ({
+    name: catalogItem.name, base: pack.base, family: pack.family,
+    amount: catalogItem.size.amount, unit: normalizeUnit(catalogItem.size.unit), assumed: true
+  });
+
+  // A bare "soy sauce", or an object with no readable amount.
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return wholePackage();
+  const amount = Number(raw.amount);
+  if (!Number.isFinite(amount) || amount <= 0) return wholePackage();
+
   const required = toBaseAmount(amount, raw.unit);
-  if (required.family !== pack.family) {
-    throw new Error(
-      `need "${name}" is measured in ${required.family} but ${catalogItem.name} is sold by ${pack.family}; ` +
-      `use a ${pack.family} unit (the pack is ${catalogItem.size.amount} ${catalogItem.size.unit})`
-    );
-  }
-  return { name: catalogItem.name, base: required.base, family: required.family, amount, unit: normalizeUnit(raw.unit) };
+  // An unreadable unit, or one from the wrong family: a cup of rice cannot be
+  // converted without a density, so buy the package rather than guess at it.
+  if (!required || required.family !== pack.family) return wholePackage();
+
+  return { name: catalogItem.name, base: required.base, family: required.family, amount, unit: normalizeUnit(raw.unit), assumed: false };
 }
 
 // A dinner requires quantities of ingredients; a store sells packages. This is
@@ -963,8 +997,9 @@ function groundShoppingPlan(plan) {
   for (const dinner of plan.dinners || []) {
     for (const raw of dinner.needs || []) {
       const need = normalizeRequirement(raw);
-      const entry = demand.get(need.name) || { base: 0, family: need.family, sharedBy: [] };
+      const entry = demand.get(need.name) || { base: 0, family: need.family, sharedBy: [], assumed: false };
       entry.base += need.base;
+      if (need.assumed) entry.assumed = true;
       if (dinner.title && !entry.sharedBy.includes(dinner.title)) entry.sharedBy.push(dinner.title);
       demand.set(need.name, entry);
     }
@@ -983,10 +1018,11 @@ function groundShoppingPlan(plan) {
       ...cheapest,
       qty,
       required: +entry.base.toFixed(2),
-      requiredLabel: formatAmount(entry.base, entry.family),
+      requiredLabel: entry.assumed ? "one package (amount not given)" : formatAmount(entry.base, entry.family),
+      assumedWholePackage: entry.assumed,
       sharedBy: entry.sharedBy
     });
-    if (remaining > 1e-9) {
+    if (remaining > 1e-9 && !entry.assumed) {
       leftovers.push({
         item: name,
         amount: `${formatAmount(remaining, entry.family)} left over`,
@@ -1016,8 +1052,8 @@ function parseAiPlan(content, expectedDinners) {
     if (!dinner || typeof dinner !== "object") throw new Error(`Dinner ${index + 1} must be an object`);
     if (typeof dinner.title !== "string" || !dinner.title.trim()) throw new Error(`Dinner ${index + 1} needs a title`);
     if (!Number.isFinite(Number(dinner.timeMin))) throw new Error(`Dinner ${index + 1} needs a numeric timeMin`);
-    if (!isApprovedRecipeCitation(dinner.source, dinner.sourceUrl)) {
-      throw new Error(`Dinner ${index + 1} needs a source/sourceUrl pair from the approved recipe list`);
+    if (!isApprovedRecipeCitation(dinner.source, dinner.sourceRecipe, dinner.sourceUrl)) {
+      throw new Error(`Dinner ${index + 1} needs an exact sourceRecipe/source/sourceUrl match from the approved recipe catalog`);
     }
     if (dinner.adaptationNote !== undefined && typeof dinner.adaptationNote !== "string") {
       throw new Error(`Dinner ${index + 1} adaptationNote must be a string when present`);
@@ -1030,6 +1066,8 @@ function parseAiPlan(content, expectedDinners) {
       try {
         normalizeRequirement(need);
       } catch (error) {
+        // Only an unpriceable ingredient reaches here now; a badly phrased
+        // quantity degrades to a whole package instead of failing the plan.
         throw new Error(`Dinner ${index + 1}: ${error.message}`);
       }
     }
@@ -1043,7 +1081,7 @@ async function repairAiPlan(chat, content, expectedDinners, initialError, requir
   return chat([
     {
       role: "system",
-      content: `Repair a malformed FridgeFuse meal-plan response. Reply ONLY with valid JSON containing exactly ${expectedDinners} dinners and notes. Each dinner must have a non-empty title, numeric timeMin, arrays named usesPantry, needs, and steps, and a source/sourceUrl pair matching one of these approved sources:\n${recipeSourcesContext()} Every entry in needs must be an object {"item","amount","unit"} giving how much the dinner uses, with an ingredient name from the supplied price catalog and a unit from the family that catalog lists for it. Do not return shoppingList, leftovers, or totalCost. Preserve the original meal ideas when possible. Do not add commentary or Markdown fences.`
+      content: `Repair a malformed FridgeFuse meal-plan response. Reply ONLY with valid JSON containing exactly ${expectedDinners} dinners and notes. Each dinner must have a non-empty title, numeric timeMin, arrays named usesPantry, needs, and steps, and an exact sourceRecipe/source/sourceUrl triple from this curated recipe catalog. Base ingredients and steps on the verified facts in the selected record, with any minor changes stated in adaptationNote:\n${recipeSourcesContext()} Every entry in needs must be an object {"item","amount","unit"} giving how much the dinner uses, with an ingredient name from the supplied price catalog and a unit from the family that catalog lists for it. Do not return shoppingList, leftovers, or totalCost — the server computes them. Preserve the original meal ideas when possible. Do not add commentary or Markdown fences.`
     },
     {
       role: "user",
@@ -1280,10 +1318,9 @@ Set confirmed true only when the named grocery is visibly present, its entire ph
 
 app.post("/api/vision", handleVisionRequest);
 
-// System prompt for AI meal generation. Grounded to data/recipe-sources.json:
-// the model may only pull, adapt, or cite recipes from the approved sources,
-// must cite the source name/URL in every dinner, and must choose the closest
-// approved recipe (with an adaptation note) instead of inventing one.
+// System prompt for AI meal generation. Grounded to exact, curated recipe
+// records in data/recipe-sources.json rather than publisher homepages, and
+// carrying the user's dietary restrictions when they have any.
 function buildPlanSystemPrompt(priceCtx, dietCtx = "") {
   const sourcesCtx = recipeSourcesContext();
   const dietSection = dietCtx
@@ -1295,16 +1332,17 @@ function buildPlanSystemPrompt(priceCtx, dietCtx = "") {
 ${dietCtx}`
     : "";
   return `You are FridgeFuse, a student meal planner for Tempe AZ 85281. Reply ONLY with JSON:
-{"dinners":[{"title":"...","source":"...","sourceUrl":"...","adaptationNote":"","timeMin":20,"protein":25,"carbs":50,"fiber":6,"usesPantry":["..."],"needs":[{"item":"...","amount":2,"unit":"..."}],"steps":["..."]}],
+{"dinners":[{"title":"...","sourceRecipe":"...","source":"...","sourceUrl":"...","adaptationNote":"","timeMin":20,"protein":25,"carbs":50,"fiber":6,"usesPantry":["..."],"needs":[{"item":"...","amount":2,"unit":"..."}],"steps":["..."]}],
 "notes":"..."}
 Rules: plan EXACTLY the requested number of dinners. The user is a freshman cook, so give concrete beginner-safe steps and only use the listed equipment. First use food marked use-soon, then minimize unique purchases, stay within budget, and keep cooking easy. Prefer purchases shared across dinners. Put only missing ingredients in needs; pantry items cost $0. Respect time, equipment, and dietary restrictions.
 Quantities (REQUIRED): every need is how much that dinner actually uses — {"item","amount","unit"} — not a package. Three eggs is {"item":"eggs","amount":3,"unit":"each"}, even though eggs are sold by the dozen. Use only ingredient names from the price context, and give each amount in the unit family the price context shows for that item: count items in each, weight items in oz or lb, liquids in fl oz, cups, or tbsp. Never answer a weight item in cups or a count item in ounces. Do NOT return shoppingList, leftovers, or totalCost — the server buys whole packages from its own catalog, sums the cost, and works out what is left over. Price context: ${priceCtx}.
 Recipe grounding (STRICT):
-- Pull, adapt, or cite recipes ONLY from the approved sources listed below. NEVER invent a new recipe from scratch and NEVER use a recipe from an unlisted source, even if the user asks for one.
-- Ground every dinner in a real recipe from one of these sources: base its ingredients and steps on that recipe, adjusting only for the user's pantry, budget, equipment, time, and diet.
-- For every dinner, set "source" to the source's exact name and "sourceUrl" to its exact URL from the list below. Both fields are required and must match the list verbatim.
-- If NO approved recipe fits the user's pantry and budget constraints, return the CLOSEST matching approved recipe instead of inventing one, and describe the minor changes in "adaptationNote" (e.g. "Adapted from Budget Bytes black bean quesadillas: swapped cheddar for the mozzarella the user has"). Set "adaptationNote" to "" when the recipe needs no changes.
-Approved sources:
+- Select every dinner from the curated recipe records below. NEVER invent a source recipe, cite a publisher homepage, or use an unlisted recipe.
+- Treat each record's verified ingredients and method outline as authoritative. Build the dinner's ingredients and steps from those facts, adjusted only for the user's pantry, budget, equipment, time, and diet. Do not rely on other knowledge about the publisher's site.
+- Copy "sourceRecipe", "source", and "sourceUrl" from one record exactly. The server rejects any mismatched title, publisher, or URL.
+- The dinner "title" may describe the adapted result. State every minor substitution or omission in "adaptationNote". Use "" only when the generated dinner follows the selected record without changes.
+- If no record is an exact fit, choose the closest record and make only the changes needed for the user's constraints. Never turn it into an unrelated recipe.
+Curated recipes:
 ${sourcesCtx}${dietSection}`;
 }
 
@@ -1588,7 +1626,8 @@ app.get("/api/failures", (req, res) => res.json({ ok: true, count: failures.leng
 module.exports = app;
 Object.assign(module.exports, {
   app, cheapestPack, findPrice, extractJson, PRICES, STORES,
-  RECIPE_SOURCES, buildPlanSystemPrompt, reportFailure, resolveDataPath,
+  RECIPE_SOURCES, APPROVED_RECIPES, approvedRecipeForCitation, isApprovedRecipeCitation,
+  buildPlanSystemPrompt, reportFailure, resolveDataPath,
   DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL,
   handlePlanRequest, handleVisionRequest, normalizeVisionResult,
   haversineMiles, isValidCoordinate, resolveCatalogItem, normalizeCartItems, optimizeCart,

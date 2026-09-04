@@ -56,6 +56,7 @@ function addExclusion(title) {
 }
 
 function isLegacyRecipeCitation(dinner) {
+  if (!String(dinner?.sourceRecipe || "").trim()) return true;
   if (String(dinner?.source || "").trim() === "FridgeFuse Demo Catalog") return true;
   try {
     const hostname = new URL(String(dinner?.sourceUrl || "")).hostname.toLowerCase();
@@ -71,7 +72,7 @@ function sanitizeStoredPlan(plan) {
   const dinners = plan.dinners.map((dinner) => {
     if (!isLegacyRecipeCitation(dinner)) return dinner;
     changed = true;
-    const { source, sourceUrl, ...rest } = dinner;
+    const { sourceRecipe, source, sourceUrl, ...rest } = dinner;
     return { ...rest, sourceUnavailable: true };
   });
   return changed ? { ...plan, dinners } : plan;
@@ -568,8 +569,8 @@ function renderPlan() {
     const steps = (meal.steps || []).map((step) => `<li>${escapeHtml(step)}</li>`).join("");
     const recipeSource = meal.sourceUnavailable
       ? `<span class="meal-source unavailable">Recipe source unavailable — regenerate this plan</span>`
-      : meal.source && meal.sourceUrl && !isLegacyRecipeCitation(meal)
-      ? `<a class="meal-source" href="${escapeHtml(meal.sourceUrl)}" target="_blank" rel="noopener noreferrer">Recipe source: ${escapeHtml(meal.source)}</a>`
+      : meal.sourceRecipe && meal.source && meal.sourceUrl && !isLegacyRecipeCitation(meal)
+      ? `<a class="meal-source" href="${escapeHtml(meal.sourceUrl)}" target="_blank" rel="noopener noreferrer">Recipe: ${escapeHtml(meal.sourceRecipe)} on ${escapeHtml(meal.source)}</a>`
       : "";
     return `
       <article class="meal-card" data-meal-index="${index}">
