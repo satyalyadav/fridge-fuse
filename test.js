@@ -686,6 +686,20 @@ ok(fs.existsSync("scripts/build-logo-assets.py"), "the assets are reproducible f
 const logoBytes = ["logo-mark-gold.png", "logo-lockup-light.png"].map((f) => fs.statSync(`public/${f}`).size);
 ok(logoBytes.every((size) => size < 60 * 1024), `logo assets stay small (${logoBytes.map((b) => `${Math.round(b / 1024)}KB`).join(", ")})`);
 
+// A class in the markup with no rule behind it is how the profile drawer lost
+// its positioning when the pantry drawer's shared rules were deleted.
+{
+  const styles = fs.readFileSync("public/styles.css", "utf8");
+  const jsHooks = new Set(["assistant-message", "unavailable", "thinking", "message"]);
+  const declared = new Set();
+  for (const match of html.matchAll(/class="([^"${}]+)"/g)) {
+    for (const name of match[1].split(/\s+/)) if (name) declared.add(name);
+  }
+  const unstyled = [...declared].filter((name) => !jsHooks.has(name) && !styles.includes(`.${name}`));
+  ok(unstyled.length === 0, `every class in the markup has a rule${unstyled.length ? ` (unstyled: ${unstyled.join(", ")})` : ""}`);
+  ok(/\.profile-drawer\.open \.drawer-sheet/.test(styles), "the profile drawer still slides over the workspace");
+}
+
 // ---------- ASU palette ----------
 const css = fs.readFileSync("public/styles.css", "utf8");
 ok(/--maroon:\s*#8c1d40/i.test(css) && /--gold:\s*#ffc627/i.test(css), "the palette is built on ASU maroon and gold");
