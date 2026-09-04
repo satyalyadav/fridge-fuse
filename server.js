@@ -1338,6 +1338,13 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
   const offLimitsPantry = pantryDietConflicts(safePantry, dietRules);
   const cookablePantry = safePantry.filter((item) => !offLimitsPantry.includes(item));
   const cookableUseSoon = safeUseSoon.filter((item) => !offLimitsPantry.includes(item));
+  // Keep the profile catalog's user-facing phrasing in the prompt so advisory
+  // notes (for catalog gaps like halal/kosher) still reach the model.
+  const dietSelections = parseDietSelections(safeDiet);
+  const dietBlocked = [...blockedIngredientsForDiet(safeDiet)];
+  const dietGuidance = dietSelections.length
+    ? ` Hard exclusions from the price catalog: ${dietBlocked.length ? dietBlocked.join(", ") : "none from this catalog"} (from: ${dietSelections.map((o) => o.label).join(", ")}).${dietSelections.some((o) => o.note) ? ` Also note: ${dietSelections.filter((o) => o.note).map((o) => o.note).join(" ")}` : ""}`
+    : "";
   const priceCtx = PRICES.items.map((i) => {
     const c = cheapestPack(i.name);
     const family = packSizeOf(i)?.family || "count";
@@ -1348,7 +1355,7 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
     : "";
   const planningMessages = [
     { role: "system", content: buildPlanSystemPrompt(priceCtx, dietCtx) },
-    { role: "user", content: `Pantry: ${cookablePantry.join(", ") || "(empty)"}. Use soon: ${cookableUseSoon.join(", ") || "none"}. Budget total $${budget} for the whole plan. Dinners: ${dinners}. Max ${maxTimeMin} min each. Equipment: ${safeEquipment.join(", ")}. Diet/notes: ${safeDiet || "none"}.${offLimitsCtx} Avoid these meals: ${safeExclude.join(", ") || "none"}. Latest request: ${request || "build the best plan"}.` },
+    { role: "user", content: `Pantry: ${cookablePantry.join(", ") || "(empty)"}. Use soon: ${cookableUseSoon.join(", ") || "none"}. Budget total $${budget} for the whole plan. Dinners: ${dinners}. Max ${maxTimeMin} min each. Equipment: ${safeEquipment.join(", ")}. Diet/notes: ${safeDiet || "none"}.${dietGuidance}${offLimitsCtx} Avoid these meals: ${safeExclude.join(", ") || "none"}. Latest request: ${request || "build the best plan"}.` },
   ];
   const out = await chat(planningMessages, { maxTokens: 1800 });
   if (!out.ok) {

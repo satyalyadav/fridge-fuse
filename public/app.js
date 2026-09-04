@@ -48,6 +48,7 @@ const MAX_EXCLUDED = 20;
 const MAX_MESSAGES = 30;
 const MAX_GROCERY_ITEMS = 50;
 const MAX_GROCERY_QTY = 99;
+const PROFILE_EXTRA_DIET_TERMS = ["peanut allergy", "lactose intolerant", "celiac"];
 
 function addExclusion(title) {
   if (!title) return;
@@ -591,15 +592,24 @@ function renderPlan() {
   }).join("");
 
   const shopping = plan.shoppingList || [];
-  $("shoppingList").innerHTML = shopping.map((item) => `
+  $("shoppingList").innerHTML = shopping.map((item) => {
+    const qty = Math.max(1, Number(item.qty || 1));
+    const qtyLabel = qty > 1 ? `${qty} × ` : "";
+    const packLabel = escapeHtml(item.pack || "1 package");
+    const storeLabel = escapeHtml(titleCase(item.store || "mock store"));
+    const usesLabel = item.requiredLabel ? ` · uses ${escapeHtml(item.requiredLabel)}` : "";
+    const sharedBy = Array.isArray(item.sharedBy) ? item.sharedBy : [];
+    const coversLabel = sharedBy.length > 1 ? ` · covers ${sharedBy.length} dinners` : "";
+    return `
     <div class="receipt-row">
       <span class="receipt-item">
         <strong>${escapeHtml(item.item)}</strong>
-        <small>${Number(item.qty || 1) > 1 ? `${item.qty} × ` : ""}${escapeHtml(item.pack || "1 package")} · ${escapeHtml(titleCase(item.store || "mock store"))}${item.requiredLabel ? ` · uses ${escapeHtml(item.requiredLabel)}` : ""}${(item.sharedBy || []).length > 1 ? ` · covers ${item.sharedBy.length} dinners` : ""}</small>
+        <small>${qtyLabel}${packLabel} · ${storeLabel}${usesLabel}${coversLabel}</small>
       </span>
-      <span class="receipt-price">${formatMoney(Number(item.packPrice || 0) * Number(item.qty || 1))}</span>
+      <span class="receipt-price">${formatMoney(Number(item.packPrice || 0) * qty)}</span>
     </div>
-  `).join("") + `
+  `;
+  }).join("") + `
     <div class="receipt-total"><span>ESTIMATED TOTAL</span><strong>${formatMoney(plan.totalCost)}</strong></div>`;
 
   const leftovers = plan.leftovers?.length ? plan.leftovers : shopping.slice(0, 4).map((item) => ({
