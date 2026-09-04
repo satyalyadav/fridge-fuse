@@ -338,6 +338,23 @@ prices and does not present them as live store quotes.
 - Slow live plans: check `/api/health` and confirm `airModel` is `llama4-scout-17b`.
 - Phone on same WiFi can't reach demo: server binds `0.0.0.0`, use your laptop's LAN IP, e.g. `http://192.168.1.x:3000`.
 
+## Hosting it somewhere else
+
+FridgeFuse is not a static page: the server holds `VOYAGER_KEY` and calls ASU AIR
+on the student's behalf, so a static host would mean shipping the key to the
+browser. Anything that runs Node works, and the repository is already configured
+for three:
+
+| Host | What it needs | Notes |
+| --- | --- | --- |
+| Vercel | `vercel.json` (in repo) | Express preset, `npm test` gates the build |
+| Netlify | `netlify.toml` (in repo) | Same app through `serverless-http` |
+| Render | `render.yaml` (in repo) | Plain `node server.js`; free instance sleeps after ~15 min idle |
+
+All three need `VOYAGER_KEY` set in the host's own environment settings. Planning
+and photo recognition return an error without it, by design — there is no local
+fallback that invents a plan.
+
 ## Deploy to Vercel
 
 The repository is configured as an Express deployment. Vercel serves the

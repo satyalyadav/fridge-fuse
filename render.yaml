@@ -1,0 +1,32 @@
+# Render blueprint: one free Node web service, no build step beyond the tests.
+#
+# The app cannot be hosted as a static page: the server exists to hold
+# VOYAGER_KEY and call ASU AIR on the student's behalf. A static host would mean
+# shipping the key to the browser.
+#
+# Deploy: render.com -> New -> Blueprint -> pick this repository, then set
+# VOYAGER_KEY under the service's Environment tab. Everything else has a default
+# that works.
+#
+# The free instance sleeps after ~15 minutes idle and takes roughly a minute to
+# wake, so open the URL once before a demo.
+services:
+  - type: web
+    name: fridgefuse
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install && npm test
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: VOYAGER_KEY
+        sync: false
+      - key: ASU_AIR_BASE_URL
+        value: https://openai.rc.asu.edu/v1
+      - key: ASU_AIR_MODEL
+        value: llama4-scout-17b
+      - key: ASU_AIR_VISION_MODEL
+        value: qwen3-vl-32b-instruct
+      - key: ASU_AIR_VISION_VERIFY_MODEL
+        value: llama4-scout-17b
