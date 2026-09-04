@@ -589,16 +589,16 @@ const DIET_OPTIONS = [
 // planner can't guarantee ahead of a real request.
 const EQUIPMENT_OPTIONS = [
   { id: "microwave", label: "Microwave", hint: "Most dorm rooms", vibe: "quick bowls and melts" },
-  { id: "stove", label: "Stovetop or hot plate", hint: "Burner of any kind", vibe: "sautes, stir-fries, and sauces" },
+  { id: "stove", label: "Stovetop or hot plate", aliases: ["stovetop", "hot plate", "burner"], hint: "Burner of any kind", vibe: "sautes, stir-fries, and sauces" },
   { id: "oven", label: "Oven", hint: "Full-size oven", vibe: "roasts, bakes, and sheet-pan dinners" },
   { id: "toaster oven", label: "Toaster oven", hint: "Counter-top oven", vibe: "small-batch toasting and melts" },
   { id: "air fryer", label: "Air fryer", hint: "Crisps without a stove", vibe: "crispy sides with little oil" },
   { id: "rice cooker", label: "Rice cooker", hint: "Also steams and simmers", vibe: "hands-off rice and grains" },
-  { id: "kettle", label: "Electric kettle", hint: "Boiling water only", vibe: "instant, no-cook meals" },
-  { id: "slow cooker", label: "Slow cooker", hint: "Long, unattended cooking", vibe: "low-effort, cook-while-away meals" },
-  { id: "pressure cooker", label: "Pressure cooker", hint: "Instant Pot and similar", vibe: "fast one-pot meals" },
+  { id: "kettle", label: "Electric kettle", aliases: ["electric kettle"], hint: "Boiling water only", vibe: "instant, no-cook meals" },
+  { id: "slow cooker", label: "Slow cooker", aliases: ["crock pot", "crockpot"], hint: "Long, unattended cooking", vibe: "low-effort, cook-while-away meals" },
+  { id: "pressure cooker", label: "Pressure cooker", aliases: ["instant pot"], hint: "Instant Pot and similar", vibe: "fast one-pot meals" },
   { id: "blender", label: "Blender", hint: "Smoothies and sauces", vibe: "smoothies and blended sauces" },
-  { id: "sandwich press", label: "Sandwich press", hint: "Panini or grill press", vibe: "pressed sandwiches and paninis" },
+  { id: "sandwich press", label: "Sandwich press", aliases: ["panini press", "grill press"], hint: "Panini or grill press", vibe: "pressed sandwiches and paninis" },
 ];
 
 const DIET_BY_KEY = (() => {
@@ -638,6 +638,24 @@ function blockedIngredientsForDiet(diet) {
     for (const ingredient of option.blocks) blocked.add(ingredient);
   }
   return blocked;
+}
+
+function validatePlanDiet(plan, diet) {
+  const blocked = blockedIngredientsForDiet(diet);
+  if (!blocked.size) return plan;
+
+  const violations = [];
+  for (const [index, dinner] of (plan.dinners || []).entries()) {
+    for (const rawIngredient of [...(dinner.usesPantry || []), ...(dinner.needs || [])]) {
+      const ingredient = String(rawIngredient).trim().toLowerCase();
+      const canonical = resolveCatalogItem(ingredient)?.name || ingredient;
+      if (blocked.has(canonical)) violations.push(`${canonical} in dinner ${index + 1}`);
+    }
+  }
+  if (violations.length) {
+    throw new Error(`AI plan violates diet restrictions: ${[...new Set(violations)].join(", ")}`);
+  }
+  return plan;
 }
 
 function groundShoppingPlan(plan) {
@@ -1009,7 +1027,7 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
   const expectedDinners = asDinners(dinners, 3);
   const content = out.data?.choices?.[0]?.message?.content;
   try {
-    const plan = groundShoppingPlan(parseAiPlan(content, expectedDinners));
+    const plan = groundShoppingPlan(validatePlanDiet(parseAiPlan(content, expectedDinners), safeDiet));
     return res.json({ ok: true, model: AIR_MODEL, ...plan });
   } catch (initialError) {
     const repaired = await repairAiPlan(chat, content, expectedDinners, initialError, `${planningMessages[1].content}\n\nPrice catalog:\n${priceCtx}`);
@@ -1022,7 +1040,7 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
     }
     try {
       const repairedContent = repaired.data?.choices?.[0]?.message?.content;
-      const plan = groundShoppingPlan(parseAiPlan(repairedContent, expectedDinners));
+      const plan = groundShoppingPlan(validatePlanDiet(parseAiPlan(repairedContent, expectedDinners), safeDiet));
       return res.json({ ok: true, model: AIR_MODEL, repaired: true, ...plan });
     } catch (repairError) {
       const failure = reportFailure("asu-air", "plan-repair", {
@@ -1045,8 +1063,8 @@ app.post("/api/plan", handlePlanRequest);
 app.get("/api/preferences", (req, res) => {
   res.json({
     ok: true,
-    diets: DIET_OPTIONS.map(({ id, label, group, note, blocks }) => ({
-      id, label, group, note, restricts: blocks.length,
+    diets: DIET_OPTIONS.map(({ id, label, group, note, blocks, aliases }) => ({
+      id, label, group, note, aliases, restricts: blocks.length,
     })),
     equipment: EQUIPMENT_OPTIONS,
     limits: { budget: { min: 5, max: 100 } },
@@ -1238,7 +1256,7 @@ Object.assign(module.exports, {
   handlePlanRequest, handleVisionRequest, normalizeVisionResult,
   haversineMiles, isValidCoordinate, resolveCatalogItem, normalizeCartItems, optimizeCart,
   describeLocation, reverseGeocode, handleGeoDescribe, geocodePostalCode, handleGeoPostal,
-  DIET_OPTIONS, EQUIPMENT_OPTIONS, parseDietSelections, blockedIngredientsForDiet,
+  DIET_OPTIONS, EQUIPMENT_OPTIONS, parseDietSelections, blockedIngredientsForDiet, validatePlanDiet,
   STORE_DATA, BRANCHES, DEFAULT_ORIGIN, ITEM_ALIASES
 });
 

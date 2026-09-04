@@ -46,9 +46,6 @@ const DEFAULT_STATE = {
 
 const MAX_EXCLUDED = 20;
 const MAX_MESSAGES = 30;
-const PROFILE_EQUIPMENT_OPTIONS = ["microwave", "stove", "oven", "air fryer"];
-const PROFILE_DIET_OPTIONS = ["vegetarian", "vegan", "dairy-free", "gluten-free", "no peanuts"];
-const PROFILE_EXTRA_DIET_TERMS = ["peanut allergy"];
 const MAX_GROCERY_ITEMS = 50;
 const MAX_GROCERY_QTY = 99;
 
@@ -305,6 +302,25 @@ function clauseMentionIndex(clause, name) {
   return m ? m.index : -1;
 }
 
+function preferenceMentions(message, options) {
+  const lower = String(message).toLowerCase();
+  const mentions = [];
+  for (const option of options || []) {
+    const terms = [option.id, ...(option.aliases || [])]
+      .map((term) => String(term).trim().toLowerCase())
+      .filter(Boolean)
+      .sort((a, b) => b.length - a.length);
+    const term = terms.find((candidate) => {
+      const pattern = candidate
+        .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+        .replace(/\s+/g, "\\s+");
+      return new RegExp(`(?:^|\\b)${pattern}(?=$|\\b)`, "i").test(lower);
+    });
+    if (term) mentions.push({ id: option.id, term });
+  }
+  return mentions;
+}
+
 function parseMessage(message) {
   const lower = message.toLowerCase();
   const ingredients = getIngredientMentions(message);
@@ -348,18 +364,16 @@ function parseMessage(message) {
   const time = lower.match(/\b(\d{1,3})\s*(?:minutes?|mins?)\b/);
   if (time) state.constraints.maxTimeMin = Number(time[1]);
 
-  const equipment = [];
-  if (/\bmicrowave\b/.test(lower)) equipment.push("microwave");
-  if (/\b(?:stove|hot plate|burner)\b/.test(lower)) equipment.push("stove");
-  if (/\boven\b/.test(lower)) equipment.push("oven");
-  if (lower.includes("air fryer")) equipment.push("air fryer");
-  const removedEquipment = equipment.filter((item) =>
+  const equipmentMentions = preferenceMentions(message, PREFERENCES.equipment);
+  const removedEquipment = equipmentMentions.filter((mention) =>
     clausesOf(message).some((clause) => {
-      const idx = clauseMentionIndex(clause, item);
+      const idx = clauseMentionIndex(clause, mention.term);
       return idx !== -1 && negatedBefore(clause, idx);
     })
-  );
-  const addedEquipment = equipment.filter((item) => !removedEquipment.includes(item));
+  ).map((mention) => mention.id);
+  const addedEquipment = equipmentMentions
+    .map((mention) => mention.id)
+    .filter((item) => !removedEquipment.includes(item));
   if (removedEquipment.length) {
     state.constraints.equipment = state.constraints.equipment.filter((item) => !removedEquipment.includes(item));
     if (!state.constraints.equipment.length) state.constraints.equipment = ["microwave"];
@@ -370,8 +384,7 @@ function parseMessage(message) {
   if (/\b(?:no (?:diet|diets|restrictions?)|not (?:vegetarian|vegan|gluten-free|dairy-free)(?: anymore)?|eat (?:everything|anything)|clear (?:my )?diet|regular diet)\b/.test(lower)) {
     state.constraints.diet = "";
   } else {
-    const dietTerms = ["vegetarian", "vegan", "gluten-free", "dairy-free", "no peanuts", "peanut allergy"];
-    const diets = dietTerms.filter((term) => lower.includes(term));
+    const diets = preferenceMentions(message, PREFERENCES.diets).map((mention) => mention.id);
     if (diets.length) state.constraints.diet = diets.join(", ");
   }
 
@@ -401,6 +414,7 @@ async function handleMessage(message) {
     const meal = state.plan.dinners[positions[swapMatch[1]]];
     if (meal) addExclusion(meal.title);
   }
+  await loadPreferences();
   const parsed = parseMessage(clean);
 
   if (isPantryOnlyRequest(clean) && parsed.ingredients.length) {

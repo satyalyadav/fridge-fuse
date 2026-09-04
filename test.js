@@ -104,6 +104,7 @@ async function exerciseFrontendMessage(message, parsed, pantryAfter) {
       context.state.pantry = pantryAfter;
       return parsed;
     },
+    loadPreferences: async () => {},
     setMobileView() {},
     $() { return { hidden: false }; }
   };
@@ -295,6 +296,37 @@ for (const required of ["halal", "kosher", "pescatarian", "egg allergy", "soy al
 // Every equipment option has a short "vibe" phrase — the client's live note
 // describes cooking style from this text with no server round trip.
 ok(EQUIPMENT_OPTIONS.every((e) => typeof e.vibe === "string" && e.vibe.length > 0), "every equipment option has a vibe description for the live note");
+ok(
+  EQUIPMENT_OPTIONS.find((option) => option.id === "pressure cooker")?.aliases?.includes("instant pot") &&
+    EQUIPMENT_OPTIONS.find((option) => option.id === "stove")?.aliases?.includes("hot plate"),
+  "equipment options expose common chat aliases"
+);
+
+const preferenceMentionSource = appJs.replaceAll("\r\n", "\n")
+  .match(/function preferenceMentions\(message, options\) \{[\s\S]*?\n\}\n\nfunction parseMessage/)?.[0]
+  ?.replace(/\n\nfunction parseMessage$/, "") || "";
+ok(Boolean(preferenceMentionSource), "the chat parser reads preference mentions from the shared catalog");
+if (preferenceMentionSource) {
+  const preferenceContext = {};
+  vm.createContext(preferenceContext);
+  vm.runInContext(preferenceMentionSource, preferenceContext);
+  const equipmentMentions = preferenceContext.preferenceMentions(
+    "I only have an Instant Pot and rice cooker",
+    EQUIPMENT_OPTIONS
+  );
+  const dietMentions = preferenceContext.preferenceMentions(
+    "Please make it halal and gluten free",
+    DIET_OPTIONS
+  );
+  ok(
+    equipmentMentions.map((mention) => mention.id).sort().join(",") === "pressure cooker,rice cooker",
+    "chat recognizes expanded equipment ids and aliases"
+  );
+  ok(
+    dietMentions.map((mention) => mention.id).sort().join(",") === "gluten-free,halal",
+    "chat recognizes expanded diet ids and aliases"
+  );
+}
 
 // Saved profiles predate the id scheme, so old spellings must still resolve.
 ok(parseDietSelections("no peanuts")[0]?.id === "peanut allergy", "legacy \"no peanuts\" still maps to the peanut option");
@@ -703,10 +735,18 @@ async function runRouteChecks() {
   // With planning fully AI-driven and no local recipe filter, a diet
   // restriction only means something if it reaches the model as a concrete
   // ingredient list rather than a word the model might not parse correctly.
+  const veganSafePlan = {
+    ...validAiPlan,
+    dinners: validAiPlan.dinners.map((dinner) => ({
+      ...dinner,
+      usesPantry: ["spinach", "rice"],
+      steps: ["Microwave the spinach and rice, then season with soy sauce."]
+    }))
+  };
   let dietPrompt = "";
   const dietPlan = await callPlan({ ...request, diet: "vegan, halal" }, async (messages) => {
     dietPrompt = messages.map((m) => String(m.content)).join(" ");
-    return aiEnvelope(validAiPlan);
+    return aiEnvelope(veganSafePlan);
   });
   ok(dietPlan.payload.ok, "a plan request with diet restrictions still succeeds");
   ok(/Hard exclusions/.test(dietPrompt), "the prompt states hard exclusions for an active diet");
@@ -714,6 +754,19 @@ async function runRouteChecks() {
     ok(dietPrompt.includes(item), `the exclusion list names "${item}" for a vegan request`);
   }
   ok(dietPrompt.includes("No pork or alcohol"), "an advisory-only restriction's note reaches the prompt");
+
+  let unsafeDietCalls = 0;
+  const unsafeDietPlan = await callPlan({ ...request, diet: "vegan" }, async () => {
+    unsafeDietCalls++;
+    return aiEnvelope(validAiPlan);
+  });
+  ok(
+    unsafeDietCalls === 2 &&
+      unsafeDietPlan.statusCode === 502 &&
+      unsafeDietPlan.payload.ok === false &&
+      /diet/i.test(unsafeDietPlan.payload.failure?.message || ""),
+    "a plan using a diet-blocked ingredient is rejected after one repair attempt"
+  );
 
   let noDietPrompt = "";
   await callPlan({ ...request, diet: "" }, async (messages) => {

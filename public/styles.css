@@ -1057,7 +1057,7 @@ body[data-welcome-open="true"] { overflow: hidden; }
 }
 .field input[type="text"]:focus,
 .field input[type="number"]:focus { border-color: var(--spinach); }
-.field input[type="range"] { width: 100%; accent-color: var(--spinach); }
+.field input[type="range"] { width: 100%; margin-inline: 0; accent-color: var(--spinach); }
 .field-help { display: block; margin-top: 6px; color: var(--ink-soft); font-size: 11.5px; line-height: 1.4; }
 .field-row { margin-bottom: 4px; }
 .field-row.two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -1424,6 +1424,7 @@ body[data-welcome-open="true"] { overflow: hidden; }
 
 .profile-field input[type="range"] {
   width: 100%;
+  margin-inline: 0;
   accent-color: var(--spinach);
 }
 
