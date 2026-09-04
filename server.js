@@ -203,6 +203,134 @@ function isApprovedRecipeCitation(source, sourceUrl) {
   return RECIPE_SOURCES.sources.some((approved) => approved.name === source && approved.url === sourceUrl);
 }
 
+// ---------- dietary restrictions (enforced, not just requested) ----------
+// The plan prompt is built from this file AND every generated plan is checked
+// against it. A model that ignores "no peanuts" must not reach the student, so
+// a violating plan is repaired once and then rejected — never quietly served.
+const DIET_RULES_DATA = JSON.parse(fs.readFileSync(resolveDataPath(__dirname, process.env.LAMBDA_TASK_ROOT, fs.existsSync, "diet-rules.json"), "utf8"));
+if (!Array.isArray(DIET_RULES_DATA.rules) || DIET_RULES_DATA.rules.length === 0) {
+  throw new Error("data/diet-rules.json must contain a non-empty rules array");
+}
+const isNonEmptyStringArray = (value) =>
+  Array.isArray(value) && value.length > 0 && value.every((entry) => typeof entry === "string" && entry.trim());
+for (const rule of DIET_RULES_DATA.rules) {
+  if (!rule || typeof rule.id !== "string" || !rule.id.trim() || typeof rule.label !== "string" || !rule.label.trim()) {
+    throw new Error("every diet rule needs an id and a label");
+  }
+  if (!isNonEmptyStringArray(rule.aliases) || !isNonEmptyStringArray(rule.forbids)) {
+    throw new Error(`diet rule ${rule.id} needs non-empty aliases and forbids arrays`);
+  }
+  if (rule.allows !== undefined && !isNonEmptyStringArray(rule.allows)) {
+    throw new Error(`diet rule ${rule.id} allows must be a non-empty string array when present`);
+  }
+}
+const DIET_RULES = DIET_RULES_DATA.rules;
+
+// Ingredient text arrives from three directions (the student, the model, the
+// catalog) with different punctuation, so everything is flattened the same way
+// before it is matched.
+function normalizeDietText(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function dietPhraseMatcher(phrase, { plural = false } = {}) {
+  const normalized = normalizeDietText(phrase);
+  if (!normalized) return null;
+  return new RegExp(`(^| )${escapeRegExp(normalized)}${plural ? "(e?s)?" : ""}( |$)`);
+}
+
+// Which of the student's restrictions this free-text diet string turns on.
+function resolveDietRules(dietText) {
+  const text = normalizeDietText(dietText);
+  if (!text) return [];
+  return DIET_RULES.filter((rule) =>
+    rule.aliases.some((alias) => {
+      const matcher = dietPhraseMatcher(alias);
+      return matcher ? matcher.test(text) : false;
+    })
+  );
+}
+
+// "peanut butter" must not trip the dairy-free rule's "butter", so allowed
+// substitutes are removed from the text before forbidden terms are matched.
+function stripAllowedPhrases(text, rule) {
+  let scanned = ` ${text} `;
+  for (const phrase of rule.allows || []) {
+    const normalized = normalizeDietText(phrase);
+    if (!normalized) continue;
+    scanned = scanned.replace(new RegExp(`(^| )${escapeRegExp(normalized)}(e?s)?( |$)`, "g"), "  ");
+  }
+  return scanned.replace(/\s+/g, " ").trim();
+}
+
+function findForbiddenTerm(text, rule) {
+  const scanned = stripAllowedPhrases(normalizeDietText(text), rule);
+  if (!scanned) return null;
+  for (const term of rule.forbids) {
+    const matcher = dietPhraseMatcher(term, { plural: true });
+    if (matcher && matcher.test(scanned)) return term;
+  }
+  return null;
+}
+
+// Pantry items the student already owns but must not be cooked with. They are
+// reported, never silently dropped — the pantry is theirs, the plan is ours.
+function pantryDietConflicts(pantry, rules) {
+  if (!rules.length) return [];
+  return (pantry || []).filter((item) =>
+    rules.some((rule) => findForbiddenTerm(item, rule))
+  );
+}
+
+function dietRulesContext(rules) {
+  if (!rules.length) return "";
+  return rules
+    .map((rule) => {
+      const allowed = (rule.allows || []).length ? ` Allowed substitutes: ${rule.allows.join(", ")}.` : "";
+      return `- ${rule.label} — never use, buy, or mention: ${rule.forbids.join(", ")}.${allowed}`;
+    })
+    .join("\n");
+}
+
+// Every field a forbidden ingredient could hide in, including the cooking steps
+// (a vegan plan can pass its shopping list and still say "brush with butter").
+function findDietViolations(plan, rules) {
+  if (!rules.length) return [];
+  const fields = [];
+  for (const [index, dinner] of (plan.dinners || []).entries()) {
+    const where = `dinner ${index + 1} "${dinner?.title || "untitled"}"`;
+    fields.push([`${where} title`, dinner?.title]);
+    for (const item of dinner?.usesPantry || []) fields.push([`${where} pantry use`, item]);
+    for (const item of dinner?.needs || []) fields.push([`${where} shopping need`, item]);
+    for (const step of dinner?.steps || []) fields.push([`${where} cooking steps`, step]);
+  }
+  for (const entry of plan.shoppingList || []) fields.push(["the shopping list", entry?.item]);
+  for (const leftover of plan.leftovers || []) fields.push(["the leftovers", leftover?.item]);
+
+  const violations = [];
+  for (const [where, text] of fields) {
+    for (const rule of rules) {
+      const term = findForbiddenTerm(text, rule);
+      if (term) violations.push({ rule: rule.label, term, where });
+    }
+  }
+  return violations;
+}
+
+function assertPlanRespectsDiet(plan, rules) {
+  const violations = findDietViolations(plan, rules);
+  if (!violations.length) return plan;
+  const detail = violations
+    .slice(0, 6)
+    .map((violation) => `${violation.term} in ${violation.where} breaks "${violation.rule}"`)
+    .join("; ");
+  throw new Error(`AI plan breaks the user's dietary restrictions: ${detail}`);
+}
+
 const STORES = Object.keys(PRICES.stores);
 // Typed words a student uses -> catalog item ("cheese" -> "cheddar"). Lives in
 // the data file so the UI can fetch it instead of keeping a second copy.
@@ -630,6 +758,7 @@ app.get("/api/health", (req, res) => {
     stores: STORES,
     priceItems: PRICES.items.length,
     storeBranches: BRANCHES.length,
+    dietRules: DIET_RULES.map((rule) => rule.label),
     zip: PRICES.zip,
     failures: failures.length,
   });
@@ -847,8 +976,16 @@ app.post("/api/vision", handleVisionRequest);
 // the model may only pull, adapt, or cite recipes from the approved sources,
 // must cite the source name/URL in every dinner, and must choose the closest
 // approved recipe (with an adaptation note) instead of inventing one.
-function buildPlanSystemPrompt(priceCtx) {
+function buildPlanSystemPrompt(priceCtx, dietCtx = "") {
   const sourcesCtx = recipeSourcesContext();
+  const dietSection = dietCtx
+    ? `\nDietary restrictions (STRICT — these are safety constraints):
+- The restrictions below are absolute. NEVER put a forbidden ingredient in a title, usesPantry, needs, steps, leftovers, or notes — not as a garnish, not as an optional topping, not as a "serve with" suggestion.
+- A forbidden ingredient stays forbidden even when the user already has it in their pantry. Leave it in the pantry and cook something else.
+- Adapt the approved recipe with a compliant substitute and say which swap you made in "adaptationNote".
+- If no approved recipe can be adapted safely, return the closest one that CAN be, rather than serving a forbidden ingredient.
+${dietCtx}`
+    : "";
   return `You are FridgeFuse, a student meal planner for Tempe AZ 85281. Reply ONLY with JSON:
 {"dinners":[{"title":"...","source":"...","sourceUrl":"...","adaptationNote":"","timeMin":20,"protein":25,"carbs":50,"fiber":6,"usesPantry":["..."],"needs":["..."],"steps":["..."]}],
 "shoppingList":[{"item":"...","pack":"...","packPrice":0.0,"store":"...","qty":1,"sharedBy":["..."]}],
@@ -860,7 +997,7 @@ Recipe grounding (STRICT):
 - For every dinner, set "source" to the source's exact name and "sourceUrl" to its exact URL from the list below. Both fields are required and must match the list verbatim.
 - If NO approved recipe fits the user's pantry and budget constraints, return the CLOSEST matching approved recipe instead of inventing one, and describe the minor changes in "adaptationNote" (e.g. "Adapted from Budget Bytes black bean quesadillas: swapped cheddar for the mozzarella the user has"). Set "adaptationNote" to "" when the recipe needs no changes.
 Approved sources:
-${sourcesCtx}`;
+${sourcesCtx}${dietSection}`;
 }
 
 async function handlePlanRequest(req, res, { chat = airChat } = {}) {
@@ -886,13 +1023,23 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
   const safeUseSoon = asStringArray(useSoon, []);
   const safeExclude = asStringArray(exclude, []);
   const safeDiet = typeof diet === "string" ? diet : "";
+  const dietRules = resolveDietRules(safeDiet);
+  const dietCtx = dietRulesContext(dietRules);
+  // Pantry items the diet rules out are named as off-limits rather than hidden,
+  // and never offered as use-soon food the model should cook first.
+  const offLimitsPantry = pantryDietConflicts(safePantry, dietRules);
+  const cookablePantry = safePantry.filter((item) => !offLimitsPantry.includes(item));
+  const cookableUseSoon = safeUseSoon.filter((item) => !offLimitsPantry.includes(item));
   const priceCtx = PRICES.items.map((i) => {
     const c = cheapestPack(i.name);
     return `${i.name} (~${c.pack} @ ${c.store} $${c.packPrice})`;
   }).join("; ");
+  const offLimitsCtx = offLimitsPantry.length
+    ? ` Pantry items you must NOT cook with or mention (they break the diet): ${offLimitsPantry.join(", ")}.`
+    : "";
   const planningMessages = [
-    { role: "system", content: buildPlanSystemPrompt(priceCtx) },
-    { role: "user", content: `Pantry: ${safePantry.join(", ") || "(empty)"}. Use soon: ${safeUseSoon.join(", ") || "none"}. Budget total $${budget} for the whole plan. Dinners: ${dinners}. Max ${maxTimeMin} min each. Equipment: ${safeEquipment.join(", ")}. Diet/notes: ${safeDiet || "none"}. Avoid these meals: ${safeExclude.join(", ") || "none"}. Latest request: ${request || "build the best plan"}.` },
+    { role: "system", content: buildPlanSystemPrompt(priceCtx, dietCtx) },
+    { role: "user", content: `Pantry: ${cookablePantry.join(", ") || "(empty)"}. Use soon: ${cookableUseSoon.join(", ") || "none"}. Budget total $${budget} for the whole plan. Dinners: ${dinners}. Max ${maxTimeMin} min each. Equipment: ${safeEquipment.join(", ")}. Diet/notes: ${safeDiet || "none"}.${offLimitsCtx} Avoid these meals: ${safeExclude.join(", ") || "none"}. Latest request: ${request || "build the best plan"}.` },
   ];
   const out = await chat(planningMessages, { maxTokens: 1800 });
   if (!out.ok) {
@@ -901,10 +1048,10 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
   const expectedDinners = asDinners(dinners, 3);
   const content = out.data?.choices?.[0]?.message?.content;
   try {
-    const plan = groundShoppingPlan(parseAiPlan(content, expectedDinners));
-    return res.json({ ok: true, model: AIR_MODEL, ...plan });
+    const plan = groundShoppingPlan(assertPlanRespectsDiet(parseAiPlan(content, expectedDinners), dietRules));
+    return res.json({ ok: true, model: AIR_MODEL, diet: safeDiet, dietRules: dietRules.map((rule) => rule.label), ...plan });
   } catch (initialError) {
-    const repaired = await repairAiPlan(chat, content, expectedDinners, initialError, `${planningMessages[1].content}\n\nPrice catalog:\n${priceCtx}`);
+    const repaired = await repairAiPlan(chat, content, expectedDinners, initialError, `${planningMessages[1].content}\n\nPrice catalog:\n${priceCtx}${dietCtx ? `\n\nDietary restrictions (absolute):\n${dietCtx}` : ""}`);
     if (!repaired.ok) {
       const failure = repaired.failure || reportFailure("asu-air", "plan-repair", {
         status: "repair-failed",
@@ -914,8 +1061,8 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
     }
     try {
       const repairedContent = repaired.data?.choices?.[0]?.message?.content;
-      const plan = groundShoppingPlan(parseAiPlan(repairedContent, expectedDinners));
-      return res.json({ ok: true, model: AIR_MODEL, repaired: true, ...plan });
+      const plan = groundShoppingPlan(assertPlanRespectsDiet(parseAiPlan(repairedContent, expectedDinners), dietRules));
+      return res.json({ ok: true, model: AIR_MODEL, repaired: true, diet: safeDiet, dietRules: dietRules.map((rule) => rule.label), ...plan });
     } catch (repairError) {
       const failure = reportFailure("asu-air", "plan-repair", {
         status: "parse-error",
@@ -1113,7 +1260,9 @@ Object.assign(module.exports, {
   handlePlanRequest, handleVisionRequest, normalizeVisionResult,
   haversineMiles, isValidCoordinate, resolveCatalogItem, normalizeCartItems, optimizeCart,
   describeLocation, reverseGeocode, handleGeoDescribe, geocodePostalCode, handleGeoPostal,
-  STORE_DATA, BRANCHES, DEFAULT_ORIGIN, ITEM_ALIASES
+  STORE_DATA, BRANCHES, DEFAULT_ORIGIN, ITEM_ALIASES,
+  DIET_RULES, resolveDietRules, findForbiddenTerm, findDietViolations,
+  assertPlanRespectsDiet, pantryDietConflicts, dietRulesContext
 });
 
 if (require.main === module) {

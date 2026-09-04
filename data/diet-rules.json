@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "note": "Dietary restrictions the server ENFORCES on every AI plan — not just asks for. Each rule maps the phrasings a student types (aliases) to ingredients the plan may never contain (forbids). 'allows' phrases are removed from the text before the forbidden terms are matched, so compliant substitutes ('peanut butter' under dairy-free, 'corn tortillas' under gluten-free) do not trip their parent word. Matching is word-boundary and plural-tolerant, so 'egg' also catches 'eggs' but never 'eggplant'. Add or edit rules here: the plan prompt and the post-generation check are both built from this file at startup. A bad or empty file makes the server refuse to start, by design.",
+  "rules": [
+    {
+      "id": "vegetarian",
+      "label": "vegetarian",
+      "aliases": ["vegetarian", "veggie", "no meat", "meat free", "meat-free"],
+      "forbids": [
+        "meat", "beef", "ground beef", "steak", "pork", "bacon", "ham", "sausage",
+        "pepperoni", "salami", "prosciutto", "chicken", "chicken breast", "turkey",
+        "duck", "lamb", "veal", "fish", "tuna", "salmon", "tilapia", "cod", "shrimp",
+        "prawns", "crab", "scallops", "clams", "anchovy", "anchovies", "sardines",
+        "gelatin", "lard", "tallow", "chicken broth", "chicken stock", "beef broth",
+        "beef stock", "bone broth", "fish sauce", "oyster sauce", "worcestershire sauce"
+      ],
+      "allows": [
+        "vegetable broth", "vegetable stock", "vegetarian broth", "mushroom broth",
+        "meatless crumbles", "plant based chicken", "plant based sausage",
+        "vegetarian sausage", "vegan sausage", "vegan chicken", "soy chorizo",
+        "vegan fish sauce", "vegetarian worcestershire sauce"
+      ],
+      "reason": "vegetarian plans exclude meat, poultry, seafood, and the stocks and sauces made from them"
+    },
+    {
+      "id": "vegan",
+      "label": "vegan",
+      "aliases": ["vegan", "plant based", "plant-based", "no animal products"],
+      "forbids": [
+        "meat", "beef", "ground beef", "steak", "pork", "bacon", "ham", "sausage",
+        "pepperoni", "salami", "prosciutto", "chicken", "chicken breast", "turkey",
+        "duck", "lamb", "veal", "fish", "tuna", "salmon", "tilapia", "cod", "shrimp",
+        "prawns", "crab", "scallops", "clams", "anchovy", "anchovies", "sardines",
+        "gelatin", "lard", "tallow", "chicken broth", "chicken stock", "beef broth",
+        "beef stock", "bone broth", "fish sauce", "oyster sauce", "worcestershire sauce",
+        "milk", "buttermilk", "cream", "sour cream", "heavy cream", "half and half",
+        "butter", "ghee", "cheese", "cheddar", "mozzarella", "parmesan", "feta",
+        "ricotta", "cream cheese", "yogurt", "greek yogurt", "ice cream", "whey",
+        "casein", "egg", "eggs", "egg white", "egg yolk", "mayo", "mayonnaise",
+        "honey", "custard"
+      ],
+      "allows": [
+        "vegetable broth", "vegetable stock", "mushroom broth", "meatless crumbles",
+        "plant based chicken", "plant based sausage", "vegan sausage", "vegan chicken",
+        "soy chorizo", "vegan fish sauce", "peanut butter", "almond butter",
+        "cashew butter", "sunflower seed butter", "cocoa butter", "apple butter",
+        "vegan butter", "plant based butter", "almond milk", "soy milk", "oat milk",
+        "coconut milk", "cashew milk", "rice milk", "plant based milk", "vegan milk",
+        "coconut cream", "vegan cheese", "dairy free cheese", "plant based cheese",
+        "nutritional yeast", "vegan yogurt", "coconut yogurt", "soy yogurt",
+        "vegan mayo", "vegan mayonnaise", "flax egg", "egg substitute", "egg replacer",
+        "vegan ice cream"
+      ],
+      "reason": "vegan plans exclude every animal product, including dairy, eggs, and honey"
+    },
+    {
+      "id": "dairy-free",
+      "label": "dairy-free",
+      "aliases": [
+        "dairy free", "dairy-free", "no dairy", "lactose free", "lactose-free",
+        "lactose intolerant", "lactose"
+      ],
+      "forbids": [
+        "milk", "buttermilk", "cream", "sour cream", "heavy cream", "half and half",
+        "butter", "ghee", "cheese", "cheddar", "mozzarella", "parmesan", "feta",
+        "ricotta", "cream cheese", "yogurt", "greek yogurt", "ice cream", "whey",
+        "casein", "custard"
+      ],
+      "allows": [
+        "peanut butter", "almond butter", "cashew butter", "sunflower seed butter",
+        "cocoa butter", "apple butter", "vegan butter", "plant based butter",
+        "dairy free butter", "almond milk", "soy milk", "oat milk", "coconut milk",
+        "cashew milk", "rice milk", "plant based milk", "dairy free milk",
+        "coconut cream", "vegan cheese", "dairy free cheese", "plant based cheese",
+        "nutritional yeast", "vegan yogurt", "coconut yogurt", "soy yogurt",
+        "dairy free yogurt", "dairy free ice cream"
+      ],
+      "reason": "dairy-free plans exclude milk and everything made from it"
+    },
+    {
+      "id": "gluten-free",
+      "label": "gluten-free",
+      "aliases": [
+        "gluten free", "gluten-free", "no gluten", "celiac", "coeliac", "gluten allergy"
+      ],
+      "forbids": [
+        "bread", "breadcrumbs", "panko", "pasta", "spaghetti", "noodles", "macaroni",
+        "lasagna", "couscous", "tortillas", "tortilla", "pita", "naan", "bagel",
+        "flour", "wheat", "barley", "rye", "farro", "bulgur", "semolina", "seitan",
+        "crackers", "pretzels", "croutons", "soy sauce", "beer"
+      ],
+      "allows": [
+        "gluten free bread", "gluten free pasta", "gluten free noodles",
+        "gluten free flour", "gluten free crackers", "gluten free soy sauce",
+        "gluten free tortillas", "corn tortillas", "corn tortilla", "rice noodles",
+        "chickpea pasta", "lentil pasta", "almond flour", "rice flour", "coconut flour",
+        "cornmeal", "tamari", "coconut aminos"
+      ],
+      "reason": "gluten-free plans exclude wheat, barley, and rye — including flour tortillas and wheat-brewed soy sauce"
+    },
+    {
+      "id": "no-peanuts",
+      "label": "no peanuts",
+      "aliases": [
+        "no peanuts", "no peanut", "peanut allergy", "peanut free", "peanut-free",
+        "allergic to peanuts", "peanuts"
+      ],
+      "forbids": [
+        "peanut", "peanuts", "peanut butter", "peanut oil", "peanut sauce",
+        "groundnut", "groundnuts", "satay"
+      ],
+      "allows": [
+        "almond butter", "cashew butter", "sunflower seed butter", "soy butter",
+        "peanut free", "peanut-free"
+      ],
+      "reason": "a peanut allergy is a safety constraint, so no peanut product may appear anywhere in the plan"
+    }
+  ]
+}

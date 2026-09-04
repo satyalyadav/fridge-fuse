@@ -35,6 +35,8 @@ a failing test blocks the deploy.
   `stores`. Prices are development estimates, labeled as such in the UI.
 - `data/stores.json` — approximate neighborhood-level branch coordinates + `origin`.
 - `data/recipe-sources.json` — the recipe citation allowlist (versioned).
+- `data/diet-rules.json` — dietary restrictions: student phrasings → forbidden
+  ingredients, with per-rule `allows` exceptions.
 - `test.js` — one flat script of `ok(...)` assertions, run in-process.
 - `netlify/functions/api.js` — 4-line `serverless-http` wrapper around `server.js`.
 
@@ -62,6 +64,14 @@ commits deliberately removed those. Failures go to `reportFailure()` and surface
 `data/recipe-sources.json` at startup and the server rejects citations that do not
 match it exactly. Changing the allowlist changes the prompt and the tests that
 enumerate every source. A bad or empty file makes the server refuse to start, by design.
+
+**Dietary restrictions are enforced, not requested.** `data/diet-rules.json` drives
+both the prompt and a post-generation check (`assertPlanRespectsDiet()`) that scans
+titles, pantry uses, needs, steps, the shopping list, and leftovers. A violating plan
+gets one repair attempt and is then rejected. Each rule's `allows` list is stripped
+before its `forbids` are matched — that is what keeps "peanut butter" from tripping
+dairy-free's "butter", so add a substitute there rather than loosening a `forbids`
+entry. An allergy is a safety constraint: do not add a path that serves a violation.
 
 **Prices are always re-grounded server-side.** The model may propose a shopping list,
 but `groundShoppingPlan()` replaces its prices with real packs from `data/prices.json`.

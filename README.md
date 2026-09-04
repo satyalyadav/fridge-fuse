@@ -172,13 +172,41 @@ stands and the failure is logged like any other external call.
   start, by design. The app does not fetch recipe pages; the model supplies the
   recipe adaptation and the server enforces the citation allowlist.
 
+## Dietary restrictions
+
+A student's restrictions are treated as a safety constraint, not a preference the
+model is asked to keep in mind. `data/diet-rules.json` maps the phrasings a student
+types (`peanut allergy`, `dairy free`, `plant-based`) to ingredients the plan may
+never contain, and the server enforces it on both sides of the model call:
+
+- The plan prompt lists every forbidden ingredient for the restrictions in play.
+- Pantry items that break the diet are named as off-limits instead of being offered
+  as food to cook — they stay in the student's pantry, they just do not get planned.
+- Every generated plan is re-checked afterwards: titles, pantry uses, shopping needs,
+  cooking steps, the shopping list, and leftovers. A cooking step that says "brush
+  with butter" fails a dairy-free plan even when the shopping list is clean.
+- A violating plan is sent back for one repair with the restrictions restated, and
+  rejected if the repair still breaks them. It is never served with the violation
+  quietly left in.
+
+Matching is word-boundary and plural-tolerant, so `egg` catches `eggs` but not
+`eggplant`. Each rule's `allows` list is removed from the text before its `forbids`
+are matched, so `peanut butter` does not trip the dairy-free rule's `butter`, and
+`corn tortillas` does not trip gluten-free's `tortillas`.
+
+Edit the JSON to change the rules — the prompt and the check are both rebuilt from it
+at startup, and a bad or empty file makes the server refuse to start, by design. The
+five rules shipped (vegetarian, vegan, dairy-free, gluten-free, no peanuts) match the
+checkboxes in the profile drawer; the chat also understands "peanut allergy".
+
 ## API
 
-- `GET /api/health` reports server and catalog status.
+- `GET /api/health` reports server, catalog, and diet-rule status.
 - `POST /api/vision {imageDataUrl}` returns independently verified `confirmed`
   pantry items plus `uncertain` items with bounding boxes for user review.
 - `POST /api/plan` builds and prices the dinner plan; dinners include
-  `source`, `sourceUrl`, and (when adapted) `adaptationNote`.
+  `source`, `sourceUrl`, and (when adapted) `adaptationNote`. The response echoes
+  the `dietRules` that were enforced; a plan that breaks them is rejected, not returned.
 - `GET /api/prices?item=` reads the Tempe 85281 mock catalog.
 - `GET /api/stores?lat=&lng=&maxDistanceMi=` lists nearby branches with distances.
 - `POST /api/grocery/optimize {items,lat,lng}` ranks stores by what the basket costs.
@@ -197,7 +225,7 @@ prices and does not present them as live store quotes.
 - `key=MISSING (AI unavailable)`: add `VOYAGER_KEY` to `.env` and restart. Plans
   and photo recognition stay unavailable until the key is configured.
 - `npm test` fails: make sure you ran `npm install` first and did not edit
-  `data/prices.json` or `data/recipe-sources.json`.
+  `data/prices.json`, `data/recipe-sources.json`, or `data/diet-rules.json`.
 - Slow live plans: check `/api/health` and confirm `airModel` is `llama4-scout-17b`.
 - Phone on same WiFi can't reach demo: server binds `0.0.0.0`, use your laptop's LAN IP, e.g. `http://192.168.1.x:3000`.
 

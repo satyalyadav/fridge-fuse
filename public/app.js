@@ -419,8 +419,14 @@ async function buildPlan(request = "") {
         exclude: state.excludedTitles
       })
     });
-    if (!response.ok) throw new Error(`Planning returned HTTP ${response.status}`);
-    const result = await response.json();
+    // Read the body even on an error status: the server explains WHY it refused
+    // (an unpriced ingredient, an unapproved recipe, a dietary violation), and
+    // that reason is more useful to the student than the status code.
+    const result = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(result?.failure?.message || `Planning returned HTTP ${response.status}`);
+    }
+    if (!result) throw new Error("The planner did not return a plan");
     if (!result.ok && !result.dinners) throw new Error(result.failure?.message || "The planner did not return a plan");
 
     state.plan = {
@@ -444,8 +450,9 @@ async function buildPlan(request = "") {
       ? `The checkout total is ${formatMoney(result.totalCost)}, under your ${formatMoney(state.constraints.budget)} limit.`
       : `The cheapest full-package version is ${formatMoney(result.totalCost)}, which is over your ${formatMoney(state.constraints.budget)} limit.`;
     const soonText = soon.length ? ` I put ${soon.join(" and ")} first so it gets used.` : "";
+    const dietText = state.constraints.diet ? ` Every dinner is ${state.constraints.diet}.` : "";
     addAssistantMessage(
-      `I built ${result.dinners.length} beginner-friendly dinners for the equipment you have.${soonText}`,
+      `I built ${result.dinners.length} beginner-friendly dinners for the equipment you have.${soonText}${dietText}`,
       `${budgetStatus} Say "swap dinner two," lower the budget, or tell me what you dislike.`
     );
     setMobileView("plan");
@@ -483,7 +490,8 @@ function renderPlan() {
   $("planContent").hidden = false;
   $("budgetStamp").hidden = false;
   $("planTitle").textContent = `${plan.dinners.length} dinners, one small grocery run`;
-  $("planSubtitle").textContent = `Built for ${planConstraints.equipment.join(" + ") || "the equipment you have"}, ${planConstraints.maxTimeMin} minutes or less each.`;
+  const dietSummary = String(planConstraints.diet || "").trim();
+  $("planSubtitle").textContent = `Built for ${planConstraints.equipment.join(" + ") || "the equipment you have"}, ${planConstraints.maxTimeMin} minutes or less each.${dietSummary ? ` Kept ${dietSummary}.` : ""}`;
   $("budgetTotal").textContent = formatMoney(plan.totalCost);
   $("budgetLimit").textContent = `of ${formatMoney(planConstraints.budget)}`;
   $("budgetStamp").classList.toggle("over", plan.totalCost > planConstraints.budget);
