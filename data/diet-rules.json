@@ -1,10 +1,11 @@
 {
-  "version": 2,
-  "note": "Dietary restrictions the server ENFORCES on every AI plan — not just asks for. Each rule maps the phrasings a student types (aliases) to what the plan may never contain. 'excludesTags' is checked against the catalog item's own tags in data/prices.json and is exact: it is how a known ingredient is judged. 'forbids' is the word-level net for free text with no catalog entry — a cooking step, or an ingredient the catalog has never heard of. 'allows' phrases are removed from the text before 'forbids' is matched, so compliant substitutes ('peanut butter' under dairy-free, 'corn tortillas' under gluten-free) do not trip their parent word. Word matching is boundary-safe and plural-tolerant, so 'egg' also catches 'eggs' but never 'eggplant'. Add or edit rules here: the plan prompt and the post-generation check are both built from this file at startup. A bad or empty file makes the server refuse to start, by design.",
+  "version": 3,
+  "note": "The single source of truth for dietary preferences: the profile form (via /api/preferences), the plan prompt, and the post-generation check are all built from this file. 'excludesTags' is matched against a catalog item's own tags in data/prices.json and is exact — it is how a known ingredient is judged, and it is why adding a catalog item never means editing a list of names here. 'forbids' is the word-level net for free text with no catalog entry: a cooking step, or an ingredient the catalog has never heard of. 'allows' phrases are removed before 'forbids' is matched, so 'peanut butter' does not trip dairy-free's 'butter'. Word matching is boundary-safe and plural-tolerant: 'egg' catches 'eggs' but never 'eggplant'. 'group' places the option in the profile form; 'note' explains an option the Tempe catalog cannot enforce, so it never looks broken. A bad or empty file makes the server refuse to start, by design.",
   "rules": [
     {
       "id": "vegetarian",
-      "label": "vegetarian",
+      "label": "Vegetarian",
+      "group": "Diet",
       "aliases": [
         "vegetarian",
         "veggie",
@@ -15,7 +16,9 @@
       "excludesTags": [
         "meat",
         "poultry",
-        "seafood"
+        "seafood",
+        "fish",
+        "shellfish"
       ],
       "forbids": [
         "meat",
@@ -35,19 +38,6 @@
         "duck",
         "lamb",
         "veal",
-        "fish",
-        "tuna",
-        "salmon",
-        "tilapia",
-        "cod",
-        "shrimp",
-        "prawns",
-        "crab",
-        "scallops",
-        "clams",
-        "anchovy",
-        "anchovies",
-        "sardines",
         "gelatin",
         "lard",
         "tallow",
@@ -56,6 +46,22 @@
         "beef broth",
         "beef stock",
         "bone broth",
+        "fish",
+        "tuna",
+        "salmon",
+        "tilapia",
+        "cod",
+        "shrimp",
+        "prawns",
+        "crab",
+        "lobster",
+        "scallops",
+        "clams",
+        "mussels",
+        "oyster",
+        "anchovy",
+        "anchovies",
+        "sardines",
         "fish sauce",
         "oyster sauce",
         "worcestershire sauce"
@@ -63,8 +69,8 @@
       "allows": [
         "vegetable broth",
         "vegetable stock",
-        "vegetarian broth",
         "mushroom broth",
+        "vegetarian broth",
         "meatless crumbles",
         "plant based chicken",
         "plant based sausage",
@@ -79,7 +85,8 @@
     },
     {
       "id": "vegan",
-      "label": "vegan",
+      "label": "Vegan",
+      "group": "Diet",
       "aliases": [
         "vegan",
         "plant based",
@@ -90,6 +97,8 @@
         "meat",
         "poultry",
         "seafood",
+        "fish",
+        "shellfish",
         "dairy",
         "egg",
         "honey"
@@ -112,19 +121,6 @@
         "duck",
         "lamb",
         "veal",
-        "fish",
-        "tuna",
-        "salmon",
-        "tilapia",
-        "cod",
-        "shrimp",
-        "prawns",
-        "crab",
-        "scallops",
-        "clams",
-        "anchovy",
-        "anchovies",
-        "sardines",
         "gelatin",
         "lard",
         "tallow",
@@ -133,6 +129,22 @@
         "beef broth",
         "beef stock",
         "bone broth",
+        "fish",
+        "tuna",
+        "salmon",
+        "tilapia",
+        "cod",
+        "shrimp",
+        "prawns",
+        "crab",
+        "lobster",
+        "scallops",
+        "clams",
+        "mussels",
+        "oyster",
+        "anchovy",
+        "anchovies",
+        "sardines",
         "fish sauce",
         "oyster sauce",
         "worcestershire sauce",
@@ -156,26 +168,30 @@
         "ice cream",
         "whey",
         "casein",
+        "custard",
         "egg",
         "eggs",
         "egg white",
         "egg yolk",
         "mayo",
         "mayonnaise",
-        "honey",
-        "custard"
+        "meringue",
+        "honey"
       ],
       "allows": [
         "vegetable broth",
         "vegetable stock",
         "mushroom broth",
+        "vegetarian broth",
         "meatless crumbles",
         "plant based chicken",
         "plant based sausage",
+        "vegetarian sausage",
         "vegan sausage",
         "vegan chicken",
         "soy chorizo",
         "vegan fish sauce",
+        "vegetarian worcestershire sauce",
         "peanut butter",
         "almond butter",
         "cashew butter",
@@ -184,6 +200,7 @@
         "apple butter",
         "vegan butter",
         "plant based butter",
+        "dairy free butter",
         "almond milk",
         "soy milk",
         "oat milk",
@@ -191,6 +208,7 @@
         "cashew milk",
         "rice milk",
         "plant based milk",
+        "dairy free milk",
         "vegan milk",
         "coconut cream",
         "vegan cheese",
@@ -200,21 +218,237 @@
         "vegan yogurt",
         "coconut yogurt",
         "soy yogurt",
-        "vegan mayo",
-        "vegan mayonnaise",
+        "dairy free yogurt",
+        "vegan ice cream",
+        "dairy free ice cream",
         "flax egg",
         "egg substitute",
         "egg replacer",
-        "vegan ice cream"
+        "vegan mayo",
+        "vegan mayonnaise"
       ],
       "reason": "vegan plans exclude every animal product, including dairy, eggs, and honey"
     },
     {
-      "id": "dairy-free",
-      "label": "dairy-free",
+      "id": "pescatarian",
+      "label": "Pescatarian",
+      "group": "Diet",
       "aliases": [
-        "dairy free",
+        "pescatarian",
+        "pescetarian"
+      ],
+      "excludesTags": [
+        "meat",
+        "poultry"
+      ],
+      "forbids": [
+        "meat",
+        "beef",
+        "ground beef",
+        "steak",
+        "pork",
+        "bacon",
+        "ham",
+        "sausage",
+        "pepperoni",
+        "salami",
+        "prosciutto",
+        "chicken",
+        "chicken breast",
+        "turkey",
+        "duck",
+        "lamb",
+        "veal",
+        "gelatin",
+        "lard",
+        "tallow",
+        "chicken broth",
+        "chicken stock",
+        "beef broth",
+        "beef stock",
+        "bone broth"
+      ],
+      "allows": [
+        "vegetable broth",
+        "vegetable stock",
+        "mushroom broth",
+        "vegetarian broth",
+        "meatless crumbles",
+        "plant based chicken",
+        "plant based sausage",
+        "vegetarian sausage",
+        "vegan sausage",
+        "vegan chicken",
+        "soy chorizo",
+        "vegan fish sauce",
+        "vegetarian worcestershire sauce"
+      ],
+      "note": "Fish is allowed; the catalog has none yet.",
+      "reason": "pescatarian plans exclude meat and poultry but allow seafood"
+    },
+    {
+      "id": "halal",
+      "label": "Halal",
+      "group": "Diet",
+      "aliases": [
+        "halal",
+        "halaal"
+      ],
+      "excludesTags": [
+        "pork",
+        "alcohol"
+      ],
+      "forbids": [
+        "pork",
+        "bacon",
+        "ham",
+        "prosciutto",
+        "pancetta",
+        "chorizo",
+        "lard",
+        "pepperoni",
+        "salami",
+        "wine",
+        "beer",
+        "rum",
+        "vodka",
+        "whiskey",
+        "bourbon",
+        "sherry",
+        "mirin",
+        "cooking wine"
+      ],
+      "note": "No pork or alcohol is in the catalog. Choose certified meat in store.",
+      "reason": "halal plans exclude pork and alcohol; certification cannot be checked from a price catalog"
+    },
+    {
+      "id": "kosher",
+      "label": "Kosher",
+      "group": "Diet",
+      "aliases": [
+        "kosher"
+      ],
+      "excludesTags": [
+        "pork",
+        "shellfish"
+      ],
+      "forbids": [
+        "pork",
+        "bacon",
+        "ham",
+        "prosciutto",
+        "pancetta",
+        "chorizo",
+        "lard",
+        "pepperoni",
+        "salami",
+        "shrimp",
+        "prawns",
+        "crab",
+        "lobster",
+        "scallops",
+        "clams",
+        "mussels",
+        "oyster",
+        "oysters",
+        "crawfish",
+        "krill"
+      ],
+      "note": "No pork or shellfish is in the catalog. Certification is not tracked.",
+      "reason": "kosher plans exclude pork and shellfish; certification is not tracked here"
+    },
+    {
+      "id": "peanut allergy",
+      "label": "Peanuts",
+      "group": "Allergy",
+      "aliases": [
+        "peanut allergy",
+        "no peanuts",
+        "no peanut",
+        "peanut free",
+        "peanut-free",
+        "allergic to peanuts",
+        "peanuts",
+        "peanut"
+      ],
+      "excludesTags": [
+        "peanut"
+      ],
+      "forbids": [
+        "peanut",
+        "peanuts",
+        "peanut butter",
+        "peanut oil",
+        "peanut sauce",
+        "groundnut",
+        "groundnuts",
+        "satay"
+      ],
+      "allows": [
+        "almond butter",
+        "cashew butter",
+        "sunflower seed butter",
+        "soy butter",
+        "peanut free",
+        "peanut-free"
+      ],
+      "reason": "a peanut allergy is a safety constraint, so no peanut product may appear anywhere in the plan"
+    },
+    {
+      "id": "tree nut allergy",
+      "label": "Tree nuts",
+      "group": "Allergy",
+      "aliases": [
+        "tree nut allergy",
+        "nut allergy",
+        "tree nuts",
+        "no nuts",
+        "no tree nuts"
+      ],
+      "excludesTags": [
+        "tree-nut",
+        "peanut"
+      ],
+      "forbids": [
+        "almond",
+        "almonds",
+        "almond butter",
+        "almond milk",
+        "cashew",
+        "cashews",
+        "cashew butter",
+        "walnut",
+        "walnuts",
+        "pecan",
+        "pecans",
+        "pistachio",
+        "pistachios",
+        "hazelnut",
+        "hazelnuts",
+        "macadamia",
+        "brazil nut",
+        "pine nuts",
+        "nutella",
+        "marzipan",
+        "peanut",
+        "peanuts",
+        "peanut butter",
+        "peanut oil",
+        "peanut sauce",
+        "groundnut",
+        "groundnuts",
+        "satay"
+      ],
+      "note": "Peanut products are excluded as a precaution.",
+      "reason": "tree nut allergies are a safety constraint, and peanuts are excluded alongside them as a precaution"
+    },
+    {
+      "id": "dairy-free",
+      "label": "Dairy or lactose",
+      "group": "Allergy",
+      "aliases": [
         "dairy-free",
+        "dairy free",
         "no dairy",
         "lactose free",
         "lactose-free",
@@ -265,6 +499,7 @@
         "rice milk",
         "plant based milk",
         "dairy free milk",
+        "vegan milk",
         "coconut cream",
         "vegan cheese",
         "dairy free cheese",
@@ -274,16 +509,18 @@
         "coconut yogurt",
         "soy yogurt",
         "dairy free yogurt",
+        "vegan ice cream",
         "dairy free ice cream"
       ],
       "reason": "dairy-free plans exclude milk and everything made from it"
     },
     {
       "id": "gluten-free",
-      "label": "gluten-free",
+      "label": "Gluten",
+      "group": "Allergy",
       "aliases": [
-        "gluten free",
         "gluten-free",
+        "gluten free",
         "no gluten",
         "celiac",
         "coeliac",
@@ -344,39 +581,226 @@
       "reason": "gluten-free plans exclude wheat, barley, and rye — including flour tortillas and wheat-brewed soy sauce"
     },
     {
-      "id": "no-peanuts",
-      "label": "no peanuts",
+      "id": "egg allergy",
+      "label": "Eggs",
+      "group": "Allergy",
       "aliases": [
-        "no peanuts",
-        "no peanut",
-        "peanut allergy",
-        "peanut free",
-        "peanut-free",
-        "allergic to peanuts",
-        "peanuts"
+        "egg allergy",
+        "no eggs",
+        "egg free",
+        "no egg"
       ],
       "excludesTags": [
-        "peanut"
+        "egg"
       ],
       "forbids": [
-        "peanut",
-        "peanuts",
-        "peanut butter",
-        "peanut oil",
-        "peanut sauce",
-        "groundnut",
-        "groundnuts",
-        "satay"
+        "egg",
+        "eggs",
+        "egg white",
+        "egg yolk",
+        "mayo",
+        "mayonnaise",
+        "meringue",
+        "custard"
       ],
       "allows": [
-        "almond butter",
-        "cashew butter",
-        "sunflower seed butter",
-        "soy butter",
-        "peanut free",
-        "peanut-free"
+        "flax egg",
+        "egg substitute",
+        "egg replacer",
+        "vegan mayo",
+        "vegan mayonnaise",
+        "eggplant"
       ],
-      "reason": "a peanut allergy is a safety constraint, so no peanut product may appear anywhere in the plan"
+      "reason": "an egg allergy excludes eggs and the products built on them"
+    },
+    {
+      "id": "soy allergy",
+      "label": "Soy",
+      "group": "Allergy",
+      "aliases": [
+        "soy allergy",
+        "no soy",
+        "soy free",
+        "soya"
+      ],
+      "excludesTags": [
+        "soy"
+      ],
+      "forbids": [
+        "soy",
+        "soy sauce",
+        "soybean",
+        "soybeans",
+        "tofu",
+        "edamame",
+        "miso",
+        "tempeh",
+        "tamari",
+        "coconut aminos",
+        "soy milk",
+        "soy yogurt",
+        "soy chorizo"
+      ],
+      "reason": "a soy allergy excludes soy in every form, including tamari and tofu"
+    },
+    {
+      "id": "shellfish allergy",
+      "label": "Shellfish",
+      "group": "Allergy",
+      "aliases": [
+        "shellfish allergy",
+        "no shellfish",
+        "shellfish"
+      ],
+      "excludesTags": [
+        "shellfish"
+      ],
+      "forbids": [
+        "shrimp",
+        "prawns",
+        "crab",
+        "lobster",
+        "scallops",
+        "clams",
+        "mussels",
+        "oyster",
+        "oysters",
+        "crawfish",
+        "krill"
+      ],
+      "note": "No shellfish is in the catalog.",
+      "reason": "a shellfish allergy excludes crustaceans and molluscs"
+    },
+    {
+      "id": "fish allergy",
+      "label": "Fish",
+      "group": "Allergy",
+      "aliases": [
+        "fish allergy",
+        "no fish"
+      ],
+      "excludesTags": [
+        "fish"
+      ],
+      "forbids": [
+        "fish",
+        "tuna",
+        "salmon",
+        "tilapia",
+        "cod",
+        "halibut",
+        "anchovy",
+        "anchovies",
+        "sardines",
+        "fish sauce",
+        "worcestershire sauce"
+      ],
+      "allows": [
+        "vegan fish sauce",
+        "vegetarian worcestershire sauce"
+      ],
+      "note": "No fish is in the catalog.",
+      "reason": "a fish allergy excludes finned fish and the sauces made from them"
+    },
+    {
+      "id": "sesame allergy",
+      "label": "Sesame",
+      "group": "Allergy",
+      "aliases": [
+        "sesame allergy",
+        "no sesame",
+        "sesame"
+      ],
+      "excludesTags": [
+        "sesame"
+      ],
+      "forbids": [
+        "sesame",
+        "sesame oil",
+        "sesame seeds",
+        "tahini",
+        "halva",
+        "za atar",
+        "zaatar",
+        "hummus"
+      ],
+      "note": "No sesame is in the catalog.",
+      "reason": "a sesame allergy excludes sesame and the pastes and blends made from it"
+    },
+    {
+      "id": "no pork",
+      "label": "No pork",
+      "group": "Avoid",
+      "aliases": [
+        "no pork",
+        "pork free",
+        "pork-free"
+      ],
+      "excludesTags": [
+        "pork"
+      ],
+      "forbids": [
+        "pork",
+        "bacon",
+        "ham",
+        "prosciutto",
+        "pancetta",
+        "chorizo",
+        "lard",
+        "pepperoni",
+        "salami"
+      ],
+      "note": "No pork is in the catalog.",
+      "reason": "pork is avoided for religious, health, or personal reasons"
+    },
+    {
+      "id": "no beef",
+      "label": "No beef",
+      "group": "Avoid",
+      "aliases": [
+        "no beef",
+        "beef free",
+        "beef-free"
+      ],
+      "excludesTags": [
+        "beef"
+      ],
+      "forbids": [
+        "beef",
+        "ground beef",
+        "steak",
+        "beef broth",
+        "beef stock"
+      ],
+      "reason": "beef is avoided for religious, environmental, or personal reasons"
+    },
+    {
+      "id": "low sodium",
+      "label": "Low sodium",
+      "group": "Avoid",
+      "aliases": [
+        "low sodium",
+        "low salt",
+        "less sodium",
+        "low-sodium"
+      ],
+      "excludesTags": [
+        "high-sodium"
+      ],
+      "forbids": [
+        "soy sauce",
+        "tamari",
+        "fish sauce",
+        "oyster sauce",
+        "bouillon",
+        "instant ramen",
+        "seasoning salt"
+      ],
+      "allows": [
+        "low sodium soy sauce",
+        "coconut aminos"
+      ],
+      "reason": "a low-sodium plan avoids the saltiest catalog items; it is guidance, not a measured sodium budget"
     }
   ]
 }
