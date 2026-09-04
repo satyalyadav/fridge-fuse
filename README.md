@@ -213,13 +213,109 @@ stands and the failure is logged like any other external call.
   server from starting. Recipe pages are curated ahead of time rather than
   fetched during each request.
 
+## Recipes as typed requirements
+
+A dinner requires *quantities of ingredients*; a store sells *packages*. The plan
+keeps those separate, because conflating them is what made the old numbers guesses:
+
+```json
+"needs": [{ "item": "eggs", "amount": 3, "unit": "each" },
+          { "item": "gluten free pasta", "amount": 8, "unit": "oz" }]
+```
+
+The model supplies the amounts; the server does the arithmetic. Demand is summed
+across every dinner, packages are bought whole (`qty = ceil(total / packSize)`), the
+total is the sum of what was actually bought, and the leftover is what the packages
+exceed the demand by. Three dinners needing fourteen eggs buy two dozen and report
+ten eggs left — the plan used to buy one package of everything and let the model
+write "most of the carton" in the leftovers.
+
+Units come in three families — count, mass, volume — converted only within a family.
+`data/prices.json` gives each item its canonical pack `size`, and a requirement in
+the wrong family is refused, not converted: turning a cup of rice into ounces needs a
+per-ingredient density, and a guessed density is a wrong shopping list. The model is
+told which family each item uses in the price context.
+
+`shoppingList`, `leftovers`, and `totalCost` are no longer accepted from the model at
+all. It is asked for dinners and requirements; everything with a number in it is
+computed here.
+
+A quantity the server cannot read — a bare `"soy sauce"`, a missing unit, a cup of
+something sold by weight — falls back to one whole package and labels the line
+"amount not given", with no leftover claimed for it. Guessing a quantity is
+recoverable and visible; guessing a price is not, so an ingredient the catalog
+cannot price is still a hard failure.
+
+## Dietary restrictions
+
+A student's restrictions are treated as a safety constraint, not a preference the
+model is asked to keep in mind. `data/diet-rules.json` maps the phrasings a student
+types (`peanut allergy`, `dairy free`, `plant-based`) to ingredients the plan may
+never contain, and the server enforces it on both sides of the model call:
+
+- The plan prompt lists every forbidden ingredient for the restrictions in play.
+- Pantry items that break the diet are named as off-limits instead of being offered
+  as food to cook — they stay in the student's pantry, they just do not get planned.
+- Every generated plan is re-checked afterwards: titles, pantry uses, shopping needs,
+  cooking steps, the shopping list, and leftovers. A cooking step that says "brush
+  with butter" fails a dairy-free plan even when the shopping list is clean.
+- A violating plan is sent back for one repair with the restrictions restated, and
+  rejected if the repair still breaks them. It is never served with the violation
+  quietly left in.
+
+Matching is word-boundary and plural-tolerant, so `egg` catches `eggs` but not
+`eggplant`. Each rule's `allows` list is removed from the text before its `forbids`
+are matched, so `peanut butter` does not trip the dairy-free rule's `butter`, and
+`corn tortillas` does not trip gluten-free's `tortillas`.
+
+How an ingredient is judged depends on whether the catalog knows it. A catalog item
+is judged by its own `tags` in `data/prices.json` (`pasta` carries `gluten`, `gluten
+free pasta` carries nothing), which is exact — the word net would fail an alias like
+`gf pasta` for containing "pasta". Anything the catalog has never heard of, and every
+cooking step, falls back to word matching. The two are cross-checked against each
+other by `npm test`, so a mis-tagged item fails the build.
+
+Edit the JSON to change the rules — the prompt and the check are both rebuilt from it
+at startup, and a bad or empty file makes the server refuse to start, by design. The
+five rules shipped (vegetarian, vegan, dairy-free, gluten-free, no peanuts) match the
+checkboxes in the profile drawer; the chat also understands "peanut allergy".
+
+Gluten-free substitutes are stocked in the catalog (`gluten free bread`, `gluten free
+pasta`, `corn tortillas`, `tamari`) so a celiac's plan can actually be priced. Vegan
+and dairy-free do not have their substitutes yet — plant milks and a cheese
+alternative would need adding before those restrictions are equally usable.
+
+## Food codes
+
+Catalog items carry a `codes.foodon` id — an [EBI FoodOn](https://foodon.org)
+ontology term, the closest thing food has to SNOMED/LOINC. `npm run codes:propose`
+queries FoodOn (and USDA FoodData Central, if `FDC_API_KEY` is set) and prints
+candidates for review. It never writes the catalog, because unreviewed name lookup
+gets it wrong in ways that matter here: the best hit for `eggs` is a fish egg, for
+`yogurt` it is "soy yogurt", for `tamari` it is a tamarind plant, and `milk` resolves
+to an anatomy term. Only the 11 items whose ontology label matches exactly carry an
+id; the rest are `null` pending a human decision.
+
+The allergen tags stay hand-curated for the same reason. No food API returns a
+classification dependable enough for an allergy: FoodData Central has no structured
+allergen field, only a free-text ingredient string, and Open Food Facts' tags are
+patchy — its record for a product named "Gluten Free Spaghetti" has an empty
+`allergens_tags` and no gluten-free label.
+
+Prices are mock for the same practical reason: there is no open grocery-price API.
+Kroger (Fry's parent) publishes a location-aware product API behind OAuth partner
+credentials; Aldi, Trader Joe's, and Walmart offer nothing comparable publicly. The
+catalog's shape leaves room for a per-chain adapter to fill later.
+
 ## API
 
-- `GET /api/health` reports server and catalog status.
+- `GET /api/health` reports server, catalog, and diet-rule status.
 - `POST /api/vision {imageDataUrl}` returns independently verified `confirmed`
   pantry items plus `uncertain` items with bounding boxes for user review.
 - `POST /api/plan` builds and prices the dinner plan; dinners include
   `sourceRecipe`, `source`, `sourceUrl`, and (when adapted) `adaptationNote`.
+  The response echoes the `dietRules` that were enforced; a plan that breaks them
+  is rejected, not returned.
 - `GET /api/preferences` serves the dietary and equipment catalogs the profile renders.
 - `GET /api/prices?item=` reads the Tempe 85281 mock catalog.
 - `GET /api/stores?lat=&lng=&maxDistanceMi=` lists nearby branches with distances.
@@ -239,7 +335,7 @@ prices and does not present them as live store quotes.
 - `key=MISSING (AI unavailable)`: add `VOYAGER_KEY` to `.env` and restart. Plans
   and photo recognition stay unavailable until the key is configured.
 - `npm test` fails: make sure you ran `npm install` first and did not edit
-  `data/prices.json` or `data/recipe-sources.json`.
+  `data/prices.json`, `data/recipe-sources.json`, or `data/diet-rules.json`.
 - Slow live plans: check `/api/health` and confirm `airModel` is `llama4-scout-17b`.
 - Phone on same WiFi can't reach demo: server binds `0.0.0.0`, use your laptop's LAN IP, e.g. `http://192.168.1.x:3000`.
 

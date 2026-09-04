@@ -231,10 +231,189 @@ function isApprovedRecipeCitation(source, sourceRecipe, sourceUrl) {
   return !!approvedRecipeForCitation(source, sourceRecipe, sourceUrl);
 }
 
-const STORES = Object.keys(PRICES.stores);
 // Typed words a student uses -> catalog item ("cheese" -> "cheddar"). Lives in
 // the data file so the UI can fetch it instead of keeping a second copy.
 const ITEM_ALIASES = PRICES.aliases || {};
+
+// ---------- dietary restrictions (enforced, not just requested) ----------
+// The plan prompt is built from this file AND every generated plan is checked
+// against it. A model that ignores "no peanuts" must not reach the student, so
+// a violating plan is repaired once and then rejected — never quietly served.
+const DIET_RULES_DATA = JSON.parse(fs.readFileSync(resolveDataPath(__dirname, process.env.LAMBDA_TASK_ROOT, fs.existsSync, "diet-rules.json"), "utf8"));
+if (!Array.isArray(DIET_RULES_DATA.rules) || DIET_RULES_DATA.rules.length === 0) {
+  throw new Error("data/diet-rules.json must contain a non-empty rules array");
+}
+const isNonEmptyStringArray = (value) =>
+  Array.isArray(value) && value.length > 0 && value.every((entry) => typeof entry === "string" && entry.trim());
+for (const rule of DIET_RULES_DATA.rules) {
+  if (!rule || typeof rule.id !== "string" || !rule.id.trim() || typeof rule.label !== "string" || !rule.label.trim()) {
+    throw new Error("every diet rule needs an id and a label");
+  }
+  if (!isNonEmptyStringArray(rule.aliases) || !isNonEmptyStringArray(rule.forbids)) {
+    throw new Error(`diet rule ${rule.id} needs non-empty aliases and forbids arrays`);
+  }
+  if (rule.allows !== undefined && !isNonEmptyStringArray(rule.allows)) {
+    throw new Error(`diet rule ${rule.id} allows must be a non-empty string array when present`);
+  }
+  if (!isNonEmptyStringArray(rule.excludesTags)) {
+    throw new Error(`diet rule ${rule.id} needs a non-empty excludesTags array`);
+  }
+}
+const DIET_RULES = DIET_RULES_DATA.rules;
+
+// A tag typo would silently stop excluding an ingredient, so the catalog and the
+// rules are checked against each other at startup rather than at dinner time.
+const DIET_TAGS = new Set(DIET_RULES.flatMap((rule) => rule.excludesTags));
+for (const item of PRICES.items) {
+  if (!Array.isArray(item.tags)) {
+    throw new Error(`price catalog item ${item.name} must declare a tags array (use [] when it contains none)`);
+  }
+  for (const tag of item.tags) {
+    if (!DIET_TAGS.has(tag)) {
+      throw new Error(`price catalog item ${item.name} carries tag "${tag}", which no diet rule excludes`);
+    }
+  }
+}
+
+// Ingredient text arrives from three directions (the student, the model, the
+// catalog) with different punctuation, so everything is flattened the same way
+// before it is matched.
+function normalizeDietText(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function dietPhraseMatcher(phrase, { plural = false } = {}) {
+  const normalized = normalizeDietText(phrase);
+  if (!normalized) return null;
+  return new RegExp(`(^| )${escapeRegExp(normalized)}${plural ? "(e?s)?" : ""}( |$)`);
+}
+
+// Which of the student's restrictions this free-text diet string turns on.
+function resolveDietRules(dietText) {
+  const text = normalizeDietText(dietText);
+  if (!text) return [];
+  return DIET_RULES.filter((rule) =>
+    rule.aliases.some((alias) => {
+      const matcher = dietPhraseMatcher(alias);
+      return matcher ? matcher.test(text) : false;
+    })
+  );
+}
+
+// "peanut butter" must not trip the dairy-free rule's "butter", so allowed
+// substitutes are removed from the text before forbidden terms are matched.
+function stripAllowedPhrases(text, rule) {
+  let scanned = ` ${text} `;
+  for (const phrase of rule.allows || []) {
+    const normalized = normalizeDietText(phrase);
+    if (!normalized) continue;
+    scanned = scanned.replace(new RegExp(`(^| )${escapeRegExp(normalized)}(e?s)?( |$)`, "g"), "  ");
+  }
+  return scanned.replace(/\s+/g, " ").trim();
+}
+
+function findForbiddenTerm(text, rule) {
+  const scanned = stripAllowedPhrases(normalizeDietText(text), rule);
+  if (!scanned) return null;
+  for (const term of rule.forbids) {
+    const matcher = dietPhraseMatcher(term, { plural: true });
+    if (matcher && matcher.test(scanned)) return term;
+  }
+  return null;
+}
+
+// What the catalog says a named ingredient contains. Resolution is strict on
+// purpose: "eggs" and the alias "egg" resolve, a whole cooking step does not.
+// Loose matching here would read "a splash of almond milk" as milk.
+function catalogTagsFor(name) {
+  const q = normalizeDietText(name);
+  if (!q) return null;
+  const direct = PRICES.items.find((item) => normalizeDietText(item.name) === q);
+  if (direct) return direct.tags || [];
+  const aliasTarget = Object.entries(ITEM_ALIASES).find(([alias]) => normalizeDietText(alias) === q)?.[1];
+  if (!aliasTarget) return null;
+  const aliased = PRICES.items.find((item) => normalizeDietText(item.name) === normalizeDietText(aliasTarget));
+  return aliased ? aliased.tags || [] : null;
+}
+
+// The catalog's own answer for an ingredient it knows, which is exact where word
+// matching can only be careful: "gluten free pasta" is not pasta.
+function findCatalogTagConflict(name, rule) {
+  const tags = catalogTagsFor(name);
+  if (!tags) return null;
+  const hit = tags.find((tag) => rule.excludesTags.includes(tag));
+  return hit ? `${String(name).trim()} (${hit})` : null;
+}
+
+// An ingredient the catalog knows is judged by its tags alone — they are exact,
+// and the word net would fail an alias like "gf pasta" for containing "pasta".
+// Anything the catalog has never heard of falls back to the word net.
+function findIngredientConflict(name, rule) {
+  if (catalogTagsFor(name)) return findCatalogTagConflict(name, rule);
+  return findForbiddenTerm(name, rule);
+}
+
+// Pantry items the student already owns but must not be cooked with. They are
+// reported, never silently dropped — the pantry is theirs, the plan is ours.
+function pantryDietConflicts(pantry, rules) {
+  if (!rules.length) return [];
+  return (pantry || []).filter((item) =>
+    rules.some((rule) => findIngredientConflict(item, rule))
+  );
+}
+
+function dietRulesContext(rules) {
+  if (!rules.length) return "";
+  return rules
+    .map((rule) => {
+      const allowed = (rule.allows || []).length ? ` Allowed substitutes: ${rule.allows.join(", ")}.` : "";
+      return `- ${rule.label} — never use, buy, or mention: ${rule.forbids.join(", ")}.${allowed}`;
+    })
+    .join("\n");
+}
+
+// Every field a forbidden ingredient could hide in, including the cooking steps
+// (a vegan plan can pass its shopping list and still say "brush with butter").
+function findDietViolations(plan, rules) {
+  if (!rules.length) return [];
+  // [where, text, isNamedIngredient] — only a named ingredient can be looked up
+  // in the catalog; prose gets the word net alone.
+  const fields = [];
+  for (const [index, dinner] of (plan.dinners || []).entries()) {
+    const where = `dinner ${index + 1} "${dinner?.title || "untitled"}"`;
+    fields.push([`${where} title`, dinner?.title, false]);
+    for (const item of dinner?.usesPantry || []) fields.push([`${where} pantry use`, item, true]);
+    for (const need of dinner?.needs || []) fields.push([`${where} shopping need`, typeof need === "object" && need ? need.item : need, true]);
+    for (const step of dinner?.steps || []) fields.push([`${where} cooking steps`, step, false]);
+  }
+  for (const entry of plan.shoppingList || []) fields.push(["the shopping list", entry?.item, true]);
+  for (const leftover of plan.leftovers || []) fields.push(["the leftovers", leftover?.item, true]);
+
+  const violations = [];
+  for (const [where, text, isIngredient] of fields) {
+    for (const rule of rules) {
+      const term = isIngredient ? findIngredientConflict(text, rule) : findForbiddenTerm(text, rule);
+      if (term) violations.push({ rule: rule.label, term, where });
+    }
+  }
+  return violations;
+}
+
+function assertPlanRespectsDiet(plan, rules) {
+  const violations = findDietViolations(plan, rules);
+  if (!violations.length) return plan;
+  const detail = violations
+    .slice(0, 6)
+    .map((violation) => `${violation.term} in ${violation.where} breaks "${violation.rule}"`)
+    .join("; ");
+  throw new Error(`AI plan breaks the user's dietary restrictions: ${detail}`);
+}
+
+const STORES = Object.keys(PRICES.stores);
 
 // ---------- store branch locations (approximate dev mock, Tempe 85281) ----------
 const STORE_DATA = JSON.parse(
@@ -264,11 +443,25 @@ const DEFAULT_ORIGIN = (() => {
 })();
 
 function findPrice(itemName) {
-  const q = itemName.toLowerCase();
-  const hit = PRICES.items.find(
-    (it) => it.name.toLowerCase() === q || it.name.toLowerCase().includes(q) || q.includes(it.name.toLowerCase())
-  );
-  return hit || null;
+  const q = String(itemName || "").toLowerCase().trim();
+  if (!q) return null;
+  const exact = PRICES.items.find((it) => it.name.toLowerCase() === q);
+  if (exact) return exact;
+  const aliased = ITEM_ALIASES[q];
+  if (aliased) {
+    const hit = PRICES.items.find((it) => it.name.toLowerCase() === String(aliased).toLowerCase());
+    if (hit) return hit;
+  }
+  // Fall back to a loose match, longest catalog name first: "gluten free pasta"
+  // contains "pasta", and pricing a celiac's dinner as wheat pasta is the one
+  // outcome this lookup must never produce.
+  const loose = PRICES.items
+    .filter((it) => {
+      const name = it.name.toLowerCase();
+      return name.includes(q) || q.includes(name);
+    })
+    .sort((a, b) => b.name.length - a.name.length);
+  return loose[0] || null;
 }
 function cheapestPack(itemName) {
   const hit = findPrice(itemName);
@@ -686,33 +879,163 @@ function validatePlanDiet(plan, diet) {
   return plan;
 }
 
-function groundShoppingPlan(plan) {
-  const neededItems = [...new Set((plan.dinners || [])
-    .flatMap((dinner) => dinner.needs || [])
-    .map((item) => String(item).trim().toLowerCase())
-    .filter(Boolean))];
-  const unpricedItems = neededItems.filter((item) => !cheapestPack(item));
-  if (unpricedItems.length) {
-    throw new Error(`AI plan includes ingredients outside the price catalog: ${unpricedItems.join(", ")}`);
-  }
+// ---------- units: a recipe requirement is a quantity of an ingredient ----------
+// Three families, converted only within a family. Turning cups of rice into
+// ounces needs a density per ingredient, and a guessed density is a wrong
+// shopping list, so a cross-family requirement is refused instead.
+const UNIT_FAMILIES = {
+  each: { family: "count", per: 1 },
+  ct: { family: "count", per: 1 },
+  count: { family: "count", per: 1 },
+  piece: { family: "count", per: 1 },
+  pieces: { family: "count", per: 1 },
+  slice: { family: "count", per: 1 },
+  slices: { family: "count", per: 1 },
+  clove: { family: "count", per: 1 },
+  cloves: { family: "count", per: 1 },
+  dozen: { family: "count", per: 12 },
+  oz: { family: "mass", per: 1 },
+  ounce: { family: "mass", per: 1 },
+  ounces: { family: "mass", per: 1 },
+  lb: { family: "mass", per: 16 },
+  lbs: { family: "mass", per: 16 },
+  pound: { family: "mass", per: 16 },
+  pounds: { family: "mass", per: 16 },
+  g: { family: "mass", per: 0.035274 },
+  gram: { family: "mass", per: 0.035274 },
+  grams: { family: "mass", per: 0.035274 },
+  "fl oz": { family: "volume", per: 1 },
+  "fluid ounce": { family: "volume", per: 1 },
+  "fluid ounces": { family: "volume", per: 1 },
+  tsp: { family: "volume", per: 1 / 6 },
+  teaspoon: { family: "volume", per: 1 / 6 },
+  teaspoons: { family: "volume", per: 1 / 6 },
+  tbsp: { family: "volume", per: 0.5 },
+  tablespoon: { family: "volume", per: 0.5 },
+  tablespoons: { family: "volume", per: 0.5 },
+  cup: { family: "volume", per: 8 },
+  cups: { family: "volume", per: 8 },
+  pint: { family: "volume", per: 16 },
+  quart: { family: "volume", per: 32 },
+  gallon: { family: "volume", per: 128 },
+};
 
-  const listMap = {};
+function normalizeUnit(unit) {
+  return String(unit || "").toLowerCase().replace(/[^a-z ]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function unitInfo(unit) {
+  return UNIT_FAMILIES[normalizeUnit(unit)] || null;
+}
+
+// Everything is measured in each family's base unit: count, ounces, fluid ounces.
+function toBaseAmount(amount, unit) {
+  const info = unitInfo(unit);
+  if (!info) return null;
+  return { family: info.family, base: Number(amount) * info.per };
+}
+
+const FAMILY_BASE_UNIT = { count: "", mass: "oz", volume: "fl oz" };
+
+function formatAmount(base, family) {
+  const rounded = Math.round(base * 100) / 100;
+  const unit = FAMILY_BASE_UNIT[family];
+  return unit ? `${rounded} ${unit}` : `${rounded}`;
+}
+
+// The pack a store sells, as a quantity rather than a label.
+function packSizeOf(item) {
+  const size = item?.size;
+  if (!size) return null;
+  const converted = toBaseAmount(size.amount, size.unit);
+  return converted && converted.base > 0 ? converted : null;
+}
+
+// One dinner's demand for one ingredient: { item, amount, unit }.
+//
+// An ingredient the catalog does not sell is still a hard error — pricing it
+// would mean inventing a price. A quantity we cannot read is not: the plan falls
+// back to one whole package, which is what the planner did before quantities
+// existed, and says so. A model that phrases an amount badly should cost the
+// student a rougher leftover estimate, not their entire dinner plan.
+function normalizeRequirement(raw) {
+  const rawName = raw && typeof raw === "object" && !Array.isArray(raw) ? raw.item : raw;
+  const name = String(rawName ?? "").trim().toLowerCase();
+  if (!name) throw new Error("a need is missing its item name");
+
+  const catalogItem = findPrice(name);
+  if (!catalogItem) {
+    throw new Error(`AI plan includes ingredients outside the price catalog: ${name}`);
+  }
+  const pack = packSizeOf(catalogItem);
+  if (!pack) throw new Error(`catalog item ${catalogItem.name} has no usable pack size`);
+
+  const wholePackage = () => ({
+    name: catalogItem.name, base: pack.base, family: pack.family,
+    amount: catalogItem.size.amount, unit: normalizeUnit(catalogItem.size.unit), assumed: true
+  });
+
+  // A bare "soy sauce", or an object with no readable amount.
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return wholePackage();
+  const amount = Number(raw.amount);
+  if (!Number.isFinite(amount) || amount <= 0) return wholePackage();
+
+  const required = toBaseAmount(amount, raw.unit);
+  // An unreadable unit, or one from the wrong family: a cup of rice cannot be
+  // converted without a density, so buy the package rather than guess at it.
+  if (!required || required.family !== pack.family) return wholePackage();
+
+  return { name: catalogItem.name, base: required.base, family: required.family, amount, unit: normalizeUnit(raw.unit), assumed: false };
+}
+
+// A dinner requires quantities of ingredients; a store sells packages. This is
+// where the two meet: demand is summed across the plan, packages are bought in
+// whole units, and what the packages exceed the demand by is the leftover.
+// Nothing here is estimated — the model supplies amounts, the arithmetic is ours.
+function groundShoppingPlan(plan) {
+  const demand = new Map();
   for (const dinner of plan.dinners || []) {
-    for (const item of dinner.needs || []) {
-      const name = String(item).trim().toLowerCase();
-      if (!name) continue;
-      if (!listMap[name]) {
-        const pack = cheapestPack(name);
-        listMap[name] = { ...pack, qty: 1, sharedBy: [] };
-      }
-      if (!listMap[name].sharedBy.includes(dinner.title)) listMap[name].sharedBy.push(dinner.title);
+    for (const raw of dinner.needs || []) {
+      const need = normalizeRequirement(raw);
+      const entry = demand.get(need.name) || { base: 0, family: need.family, sharedBy: [], assumed: false };
+      entry.base += need.base;
+      if (need.assumed) entry.assumed = true;
+      if (dinner.title && !entry.sharedBy.includes(dinner.title)) entry.sharedBy.push(dinner.title);
+      demand.set(need.name, entry);
     }
   }
-  const shoppingList = Object.values(listMap);
+
+  const shoppingList = [];
+  const leftovers = [];
+  for (const [name, entry] of demand) {
+    const catalogItem = findPrice(name);
+    const pack = packSizeOf(catalogItem);
+    const cheapest = cheapestPack(name);
+    // Packages are indivisible: needing 18 eggs means buying two dozen.
+    const qty = Math.max(1, Math.ceil(entry.base / pack.base - 1e-9));
+    const remaining = qty * pack.base - entry.base;
+    shoppingList.push({
+      ...cheapest,
+      qty,
+      required: +entry.base.toFixed(2),
+      requiredLabel: entry.assumed ? "one package (amount not given)" : formatAmount(entry.base, entry.family),
+      assumedWholePackage: entry.assumed,
+      sharedBy: entry.sharedBy
+    });
+    if (remaining > 1e-9 && !entry.assumed) {
+      leftovers.push({
+        item: name,
+        amount: `${formatAmount(remaining, entry.family)} left over`,
+        remaining: +remaining.toFixed(2),
+        unit: FAMILY_BASE_UNIT[entry.family] || "each"
+      });
+    }
+  }
+
   return {
     ...plan,
     shoppingList,
-    leftovers: plan.leftovers,
+    leftovers,
     totalCost: +shoppingList.reduce((total, item) => total + item.packPrice * item.qty, 0).toFixed(2)
   };
 }
@@ -739,13 +1062,18 @@ function parseAiPlan(content, expectedDinners) {
       if (!Array.isArray(dinner[field])) throw new Error(`Dinner ${index + 1} needs a ${field} array`);
     }
     if (dinner.steps.length === 0) throw new Error(`Dinner ${index + 1} needs at least one cooking step`);
-  }
-  if (!Array.isArray(plan.leftovers)) throw new Error("AI plan must contain a leftovers array");
-  for (const [index, leftover] of plan.leftovers.entries()) {
-    if (!leftover || typeof leftover !== "object" || typeof leftover.item !== "string" || !leftover.item.trim() || typeof leftover.amount !== "string" || !leftover.amount.trim()) {
-      throw new Error(`Leftover ${index + 1} needs an item and amount`);
+    for (const need of dinner.needs) {
+      try {
+        normalizeRequirement(need);
+      } catch (error) {
+        // Only an unpriceable ingredient reaches here now; a badly phrased
+        // quantity degrades to a whole package instead of failing the plan.
+        throw new Error(`Dinner ${index + 1}: ${error.message}`);
+      }
     }
   }
+  // Leftovers are computed from the requirements in groundShoppingPlan, so
+  // whatever the model guessed for them is ignored rather than validated.
   return plan;
 }
 
@@ -753,7 +1081,7 @@ async function repairAiPlan(chat, content, expectedDinners, initialError, requir
   return chat([
     {
       role: "system",
-      content: `Repair a malformed FridgeFuse meal-plan response. Reply ONLY with valid JSON containing exactly ${expectedDinners} dinners, a shoppingList, a leftovers array, totalCost, and notes. Each dinner must have a non-empty title, numeric timeMin, arrays named usesPantry, needs, and steps, and an exact sourceRecipe/source/sourceUrl triple from this curated recipe catalog. Base ingredients and steps on the verified facts in the selected record, with any minor changes stated in adaptationNote:\n${recipeSourcesContext()} Each leftover must have a non-empty item and amount. Use only ingredient names from the supplied price catalog. Preserve the original meal ideas when possible. Do not add commentary or Markdown fences.`
+      content: `Repair a malformed FridgeFuse meal-plan response. Reply ONLY with valid JSON containing exactly ${expectedDinners} dinners and notes. Each dinner must have a non-empty title, numeric timeMin, arrays named usesPantry, needs, and steps, and an exact sourceRecipe/source/sourceUrl triple from this curated recipe catalog. Base ingredients and steps on the verified facts in the selected record, with any minor changes stated in adaptationNote:\n${recipeSourcesContext()} Every entry in needs must be an object {"item","amount","unit"} giving how much the dinner uses, with an ingredient name from the supplied price catalog and a unit from the family that catalog lists for it. Do not return shoppingList, leftovers, or totalCost — the server computes them. Preserve the original meal ideas when possible. Do not add commentary or Markdown fences.`
     },
     {
       role: "user",
@@ -776,6 +1104,7 @@ app.get("/api/health", (req, res) => {
     stores: STORES,
     priceItems: PRICES.items.length,
     storeBranches: BRANCHES.length,
+    dietRules: DIET_RULES.map((rule) => rule.label),
     zip: PRICES.zip,
     failures: failures.length,
   });
@@ -990,14 +1319,23 @@ Set confirmed true only when the named grocery is visibly present, its entire ph
 app.post("/api/vision", handleVisionRequest);
 
 // System prompt for AI meal generation. Grounded to exact, curated recipe
-// records in data/recipe-sources.json rather than publisher homepages.
-function buildPlanSystemPrompt(priceCtx) {
+// records in data/recipe-sources.json rather than publisher homepages, and
+// carrying the user's dietary restrictions when they have any.
+function buildPlanSystemPrompt(priceCtx, dietCtx = "") {
   const sourcesCtx = recipeSourcesContext();
+  const dietSection = dietCtx
+    ? `\nDietary restrictions (STRICT — these are safety constraints):
+- The restrictions below are absolute. NEVER put a forbidden ingredient in a title, usesPantry, needs, steps, leftovers, or notes — not as a garnish, not as an optional topping, not as a "serve with" suggestion.
+- A forbidden ingredient stays forbidden even when the user already has it in their pantry. Leave it in the pantry and cook something else.
+- Adapt the approved recipe with a compliant substitute and say which swap you made in "adaptationNote".
+- If no approved recipe can be adapted safely, return the closest one that CAN be, rather than serving a forbidden ingredient.
+${dietCtx}`
+    : "";
   return `You are FridgeFuse, a student meal planner for Tempe AZ 85281. Reply ONLY with JSON:
-{"dinners":[{"title":"...","sourceRecipe":"...","source":"...","sourceUrl":"...","adaptationNote":"","timeMin":20,"protein":25,"carbs":50,"fiber":6,"usesPantry":["..."],"needs":["..."],"steps":["..."]}],
-"shoppingList":[{"item":"...","pack":"...","packPrice":0.0,"store":"...","qty":1,"sharedBy":["..."]}],
-"leftovers":[{"item":"...","amount":"..."}],"totalCost":0.0,"notes":"..."}
-Rules: plan EXACTLY the requested number of dinners. The user is a freshman cook, so give concrete beginner-safe steps and only use the listed equipment. First use food marked use-soon, then minimize unique purchases, stay within budget, and keep cooking easy. Prefer purchases shared across dinners. Put only missing ingredients in needs; pantry items cost $0. Return a concise leftover estimate for each purchased package. Use only ingredient names from the price context so the server can price every need. The server will replace shopping prices with its catalog. Respect time, equipment, and dietary restrictions. Price context: ${priceCtx}.
+{"dinners":[{"title":"...","sourceRecipe":"...","source":"...","sourceUrl":"...","adaptationNote":"","timeMin":20,"protein":25,"carbs":50,"fiber":6,"usesPantry":["..."],"needs":[{"item":"...","amount":2,"unit":"..."}],"steps":["..."]}],
+"notes":"..."}
+Rules: plan EXACTLY the requested number of dinners. The user is a freshman cook, so give concrete beginner-safe steps and only use the listed equipment. First use food marked use-soon, then minimize unique purchases, stay within budget, and keep cooking easy. Prefer purchases shared across dinners. Put only missing ingredients in needs; pantry items cost $0. Respect time, equipment, and dietary restrictions.
+Quantities (REQUIRED): every need is how much that dinner actually uses — {"item","amount","unit"} — not a package. Three eggs is {"item":"eggs","amount":3,"unit":"each"}, even though eggs are sold by the dozen. Use only ingredient names from the price context, and give each amount in the unit family the price context shows for that item: count items in each, weight items in oz or lb, liquids in fl oz, cups, or tbsp. Never answer a weight item in cups or a count item in ounces. Do NOT return shoppingList, leftovers, or totalCost — the server buys whole packages from its own catalog, sums the cost, and works out what is left over. Price context: ${priceCtx}.
 Recipe grounding (STRICT):
 - Select every dinner from the curated recipe records below. NEVER invent a source recipe, cite a publisher homepage, or use an unlisted recipe.
 - Treat each record's verified ingredients and method outline as authoritative. Build the dinner's ingredients and steps from those facts, adjusted only for the user's pantry, budget, equipment, time, and diet. Do not rely on other knowledge about the publisher's site.
@@ -1005,7 +1343,7 @@ Recipe grounding (STRICT):
 - The dinner "title" may describe the adapted result. State every minor substitution or omission in "adaptationNote". Use "" only when the generated dinner follows the selected record without changes.
 - If no record is an exact fit, choose the closest record and make only the changes needed for the user's constraints. Never turn it into an unrelated recipe.
 Curated recipes:
-${sourcesCtx}`;
+${sourcesCtx}${dietSection}`;
 }
 
 async function handlePlanRequest(req, res, { chat = airChat } = {}) {
@@ -1031,21 +1369,31 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
   const safeUseSoon = asStringArray(useSoon, []);
   const safeExclude = asStringArray(exclude, []);
   const safeDiet = typeof diet === "string" ? diet : "";
-  const priceCtx = PRICES.items.map((i) => {
-    const c = cheapestPack(i.name);
-    return `${i.name} (~${c.pack} @ ${c.store} $${c.packPrice})`;
-  }).join("; ");
-  // Turns a saved diet string ("vegan, no beef") into a concrete ingredient
-  // list the model can't misread, plus any advisory-only notes (halal, kosher,
-  // shellfish — restrictions the mock catalog can't itself enforce).
+  const dietRules = resolveDietRules(safeDiet);
+  const dietCtx = dietRulesContext(dietRules);
+  // Pantry items the diet rules out are named as off-limits rather than hidden,
+  // and never offered as use-soon food the model should cook first.
+  const offLimitsPantry = pantryDietConflicts(safePantry, dietRules);
+  const cookablePantry = safePantry.filter((item) => !offLimitsPantry.includes(item));
+  const cookableUseSoon = safeUseSoon.filter((item) => !offLimitsPantry.includes(item));
+  // Keep the profile catalog's user-facing phrasing in the prompt so advisory
+  // notes (for catalog gaps like halal/kosher) still reach the model.
   const dietSelections = parseDietSelections(safeDiet);
   const dietBlocked = [...blockedIngredientsForDiet(safeDiet)];
   const dietGuidance = dietSelections.length
     ? ` Hard exclusions from the price catalog: ${dietBlocked.length ? dietBlocked.join(", ") : "none from this catalog"} (from: ${dietSelections.map((o) => o.label).join(", ")}).${dietSelections.some((o) => o.note) ? ` Also note: ${dietSelections.filter((o) => o.note).map((o) => o.note).join(" ")}` : ""}`
     : "";
+  const priceCtx = PRICES.items.map((i) => {
+    const c = cheapestPack(i.name);
+    const family = packSizeOf(i)?.family || "count";
+    return `${i.name} [sold by ${family}, ${i.size.amount} ${i.size.unit} per pack] (~${c.pack} @ ${c.store} $${c.packPrice})`;
+  }).join("; ");
+  const offLimitsCtx = offLimitsPantry.length
+    ? ` Pantry items you must NOT cook with or mention (they break the diet): ${offLimitsPantry.join(", ")}.`
+    : "";
   const planningMessages = [
-    { role: "system", content: buildPlanSystemPrompt(priceCtx) },
-    { role: "user", content: `Pantry: ${safePantry.join(", ") || "(empty)"}. Use soon: ${safeUseSoon.join(", ") || "none"}. Budget total $${budget} for the whole plan. Dinners: ${dinners}. Max ${maxTimeMin} min each. Equipment: ${safeEquipment.join(", ")}. Diet/notes: ${safeDiet || "none"}.${dietGuidance} Avoid these meals: ${safeExclude.join(", ") || "none"}. Latest request: ${request || "build the best plan"}.` },
+    { role: "system", content: buildPlanSystemPrompt(priceCtx, dietCtx) },
+    { role: "user", content: `Pantry: ${cookablePantry.join(", ") || "(empty)"}. Use soon: ${cookableUseSoon.join(", ") || "none"}. Budget total $${budget} for the whole plan. Dinners: ${dinners}. Max ${maxTimeMin} min each. Equipment: ${safeEquipment.join(", ")}. Diet/notes: ${safeDiet || "none"}.${dietGuidance}${offLimitsCtx} Avoid these meals: ${safeExclude.join(", ") || "none"}. Latest request: ${request || "build the best plan"}.` },
   ];
   const out = await chat(planningMessages, { maxTokens: 1800 });
   if (!out.ok) {
@@ -1054,10 +1402,10 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
   const expectedDinners = asDinners(dinners, 3);
   const content = out.data?.choices?.[0]?.message?.content;
   try {
-    const plan = groundShoppingPlan(validatePlanDiet(parseAiPlan(content, expectedDinners), safeDiet));
-    return res.json({ ok: true, model: AIR_MODEL, ...plan });
+    const plan = groundShoppingPlan(assertPlanRespectsDiet(parseAiPlan(content, expectedDinners), dietRules));
+    return res.json({ ok: true, model: AIR_MODEL, diet: safeDiet, dietRules: dietRules.map((rule) => rule.label), ...plan });
   } catch (initialError) {
-    const repaired = await repairAiPlan(chat, content, expectedDinners, initialError, `${planningMessages[1].content}\n\nPrice catalog:\n${priceCtx}`);
+    const repaired = await repairAiPlan(chat, content, expectedDinners, initialError, `${planningMessages[1].content}\n\nPrice catalog:\n${priceCtx}${dietCtx ? `\n\nDietary restrictions (absolute):\n${dietCtx}` : ""}`);
     if (!repaired.ok) {
       const failure = repaired.failure || reportFailure("asu-air", "plan-repair", {
         status: "repair-failed",
@@ -1067,8 +1415,8 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
     }
     try {
       const repairedContent = repaired.data?.choices?.[0]?.message?.content;
-      const plan = groundShoppingPlan(validatePlanDiet(parseAiPlan(repairedContent, expectedDinners), safeDiet));
-      return res.json({ ok: true, model: AIR_MODEL, repaired: true, ...plan });
+      const plan = groundShoppingPlan(assertPlanRespectsDiet(parseAiPlan(repairedContent, expectedDinners), dietRules));
+      return res.json({ ok: true, model: AIR_MODEL, repaired: true, diet: safeDiet, dietRules: dietRules.map((rule) => rule.label), ...plan });
     } catch (repairError) {
       const failure = reportFailure("asu-air", "plan-repair", {
         status: "parse-error",
@@ -1284,8 +1632,12 @@ Object.assign(module.exports, {
   handlePlanRequest, handleVisionRequest, normalizeVisionResult,
   haversineMiles, isValidCoordinate, resolveCatalogItem, normalizeCartItems, optimizeCart,
   describeLocation, reverseGeocode, handleGeoDescribe, geocodePostalCode, handleGeoPostal,
+  STORE_DATA, BRANCHES, DEFAULT_ORIGIN, ITEM_ALIASES,
+  DIET_RULES, resolveDietRules, findForbiddenTerm, findDietViolations,
+  assertPlanRespectsDiet, pantryDietConflicts, dietRulesContext,
+  catalogTagsFor, findCatalogTagConflict, findIngredientConflict,
   DIET_OPTIONS, EQUIPMENT_OPTIONS, parseDietSelections, blockedIngredientsForDiet, validatePlanDiet,
-  STORE_DATA, BRANCHES, DEFAULT_ORIGIN, ITEM_ALIASES
+  unitInfo, toBaseAmount, packSizeOf, normalizeRequirement, groundShoppingPlan
 });
 
 if (require.main === module) {
