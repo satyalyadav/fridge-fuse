@@ -984,6 +984,23 @@ function normalizeRequirement(raw, { servings = 1, strict = false } = {}) {
   return { name: catalogItem.name, base: required.base, family: required.family, amount, unit: normalizeUnit(raw.unit), assumed: false };
 }
 
+// A swap has to be enforced, not requested. The prompt lets a dinner's title
+// describe the adapted result, so the same curated recipe can come back under a
+// new name — the recipe identity is what the exclusion has to match.
+function findRepeatedExclusion(plan, excluded) {
+  if (!excluded.length) return null;
+  const unwanted = new Set(excluded.map((entry) => normalizeDietText(entry)).filter(Boolean));
+  for (const [index, dinner] of (plan.dinners || []).entries()) {
+    for (const field of ["sourceRecipe", "title"]) {
+      const value = normalizeDietText(dinner?.[field]);
+      if (value && unwanted.has(value)) {
+        return `dinner ${index + 1} is "${dinner[field]}" again, which the user asked to swap out`;
+      }
+    }
+  }
+  return null;
+}
+
 // A dinner feeds one student unless it says otherwise.
 function servingsOf(dinner) {
   const servings = Number(dinner?.servings);
@@ -1404,7 +1421,7 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
     : "";
   const planningMessages = [
     { role: "system", content: buildPlanSystemPrompt(priceCtx, dietCtx) },
-    { role: "user", content: `Pantry: ${cookablePantry.join(", ") || "(empty)"}. Use soon: ${cookableUseSoon.join(", ") || "none"}. Budget total $${budget} for the whole plan. Dinners: ${dinners}. Max ${maxTimeMin} min each. Equipment: ${safeEquipment.join(", ")}. Diet/notes: ${safeDiet || "none"}.${dietGuidance}${offLimitsCtx} Avoid these meals: ${safeExclude.join(", ") || "none"}. Latest request: ${request || "build the best plan"}.` },
+    { role: "user", content: `Pantry: ${cookablePantry.join(", ") || "(empty)"}. Use soon: ${cookableUseSoon.join(", ") || "none"}. Budget total $${budget} for the whole plan. Dinners: ${dinners}. Max ${maxTimeMin} min each. Equipment: ${safeEquipment.join(", ")}. Diet/notes: ${safeDiet || "none"}.${dietGuidance}${offLimitsCtx} Do NOT use these recipes again, under any title: ${safeExclude.join(", ") || "none"}. Choose a different curated record instead. Latest request: ${request || "build the best plan"}.` },
   ];
   const out = await chat(planningMessages, { maxTokens: 1800 });
   if (!out.ok) {
@@ -1414,6 +1431,8 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
   const content = out.data?.choices?.[0]?.message?.content;
   try {
     const plan = groundShoppingPlan(assertPlanRespectsDiet(parseAiPlan(content, expectedDinners), dietRules));
+    const repeated = findRepeatedExclusion(plan, safeExclude);
+    if (repeated) throw new Error(repeated);
     return res.json({ ok: true, model: AIR_MODEL, diet: safeDiet, dietRules: dietRules.map((rule) => rule.id), offLimitsPantry, ...plan });
   } catch (initialError) {
     const repaired = await repairAiPlan(chat, content, expectedDinners, initialError, `${planningMessages[1].content}\n\nPrice catalog:\n${priceCtx}${dietCtx ? `\n\nDietary restrictions (absolute):\n${dietCtx}` : ""}`);
@@ -1427,7 +1446,15 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
     try {
       const repairedContent = repaired.data?.choices?.[0]?.message?.content;
       const plan = groundShoppingPlan(assertPlanRespectsDiet(parseAiPlan(repairedContent, expectedDinners, { strictAmounts: false }), dietRules));
-      return res.json({ ok: true, model: AIR_MODEL, repaired: true, diet: safeDiet, dietRules: dietRules.map((rule) => rule.id), offLimitsPantry, ...plan });
+      // The curated catalog is small, and equipment and budget narrow it
+      // further. When nothing else fits, saying so beats a silent no-op.
+      const stillRepeated = findRepeatedExclusion(plan, safeExclude);
+      return res.json({
+        ok: true, model: AIR_MODEL, repaired: true, diet: safeDiet,
+        dietRules: dietRules.map((rule) => rule.id), offLimitsPantry,
+        swapUnavailable: stillRepeated ? true : undefined,
+        ...plan
+      });
     } catch (repairError) {
       const failure = reportFailure("asu-air", "plan-repair", {
         status: "parse-error",
@@ -1649,7 +1676,8 @@ Object.assign(module.exports, {
   catalogTagsFor, findCatalogTagConflict, findIngredientConflict,
   DIET_OPTIONS, EQUIPMENT_OPTIONS, parseDietSelections, blockedIngredientsForDiet,
   unitInfo, toBaseAmount, packSizeOf, normalizeRequirement, groundShoppingPlan,
-  servingBandOf, amountImplausibility, servingsOf, MAX_PACKAGES_PER_DINNER
+  servingBandOf, amountImplausibility, servingsOf, MAX_PACKAGES_PER_DINNER,
+  findRepeatedExclusion
 });
 
 if (require.main === module) {
