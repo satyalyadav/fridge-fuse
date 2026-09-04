@@ -116,7 +116,7 @@ not an allergy-safety guarantee.
 
 Behind the profile, the home screen is a conversation, not a constraint form. A
 student can describe their food, budget, time, and equipment in one message or
-add a fridge photo. FridgeFuse keeps a rough pantry in local browser storage and
+add a fridge photo. FridgeFuse keeps a rough inventory in local browser storage and
 renders the evolving plan beside the chat.
 
 With `VOYAGER_KEY` configured, the planning flow sends the pantry, constraints,
@@ -131,7 +131,7 @@ The demo flow is:
 3. Open beginner cooking steps.
 4. Review the merged full-package list and estimated checkout total.
 5. Swap a meal without resetting the pantry or budget.
-6. Open the pantry to edit rough amounts or mark another item “use soon.”
+6. Open the inventory to edit rough amounts or mark another item “use soon.”
 
 Photo recognition is intentionally conservative. A grocery is added
 automatically only when Voyager supplies a safe object crop, identifies the

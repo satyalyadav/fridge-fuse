@@ -18,7 +18,7 @@
   <div class="app-shell">
     <header class="topbar">
       <div class="topbar-left">
-        <button class="sidebar-toggle" id="sidebarToggle" type="button" aria-expanded="true" aria-controls="sidebar" aria-label="Hide pantry and shop">
+        <button class="sidebar-toggle" id="sidebarToggle" type="button" aria-expanded="true" aria-controls="sidebar" aria-label="Hide inventory and shop">
           <svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20"><path d="M4 5h16M4 12h16M4 19h16"/></svg>
         </button>
         <a class="brand" href="./" aria-label="FridgeFuse home">
@@ -34,34 +34,34 @@
         <button class="icon-button mobile-reset-button" id="resetMobileButton" type="button" aria-label="Reset demo">
           <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8M4 3v5h5"/></svg>
         </button>
-        <button class="avatar-button" id="profileButton" type="button" aria-label="Open profile">
+        <button class="avatar-button" id="profileButton" type="button" aria-label="Open settings">
           ME
         </button>
       </div>
     </header>
 
-    <aside class="sidebar" id="sidebar" aria-label="Pantry and shopping">
+    <aside class="sidebar" id="sidebar" aria-label="Inventory and shopping">
       <div class="sidebar-scroll">
-        <div class="kitchen-summary">
-          <dl>
-            <div><dt>Cooking with</dt><dd id="summaryEquipment">microwave</dd></div>
-            <div><dt>Avoiding</dt><dd id="summaryDiet">nothing yet</dd></div>
-            <div><dt>Budget</dt><dd id="summaryBudget">$20</dd></div>
-          </dl>
-          <button class="edit-preferences" id="editPreferencesButton" type="button">Edit kitchen &amp; diet</button>
-        </div>
+        <button class="kitchen-summary" id="editPreferencesButton" type="button">
+          <span class="kitchen-summary-line">
+            <span id="summaryEquipment">microwave</span>
+            <span id="summaryDiet">nothing yet</span>
+            <span id="summaryBudget">$20</span>
+          </span>
+          <span class="kitchen-summary-hint">Settings</span>
+        </button>
 
-        <section class="side-section" id="pantryDrawer" aria-labelledby="pantryTitle">
+        <section class="side-section" id="pantryDrawer" aria-labelledby="inventoryTitle">
           <div class="side-header">
             <div>
               <p class="eyebrow">Saved on this device</p>
-              <h2 id="pantryTitle">Your pantry</h2>
+              <h2 id="inventoryTitle">Your inventory</h2>
             </div>
             <span class="side-count" id="pantryNavCount">0</span>
           </div>
         <p class="drawer-intro">Rough amounts are enough. Mark anything that needs using soon.</p>
         <form class="pantry-add" id="pantryForm">
-          <label class="sr-only" for="pantryInput">Add pantry item</label>
+          <label class="sr-only" for="pantryInput">Add inventory item</label>
           <input id="pantryInput" type="text" placeholder="Add eggs, some rice…" autocomplete="off">
           <button type="submit">Add</button>
         </form>
@@ -152,12 +152,6 @@
           <div class="grocery-results" id="groceryResults" aria-live="polite"></div>
         </section>
 
-        <div class="sidebar-foot">
-          <button class="ghost-button" id="resetDemoButton" type="button">
-            <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8M4 3v5h5"/></svg>
-            Reset demo
-          </button>
-        </div>
       </div>
     </aside>
 
@@ -168,7 +162,7 @@
             <p class="eyebrow">Your kitchen copilot</p>
             <h1>What are we working with?</h1>
           </div>
-          <button class="icon-button mobile-pantry-button" id="openPantryButton" aria-label="Open pantry">
+          <button class="icon-button mobile-pantry-button" id="openPantryButton" aria-label="Open inventory">
             <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 3h12v18H6zM6 9h12M15 6h.01M15 13h.01"/></svg>
           </button>
         </div>
@@ -283,14 +277,14 @@
         <div class="drawer-header">
           <div>
             <p class="eyebrow">Saved on this device</p>
-            <h2 id="profileTitle">Your profile</h2>
+            <h2 id="profileTitle">Settings</h2>
           </div>
 
           <button
             class="icon-button"
             type="button"
             data-close-profile
-            aria-label="Close profile"
+            aria-label="Close settings"
           >
             <svg aria-hidden="true" viewBox="0 0 24 24">
               <path d="m6 6 12 12M18 6 6 18"/>
@@ -363,6 +357,7 @@
               <button type="button" class="ghost-button" id="importKitchenButton">Restore from a file</button>
             </div>
             <input class="sr-only" id="importKitchenInput" type="file" accept="application/json,.json" tabindex="-1" aria-hidden="true">
+            <button type="button" class="danger-link" id="resetDemoButton">Reset everything on this device</button>
           </div>
 
           <div class="profile-actions">
@@ -379,7 +374,7 @@
     <nav class="mobile-nav" aria-label="Mobile navigation">
       <button class="active" data-view="plan"><span>Plan</span></button>
       <button data-view="chat"><span>Chat</span></button>
-      <button data-view="sidebar"><span>Pantry &amp; Shop</span><b id="mobilePantryCount">0</b><b class="sr-only" id="mobileGroceryCount">0</b></button>
+      <button data-view="sidebar"><span>Inventory &amp; Shop</span><b id="mobilePantryCount">0</b><b class="sr-only" id="mobileGroceryCount">0</b></button>
     </nav>
 
     <div class="toast-region" id="toastRegion" aria-live="assertive"></div>

@@ -183,36 +183,53 @@ button.mobile-reset-button { display: none; }
   scrollbar-color: #d5cdc9 transparent;
 }
 
+/* One line, and the line is the control: what is in force, and the way to
+   change it, without a block of labels above the things you came here to use. */
 .kitchen-summary {
-  margin-bottom: 22px;
-  padding: 14px 15px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 18px;
+  padding: 10px 12px;
   border: 1px solid var(--line);
-  border-radius: 13px;
+  border-radius: 11px;
   background: var(--paper);
+  text-align: left;
 }
-.kitchen-summary dl { margin: 0; display: grid; gap: 7px; }
-.kitchen-summary div { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; }
-.kitchen-summary dt {
-  color: var(--ink-soft);
+.kitchen-summary:hover { border-color: var(--maroon); }
+.kitchen-summary-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-width: 0;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+.kitchen-summary-line span { text-transform: capitalize; }
+.kitchen-summary-line span + span::before { content: "· "; color: var(--ink-soft); }
+.kitchen-summary-hint {
+  flex: 0 0 auto;
+  color: var(--maroon);
   font-family: var(--utility);
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.07em;
   text-transform: uppercase;
 }
-.kitchen-summary dd { margin: 0; text-align: right; font-size: 12.5px; font-weight: 600; }
-.kitchen-summary .edit-preferences {
-  width: 100%;
+
+.danger-link {
   margin-top: 12px;
-  padding: 9px 12px;
-  border: 1px solid var(--maroon);
-  border-radius: 10px;
-  background: transparent;
-  color: var(--maroon);
-  font-size: 12.5px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--alert);
+  font-size: 12px;
   font-weight: 700;
+  text-decoration: underline;
 }
-.kitchen-summary .edit-preferences:hover { background: var(--maroon-wash); }
 
 .side-section + .side-section {
   margin-top: 26px;
