@@ -48,6 +48,7 @@ const MAX_EXCLUDED = 20;
 const MAX_MESSAGES = 30;
 const MAX_GROCERY_ITEMS = 50;
 const MAX_GROCERY_QTY = 99;
+const PROFILE_EXTRA_DIET_TERMS = ["peanut allergy", "lactose intolerant", "celiac"];
 
 function addExclusion(title) {
   if (!title) return;
@@ -470,8 +471,14 @@ async function buildPlan(request = "") {
         exclude: state.excludedTitles
       })
     });
-    if (!response.ok) throw new Error(`Planning returned HTTP ${response.status}`);
-    const result = await response.json();
+    // Read the body even on an error status: the server explains WHY it refused
+    // (an unpriced ingredient, an unapproved recipe, a dietary violation), and
+    // that reason is more useful to the student than the status code.
+    const result = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(result?.failure?.message || `Planning returned HTTP ${response.status}`);
+    }
+    if (!result) throw new Error("The planner did not return a plan");
     if (!result.ok && !result.dinners) throw new Error(result.failure?.message || "The planner did not return a plan");
 
     state.plan = {
@@ -495,8 +502,9 @@ async function buildPlan(request = "") {
       ? `The checkout total is ${formatMoney(result.totalCost)}, under your ${formatMoney(state.constraints.budget)} limit.`
       : `The cheapest full-package version is ${formatMoney(result.totalCost)}, which is over your ${formatMoney(state.constraints.budget)} limit.`;
     const soonText = soon.length ? ` I put ${soon.join(" and ")} first so it gets used.` : "";
+    const dietText = state.constraints.diet ? ` Every dinner is ${state.constraints.diet}.` : "";
     addAssistantMessage(
-      `I built ${result.dinners.length} beginner-friendly dinners for the equipment you have.${soonText}`,
+      `I built ${result.dinners.length} beginner-friendly dinners for the equipment you have.${soonText}${dietText}`,
       `${budgetStatus} Say "swap dinner two," lower the budget, or tell me what you dislike.`
     );
     setMobileView("plan");
@@ -534,7 +542,8 @@ function renderPlan() {
   $("planContent").hidden = false;
   $("budgetStamp").hidden = false;
   $("planTitle").textContent = `${plan.dinners.length} ${plan.dinners.length === 1 ? "dinner" : "dinners"}, one small grocery run`;
-  $("planSubtitle").textContent = `Built for ${planConstraints.equipment.join(" + ") || "the equipment you have"}, ${planConstraints.maxTimeMin} minutes or less each.`;
+  const dietSummary = String(planConstraints.diet || "").trim();
+  $("planSubtitle").textContent = `Built for ${planConstraints.equipment.join(" + ") || "the equipment you have"}, ${planConstraints.maxTimeMin} minutes or less each.${dietSummary ? ` Kept ${dietSummary}.` : ""}`;
   $("budgetTotal").textContent = formatMoney(plan.totalCost);
   $("budgetLimit").textContent = `of ${formatMoney(planConstraints.budget)}`;
   $("budgetStamp").classList.toggle("over", plan.totalCost > planConstraints.budget);
@@ -584,15 +593,24 @@ function renderPlan() {
   }).join("");
 
   const shopping = plan.shoppingList || [];
-  $("shoppingList").innerHTML = shopping.map((item) => `
+  $("shoppingList").innerHTML = shopping.map((item) => {
+    const qty = Math.max(1, Number(item.qty || 1));
+    const qtyLabel = qty > 1 ? `${qty} × ` : "";
+    const packLabel = escapeHtml(item.pack || "1 package");
+    const storeLabel = escapeHtml(titleCase(item.store || "mock store"));
+    const usesLabel = item.requiredLabel ? ` · uses ${escapeHtml(item.requiredLabel)}` : "";
+    const sharedBy = Array.isArray(item.sharedBy) ? item.sharedBy : [];
+    const coversLabel = sharedBy.length > 1 ? ` · covers ${sharedBy.length} dinners` : "";
+    return `
     <div class="receipt-row">
       <span class="receipt-item">
         <strong>${escapeHtml(item.item)}</strong>
-        <small>${escapeHtml(item.pack || "1 package")} · ${escapeHtml(titleCase(item.store || "mock store"))}${(item.sharedBy || []).length > 1 ? ` · covers ${item.sharedBy.length} dinners` : ""}</small>
+        <small>${qtyLabel}${packLabel} · ${storeLabel}${usesLabel}${coversLabel}</small>
       </span>
-      <span class="receipt-price">${formatMoney(Number(item.packPrice || 0) * Number(item.qty || 1))}</span>
+      <span class="receipt-price">${formatMoney(Number(item.packPrice || 0) * qty)}</span>
     </div>
-  `).join("") + `
+  `;
+  }).join("") + `
     <div class="receipt-total"><span>ESTIMATED TOTAL</span><strong>${formatMoney(plan.totalCost)}</strong></div>`;
 
   const leftovers = plan.leftovers?.length ? plan.leftovers : shopping.slice(0, 4).map((item) => ({

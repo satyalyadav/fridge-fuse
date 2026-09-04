@@ -10,7 +10,7 @@
 [functions]
   node_bundler = "esbuild"
   external_node_modules = ["express", "serverless-http", "dotenv"]
-  included_files = ["data/prices.json", "data/stores.json", "data/recipe-sources.json"]
+  included_files = ["data/prices.json", "data/stores.json", "data/recipe-sources.json", "data/diet-rules.json"]
 
 [[redirects]]
   from = "/api/*"

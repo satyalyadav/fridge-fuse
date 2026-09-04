@@ -10,8 +10,11 @@ const {
   handlePlanRequest, handleVisionRequest, normalizeVisionResult, handleGeoPostal,
   haversineMiles, isValidCoordinate, resolveCatalogItem, optimizeCart,
   describeLocation, handleGeoDescribe,
+  STORE_DATA, BRANCHES, DEFAULT_ORIGIN, ITEM_ALIASES,
+  DIET_RULES, resolveDietRules, findForbiddenTerm, findDietViolations,
+  pantryDietConflicts, dietRulesContext, catalogTagsFor, findIngredientConflict,
   DIET_OPTIONS, EQUIPMENT_OPTIONS, parseDietSelections, blockedIngredientsForDiet,
-  STORE_DATA, BRANCHES, DEFAULT_ORIGIN, ITEM_ALIASES
+  unitInfo, toBaseAmount, packSizeOf, normalizeRequirement, groundShoppingPlan
 } = require("./server.js");
 
 // Normalize OS-native path separators to forward slashes so assertions are
@@ -67,7 +70,10 @@ ok(
 const planPrompt = buildPlanSystemPrompt("(price context)");
 ok(planPrompt.includes("NEVER") && planPrompt.includes("curated recipe records"), "plan prompt restricts generation to curated recipes");
 ok(planPrompt.includes('"sourceRecipe"') && planPrompt.includes('"source"') && planPrompt.includes('"sourceUrl"'), "plan prompt requires the exact recipe citation triple");
-ok(planPrompt.includes('"leftovers"') && planPrompt.includes("leftover estimate"), "plan prompt asks AI for leftover estimates");
+ok(!planPrompt.includes('"leftovers":[{'), "plan prompt no longer asks the model to estimate leftovers");
+ok(/Do NOT return shoppingList, leftovers, or totalCost/.test(planPrompt), "plan prompt tells the model the server does the package arithmetic");
+ok(planPrompt.includes('{"item","amount","unit"}') && /how much that dinner actually uses/.test(planPrompt), "plan prompt asks for a quantity per ingredient, not a package");
+ok(/Never answer a weight item in cups/.test(planPrompt), "plan prompt pins each amount to the catalog's unit family");
 ok(planPrompt.includes("adaptationNote") && planPrompt.includes("choose the closest record"), "plan prompt chooses the closest curated recipe with an adaptation note");
 ok(planPrompt.includes("NEVER invent a source recipe"), "plan prompt forbids invented recipe citations");
 for (const recipe of APPROVED_RECIPES) {
@@ -82,6 +88,136 @@ ok(
     toSlashes(resolveDataPath("/var/task/netlify/functions", "/var/task", (candidate) => toSlashes(candidate) === "/var/task/data/recipe-sources.json", "recipe-sources.json")) === "/var/task/data/recipe-sources.json",
   "recipe sources resolve from the Netlify task root"
 );
+
+// ---------- recipes as typed requirements: quantities, packages, leftovers ----------
+const unsized = PRICES.items.filter((item) => !packSizeOf(item)).map((item) => item.name);
+ok(unsized.length === 0, `every catalog item has a usable pack size${unsized.length ? ` (missing: ${unsized.join(", ")})` : ""}`);
+ok(toBaseAmount(1, "lb").base === 16 && toBaseAmount(1, "dozen").base === 12 && toBaseAmount(1, "cup").base === 8, "units convert to their family base");
+ok(toBaseAmount(2, "tbsp").family === "volume" && toBaseAmount(2, "oz").family === "mass" && toBaseAmount(2, "each").family === "count", "units are grouped into count, mass, and volume");
+ok(unitInfo("nonsense") === null, "an unknown unit is rejected rather than assumed");
+
+// A quantity we cannot read falls back to one whole package and says so; only
+// an ingredient the catalog cannot price is fatal, because pricing it would
+// mean inventing a price.
+const cupOfRice = normalizeRequirement({ item: "rice", amount: 1, unit: "cup" });
+ok(cupOfRice.assumed && cupOfRice.base === packSizeOf(findPrice("rice")).base, "a volume amount for a weight item buys one package instead of guessing a density");
+ok(normalizeRequirement({ item: "eggs", amount: 0, unit: "each" }).assumed, "a need with no positive amount falls back to one package");
+ok(normalizeRequirement("eggs").assumed, "a bare ingredient name falls back to one package");
+ok(normalizeRequirement({ item: "eggs", amount: 3, unit: "each" }).assumed === false, "a well-formed quantity is used as given");
+assert.throws(() => normalizeRequirement({ item: "unobtainium", amount: 1, unit: "each" }), /outside the price catalog/);
+n++; console.log(`ok ${n} - an ingredient the catalog cannot price is still fatal`);
+ok(normalizeRequirement({ item: "EGGS", amount: 2, unit: "Each" }).base === 2, "requirements are case-insensitive in both name and unit");
+ok(normalizeRequirement({ item: "chicken breast", amount: 8, unit: "oz" }).base === 8, "a weight amount stays in ounces");
+
+// Packages are indivisible: this is the arithmetic the model used to guess.
+const twoDinners = groundShoppingPlan({
+  dinners: [
+    { title: "A", needs: [{ item: "eggs", amount: 3, unit: "each" }, { item: "spinach", amount: 2, unit: "oz" }] },
+    { title: "B", needs: [{ item: "eggs", amount: 11, unit: "each" }] }
+  ]
+});
+const eggLine = twoDinners.shoppingList.find((entry) => entry.item === "eggs");
+ok(eggLine.qty === 2, `14 eggs buys 2 dozen, not 1 (qty=${eggLine.qty})`);
+ok(eggLine.sharedBy.length === 2, "demand is summed across every dinner that uses the ingredient");
+ok(twoDinners.totalCost === +(eggLine.packPrice * 2 + cheapestPack("spinach").packPrice).toFixed(2), "the total pays for every package bought, not one of each");
+const eggLeftover = twoDinners.leftovers.find((entry) => entry.item === "eggs");
+ok(eggLeftover.remaining === 10, `leftovers are computed: 2 dozen minus 14 leaves ${eggLeftover.remaining}`);
+ok(twoDinners.leftovers.find((entry) => entry.item === "spinach").remaining === 3, "a partly used package reports the remainder in its own unit");
+
+const exact = groundShoppingPlan({ dinners: [{ title: "A", needs: [{ item: "eggs", amount: 12, unit: "each" }] }] });
+ok(exact.shoppingList[0].qty === 1 && exact.leftovers.length === 0, "a plan that uses a package exactly reports no leftovers");
+const lbs = groundShoppingPlan({ dinners: [{ title: "A", needs: [{ item: "chicken breast", amount: 20, unit: "oz" }] }] });
+ok(lbs.shoppingList[0].qty === 2, "a weight requirement crossing a pack boundary buys two packs");
+
+// ---------- gluten-free catalog + diet tags ----------
+const untagged = PRICES.items.filter((item) => !Array.isArray(item.tags)).map((item) => item.name);
+ok(untagged.length === 0, `every catalog item declares a tags array${untagged.length ? ` (missing: ${untagged.join(", ")})` : ""}`);
+for (const glutenFree of ["gluten free bread", "gluten free pasta", "corn tortillas", "tamari"]) {
+  const pack = cheapestPack(glutenFree);
+  ok(pack && pack.item === glutenFree && pack.packPrice > 0, `catalog prices ${glutenFree} (${pack ? `$${pack.packPrice} @ ${pack.store}` : "missing"})`);
+}
+// The reason the lookup had to change: "gluten free pasta" contains "pasta", and
+// pricing a celiac's dinner as wheat pasta is the one outcome to rule out.
+ok(findPrice("gluten free pasta").name === "gluten free pasta", "a gluten-free item never resolves to its wheat namesake");
+ok(findPrice("corn tortillas").name === "corn tortillas" && findPrice("tortillas").name === "tortillas", "corn and flour tortillas stay distinct");
+ok(findPrice("pasta").name === "pasta" && findPrice("bread").name === "bread", "the plain catalog names still resolve to themselves");
+ok(findPrice("gf pasta").name === "gluten free pasta" && findPrice("gluten-free soy sauce").name === "tamari", "gluten-free aliases resolve to the substitute, not the original");
+ok(cheapestPack("tamari").store === "traderjoes", "a chain that does not stock an item is skipped rather than guessed at");
+
+ok(catalogTagsFor("pasta").includes("gluten") && catalogTagsFor("gluten free pasta").length === 0, "catalog tags separate wheat pasta from its substitute");
+ok(catalogTagsFor("cheese").includes("dairy"), "an alias inherits the catalog item's tags");
+ok(catalogTagsFor("a splash of almond milk") === null, "prose does not resolve to a catalog item");
+
+// ---------- dietary restrictions (enforced server-side, not just prompted) ----------
+ok(Array.isArray(DIET_RULES) && DIET_RULES.length >= 5, `diet rules DB has ${DIET_RULES.length} rules`);
+ok(
+  DIET_RULES.every((rule) => rule.id && rule.label && rule.aliases.length && rule.forbids.length),
+  "every diet rule has an id, label, aliases, and forbidden ingredients"
+);
+const dietIds = DIET_RULES.map((rule) => rule.id);
+for (const required of ["vegetarian", "vegan", "dairy-free", "gluten-free", "no-peanuts"]) {
+  ok(dietIds.includes(required), `diet rules cover the profile option: ${required}`);
+}
+ok(resolveDietRules("peanut allergy").map((r) => r.id).join(",") === "no-peanuts", "a peanut allergy resolves to the peanut rule");
+ok(resolveDietRules("vegan, no peanuts").map((r) => r.id).sort().join(",") === "no-peanuts,vegan", "a combined diet string resolves to every matching rule");
+ok(resolveDietRules("").length === 0 && resolveDietRules("   ").length === 0, "an empty diet string enforces nothing");
+
+const veganRule = DIET_RULES.find((rule) => rule.id === "vegan");
+const dairyRule = DIET_RULES.find((rule) => rule.id === "dairy-free");
+const glutenRule = DIET_RULES.find((rule) => rule.id === "gluten-free");
+const peanutRule = DIET_RULES.find((rule) => rule.id === "no-peanuts");
+ok(findForbiddenTerm("Brush the pan with butter", dairyRule) === "butter", "a forbidden ingredient hidden in a cooking step is caught");
+ok(findForbiddenTerm("eggs", veganRule) === "egg", "plural catalog names match their singular forbidden term");
+ok(findForbiddenTerm("chicken breast", veganRule) && findForbiddenTerm("cheddar", veganRule), "vegan plans reject meat and dairy from the catalog");
+ok(findForbiddenTerm("soy sauce", glutenRule) === "soy sauce" && findForbiddenTerm("tortillas", glutenRule), "gluten-free rejects the catalog's wheat items");
+ok(findForbiddenTerm("peanut butter", peanutRule), "the peanut rule catches peanut butter");
+ok(findForbiddenTerm("peanut butter", dairyRule) === null, "peanut butter does not trip the dairy-free rule's butter");
+ok(findForbiddenTerm("almond milk", veganRule) === null && findForbiddenTerm("coconut milk", dairyRule) === null, "plant milks do not trip the milk rules");
+ok(findForbiddenTerm("eggplant curry", veganRule) === null, "word-boundary matching does not read eggplant as egg");
+ok(findForbiddenTerm("corn tortillas", glutenRule) === null && findForbiddenTerm("gluten free pasta", glutenRule) === null, "gluten-free substitutes are not flagged as gluten");
+ok(findForbiddenTerm("almond butter", peanutRule) === null, "a non-peanut nut butter is allowed under the peanut rule");
+ok(findForbiddenTerm("spinach rice bowl", veganRule) === null, "a compliant dinner passes cleanly");
+
+ok(
+  pantryDietConflicts(["spinach", "cheddar", "rice"], [veganRule]).join(",") === "cheddar",
+  "pantry conflicts are identified without discarding the rest of the pantry"
+);
+ok(pantryDietConflicts(["spinach", "cheddar"], []).length === 0, "no restrictions means no pantry conflicts");
+
+const dietPrompt = buildPlanSystemPrompt("(price context)", dietRulesContext([veganRule, peanutRule]));
+ok(dietPrompt.includes("Dietary restrictions (STRICT"), "the plan prompt states the restrictions as strict");
+ok(dietPrompt.includes("peanut") && dietPrompt.includes("honey"), "the plan prompt lists the forbidden ingredients");
+ok(/pantry/i.test(dietPrompt) && dietPrompt.includes("stays forbidden"), "the plan prompt forbids cooking a restricted pantry item");
+ok(!buildPlanSystemPrompt("(price context)").includes("Dietary restrictions"), "an unrestricted plan prompt carries no diet section");
+
+// The catalog's tags and the word net must agree about every item the catalog
+// knows — a disagreement means a mis-tagged item or a missing allows phrase.
+const tagDisagreements = [];
+for (const item of PRICES.items) {
+  for (const rule of DIET_RULES) {
+    const byTag = (item.tags || []).some((tag) => rule.excludesTags.includes(tag));
+    const byWord = findForbiddenTerm(item.name, rule) !== null;
+    if (byTag !== byWord) tagDisagreements.push(`${item.name}/${rule.label} (tag:${byTag} word:${byWord})`);
+  }
+}
+ok(
+  tagDisagreements.length === 0,
+  `catalog tags and word matching agree on all ${PRICES.items.length} items${tagDisagreements.length ? ` — ${tagDisagreements.join(", ")}` : ""}`
+);
+ok(findIngredientConflict("gf pasta", glutenRule) === null, "a known-safe alias is not failed for containing a forbidden word");
+ok(/gluten/.test(findIngredientConflict("pasta", glutenRule) || ""), "a known ingredient is rejected by its tag, naming the tag");
+ok(findIngredientConflict("unobtainium chicken", veganRule) === "chicken", "an ingredient the catalog does not know still falls to the word net");
+ok(DIET_RULES.every((rule) => rule.excludesTags.length > 0), "every diet rule excludes at least one catalog tag");
+
+const violatingPlanShape = {
+  dinners: [{ title: "Cheesy rice", usesPantry: ["rice"], needs: [{ item: "cheddar", amount: 4, unit: "oz" }], steps: ["Melt the cheddar."] }],
+  shoppingList: [{ item: "cheddar" }],
+  leftovers: [{ item: "cheddar", amount: "half" }]
+};
+const shapeViolations = findDietViolations(violatingPlanShape, [veganRule]);
+ok(shapeViolations.length >= 4, `violations are found in every plan field (${shapeViolations.length} found)`);
+ok(shapeViolations.some((v) => /cooking steps/.test(v.where)), "cooking steps are scanned, not just the shopping list");
+ok(findDietViolations(violatingPlanShape, []).length === 0, "a plan with no restrictions reports no violations");
 
 // Frontend files exist and wire up.
 const fs = require("fs");
@@ -99,6 +235,10 @@ ok(
 );
 ok(/geolocation=\(self\)/.test(JSON.stringify(vercelConfig)), "Vercel allows browser geolocation");
 ok(typeof vercelServer === "function" && vercelServer === vercelServer.app, "Vercel receives the Express app export");
+const netlifyConfig = fs.readFileSync("netlify.toml", "utf8");
+for (const dataFile of ["prices.json", "stores.json", "recipe-sources.json", "diet-rules.json"]) {
+  ok(netlifyConfig.includes(`data/${dataFile}`), `Netlify bundles data/${dataFile} with the function`);
+}
 const html = fs.readFileSync("public/index.html", "utf8");
 ok(html.includes("app.js") && html.includes("api/plan") === false, "index.html loads app.js");
 const appJs = fs.readFileSync("public/app.js", "utf8");
@@ -512,6 +652,22 @@ ok(appJs.includes("/api/grocery/optimize"), "app.js calls the optimizer");
 ok(appJs.includes("navigator.geolocation"), "app.js asks the browser for a location");
 ok(fs.readFileSync("public/styles.css", "utf8").includes("repeat(4, 1fr)"), "mobile nav has room for the fourth tab");
 
+const PROFILE_EXTRA_DIET_TERMS_SOURCE = (appJs.match(/const PROFILE_EXTRA_DIET_TERMS = \[([^\]]*)\]/)?.[1] || "")
+  .split(",")
+  .map((term) => term.replace(/["']/g, "").trim())
+  .filter(Boolean);
+const profileDietValues = [...html.matchAll(/name="diet" value="([^"]+)"/g)].map((m) => m[1]);
+ok(profileDietValues.length >= 5, `profile drawer offers ${profileDietValues.length} diet checkboxes`);
+for (const value of profileDietValues) {
+  ok(resolveDietRules(value).length > 0, `profile diet option "${value}" resolves to an enforceable rule`);
+}
+ok(PROFILE_EXTRA_DIET_TERMS_SOURCE.length > 0, "the chat can set diet terms beyond the checkboxes");
+for (const term of PROFILE_EXTRA_DIET_TERMS_SOURCE) {
+  ok(resolveDietRules(term).length > 0, `chat-only diet term "${term}" resolves to an enforceable rule`);
+}
+ok(/Kept \$\{dietSummary\}/.test(appJs), "the plan header names the restrictions it was held to");
+ok(/failure\?\.message/.test(buildPlanSource), "the planner surfaces the server's refusal reason, not just a status code");
+
 function aiEnvelope(plan) {
   return {
     ok: true,
@@ -562,7 +718,7 @@ const validAiPlan = {
     fiber: 5,
     equip: ["microwave"],
     usesPantry: ["spinach", "rice", "eggs"],
-    needs: ["butter"],
+    needs: [{ item: "butter", amount: 2, unit: "oz" }],
     steps: ["Microwave the spinach, rice, and eggs until the eggs are fully set."],
     sourceRecipe: "Spinach Rice Breakfast Bowls",
     source: "Budget Bytes",
@@ -570,8 +726,6 @@ const validAiPlan = {
     adaptationNote: ""
   }],
   shoppingList: [],
-  leftovers: [{ item: "butter", amount: "most of the pack" }],
-  totalCost: 0,
   notes: ""
 };
 
@@ -688,8 +842,7 @@ async function runRouteChecks() {
 
   const unpricedAiPlan = {
     ...validAiPlan,
-    dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: ["unobtainium"] })),
-    leftovers: [{ item: "unobtainium", amount: "unknown" }]
+    dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "unobtainium", amount: 1, unit: "each" }] }))
   };
   let unpricedCalls = 0;
   const unpriced = await callPlan(request, async () => {
@@ -700,6 +853,196 @@ async function runRouteChecks() {
     unpricedCalls === 2 && unpriced.statusCode === 502 && unpriced.payload.ok === false && /price catalog/.test(unpriced.payload.failure?.message || ""),
     "AI plans with unpriced ingredients fail instead of using an estimated price"
   );
+
+  // The model's own shoppingList/leftovers/totalCost are ignored: the server owns
+  // the package arithmetic, so an invented number cannot reach the student.
+  const inventedNumbers = await callPlan({ ...request, dinners: 1 }, async () => aiEnvelope({
+    ...validAiPlan,
+    dinners: validAiPlan.dinners.map((dinner) => ({
+      ...dinner,
+      needs: [{ item: "eggs", amount: 18, unit: "each" }]
+    })),
+    shoppingList: [{ item: "eggs", pack: "free eggs", packPrice: 0.01, store: "nowhere", qty: 1 }],
+    leftovers: [{ item: "eggs", amount: "a whole lot, trust me" }],
+    totalCost: 0.01
+  }));
+  ok(inventedNumbers.statusCode === 200 && inventedNumbers.payload.ok, "a plan with typed quantities is accepted");
+  ok(
+    inventedNumbers.payload.shoppingList[0].qty === 2 && inventedNumbers.payload.shoppingList[0].store !== "nowhere",
+    "the server prices from its own catalog and buys the packages the amounts require"
+  );
+  ok(
+    inventedNumbers.payload.totalCost === +(cheapestPack("eggs").packPrice * 2).toFixed(2),
+    "the total is computed, not taken from the model"
+  );
+  ok(
+    inventedNumbers.payload.leftovers[0].remaining === 6 && !/trust me/.test(JSON.stringify(inventedNumbers.payload.leftovers)),
+    "leftovers are computed from the requirements, replacing the model's estimate"
+  );
+
+  // A model that phrases an amount badly costs the student a rougher leftover
+  // estimate, not their dinner plan. This is the difference between guessing a
+  // quantity (recoverable, and labelled) and guessing a price (never).
+  let legacyCalls = 0;
+  const legacyNeeds = await callPlan(request, async () => {
+    legacyCalls++;
+    return aiEnvelope({
+      ...validAiPlan,
+      dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: ["soy sauce"] }))
+    });
+  });
+  ok(
+    legacyCalls === 1 && legacyNeeds.statusCode === 200 && legacyNeeds.payload.ok,
+    "a bare ingredient name still produces a plan instead of a 502"
+  );
+  ok(
+    legacyNeeds.payload.shoppingList[0].assumedWholePackage === true &&
+      /amount not given/.test(legacyNeeds.payload.shoppingList[0].requiredLabel),
+    "the receipt says the amount was assumed rather than stating a false one"
+  );
+  ok(legacyNeeds.payload.leftovers.length === 0, "no leftover is claimed for an amount nobody stated");
+
+  const wrongFamily = await callPlan(request, async () => aiEnvelope({
+    ...validAiPlan,
+    dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "rice", amount: 1, unit: "cup" }] }))
+  }));
+  ok(
+    wrongFamily.statusCode === 200 && wrongFamily.payload.shoppingList[0].assumedWholePackage === true,
+    "a cup of a weight item buys the package rather than converting through a guessed density"
+  );
+
+  // ---------- dietary restrictions on the live plan route ----------
+  const veganRequest = { ...request, pantry: ["spinach", "rice", "eggs"], useSoon: ["spinach"], diet: "vegan, no peanuts" };
+  let dietPromptText = "";
+  const dietAware = await callPlan(veganRequest, async (messages) => {
+    dietPromptText = messages.map((message) => String(message.content)).join("\n");
+    return aiEnvelope({
+      ...validAiPlan,
+      dinners: validAiPlan.dinners.map((dinner) => ({
+        ...dinner,
+        title: "Spinach rice bowl",
+        usesPantry: ["spinach", "rice"],
+        needs: [{ item: "black beans", amount: 15, unit: "oz" }],
+        steps: ["Microwave the spinach and rice, then stir in the black beans."]
+      }))
+    });
+  });
+  ok(/Dietary restrictions \(STRICT/.test(dietPromptText), "a restricted plan request sends the strict diet section");
+  ok(/never use, buy, or mention/.test(dietPromptText) && /peanut/.test(dietPromptText), "the request names the forbidden ingredients");
+  ok(
+    /must NOT cook with/.test(dietPromptText) && /eggs/.test(dietPromptText.split("Pantry items you must NOT cook with")[1] || ""),
+    "a restricted pantry item is declared off-limits instead of offered as food"
+  );
+  ok(!/Pantry: [^.]*eggs/.test(dietPromptText), "a restricted pantry item is not offered in the cookable pantry list");
+  ok(
+    dietAware.statusCode === 200 && dietAware.payload.ok && dietAware.payload.dietRules.join(",") === "vegan,no peanuts",
+    "a compliant plan is returned and reports which restrictions were enforced"
+  );
+
+  // A celiac must be able to get a plan at all: the substitutes have to price.
+  const celiacRequest = { ...request, pantry: ["rice", "spinach"], useSoon: [], diet: "celiac" };
+  const glutenFreePlan = {
+    ...validAiPlan,
+    dinners: validAiPlan.dinners.map((dinner) => ({
+      ...dinner,
+      title: "Gluten-free pasta bowl",
+      usesPantry: ["spinach"],
+      needs: [{ item: "gluten free pasta", amount: 8, unit: "oz" }, { item: "marinara", amount: 12, unit: "oz" }],
+      steps: ["Boil the gluten free pasta, then stir in the marinara and spinach."]
+    }))
+  };
+  const celiac = await callPlan(celiacRequest, async () => aiEnvelope(glutenFreePlan));
+  ok(
+    celiac.statusCode === 200 && celiac.payload.ok && celiac.payload.shoppingList.length === 2,
+    "a celiac plan built from gluten-free substitutes is accepted and priced"
+  );
+  ok(
+    celiac.payload.shoppingList.some((entry) => entry.item === "gluten free pasta" && entry.packPrice > 0),
+    "the gluten-free substitute is priced as itself, not as wheat pasta"
+  );
+
+  const wheatForCeliac = {
+    ...validAiPlan,
+    dinners: validAiPlan.dinners.map((dinner) => ({
+      ...dinner,
+      usesPantry: ["spinach"],
+      needs: [{ item: "pasta", amount: 8, unit: "oz" }],
+      steps: ["Boil the pasta."]
+    }))
+  };
+  const celiacBlocked = await callPlan(celiacRequest, async () => aiEnvelope(wheatForCeliac));
+  ok(
+    celiacBlocked.statusCode === 502 && /gluten/.test(celiacBlocked.payload.failure?.message || ""),
+    "wheat pasta in a celiac plan is rejected by the catalog tag, naming gluten"
+  );
+
+  const dairyInNeeds = {
+    ...validAiPlan,
+    dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "cheddar", amount: 4, unit: "oz" }] }))
+  };
+  let dairyCalls = 0;
+  const dairy = await callPlan(veganRequest, async () => {
+    dairyCalls++;
+    return aiEnvelope(dairyInNeeds);
+  });
+  ok(
+    dairyCalls === 2 && dairy.statusCode === 502 && dairy.payload.ok === false && /dietary restrictions/i.test(dairy.payload.failure?.message || ""),
+    "a plan that buys a forbidden ingredient is repaired once and then rejected"
+  );
+  ok(!dairy.payload.dinners, "a rejected plan returns no dinners at all");
+
+  // The shopping list can be clean while a cooking step still breaks the diet.
+  const butterInSteps = {
+    ...validAiPlan,
+    dinners: validAiPlan.dinners.map((dinner) => ({
+      ...dinner,
+      usesPantry: ["spinach", "rice"],
+      needs: [],
+      steps: ["Microwave the rice.", "Brush the pan with butter before serving."]
+    }))
+  };
+  const hiddenStep = await callPlan(veganRequest, async () => aiEnvelope(butterInSteps));
+  ok(
+    hiddenStep.statusCode === 502 && /butter/.test(hiddenStep.payload.failure?.message || ""),
+    "a forbidden ingredient in a cooking step is rejected even when the shopping list is clean"
+  );
+
+  let peanutCalls = 0;
+  const peanut = await callPlan({ ...request, diet: "peanut allergy" }, async () => {
+    peanutCalls++;
+    return aiEnvelope({
+      ...validAiPlan,
+      dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "peanut butter", amount: 4, unit: "oz" }] }))
+    });
+  });
+  ok(
+    peanutCalls === 2 && peanut.statusCode === 502 && /peanut/.test(peanut.payload.failure?.message || ""),
+    "an allergy violation is never served, even after a repair attempt"
+  );
+
+  // A repair that fixes the violation is accepted — enforcement is not a dead end.
+  let dietRepairCalls = 0;
+  const dietRepaired = await callPlan(veganRequest, async (messages) => {
+    dietRepairCalls++;
+    if (dietRepairCalls === 1) return aiEnvelope(dairyInNeeds);
+    assert(/Dietary restrictions \(absolute\)/.test(messages.map((m) => String(m.content)).join("\n")));
+    return aiEnvelope({
+      ...validAiPlan,
+      dinners: validAiPlan.dinners.map((dinner) => ({
+        ...dinner,
+        usesPantry: ["spinach", "rice"],
+        needs: [{ item: "black beans", amount: 15, unit: "oz" }],
+        steps: ["Microwave the spinach and rice, then stir in the black beans."]
+      }))
+    });
+  });
+  ok(
+    dietRepairCalls === 2 && dietRepaired.statusCode === 200 && dietRepaired.payload.repaired === true,
+    "the repair prompt carries the restrictions and a corrected plan is accepted"
+  );
+
+  const unrestricted = await callPlan(request, async () => aiEnvelope(dairyInNeeds));
+  ok(unrestricted.statusCode === 200 && unrestricted.payload.ok, "a user with no restrictions is not blocked by the diet rules");
 
   let repairCalls = 0;
   const repaired = await callPlan(request, async (messages) => {
@@ -808,10 +1151,9 @@ async function runRouteChecks() {
       adaptationNote: "Added pantry spinach and served the stir fry over pantry rice.",
       timeMin: 25,
       usesPantry: ["spinach", "rice"],
-      needs: ["soy sauce"],
+      needs: [{ item: "soy sauce", amount: 2, unit: "tbsp" }],
       steps: ["Microwave the spinach and rice, then season with soy sauce."]
-    })),
-    leftovers: [{ item: "soy sauce", amount: "most of the bottle" }]
+    }))
   };
   let dietPrompt = "";
   const dietPlan = await callPlan({ ...request, diet: "vegan, halal" }, async (messages) => {

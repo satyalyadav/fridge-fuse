@@ -7,6 +7,7 @@
     "start": "node server.js",
     "build": "npm test",
     "test": "node test.js",
+    "codes:propose": "node scripts/propose-food-codes.js",
     "dev:vercel": "npx vercel@latest dev",
     "dev:netlify": "npx netlify-cli@17.38.0 dev --offline"
   },
