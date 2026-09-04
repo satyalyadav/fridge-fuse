@@ -200,16 +200,18 @@ stands and the failure is logged like any other external call.
 
 ## Recipe sources
 
-- AI meal generation is constrained to the approved source list in
-  `data/recipe-sources.json` (18 sources, v2). The server rejects recipe
-  citations that do not match that list exactly.
-- Every returned dinner carries `source` and `sourceUrl`.
-- When no approved recipe fits the pantry/budget, the plan returns the closest
-  approved recipe with an `adaptationNote`.
-- Edit the JSON to change the allowlist — the system prompt and citation checks
-  are rebuilt from it at startup. A bad or empty file makes the server refuse to
-  start, by design. The app does not fetch recipe pages; the model supplies the
-  recipe adaptation and the server enforces the citation allowlist.
+- AI meal generation is constrained to the exact recipe records in
+  `data/recipe-sources.json` (v3). Each record has a canonical title, recipe-page
+  URL, timing, equipment, ingredients, and a short verified method outline.
+- Every returned dinner carries an exact `sourceRecipe`, `source`, and
+  `sourceUrl` triple. Publisher homepages and mismatched titles are rejected.
+- The model builds from the selected record's facts. When a small pantry,
+  budget, equipment, time, or diet change is needed, it records that change in
+  `adaptationNote`.
+- Edit the JSON to change the catalog. The prompt and validation rules are
+  rebuilt from it at startup, and malformed or empty recipe data prevents the
+  server from starting. Recipe pages are curated ahead of time rather than
+  fetched during each request.
 
 ## API
 
@@ -217,7 +219,7 @@ stands and the failure is logged like any other external call.
 - `POST /api/vision {imageDataUrl}` returns independently verified `confirmed`
   pantry items plus `uncertain` items with bounding boxes for user review.
 - `POST /api/plan` builds and prices the dinner plan; dinners include
-  `source`, `sourceUrl`, and (when adapted) `adaptationNote`.
+  `sourceRecipe`, `source`, `sourceUrl`, and (when adapted) `adaptationNote`.
 - `GET /api/preferences` serves the dietary and equipment catalogs the profile renders.
 - `GET /api/prices?item=` reads the Tempe 85281 mock catalog.
 - `GET /api/stores?lat=&lng=&maxDistanceMi=` lists nearby branches with distances.

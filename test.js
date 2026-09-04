@@ -6,7 +6,7 @@ const vm = require("vm");
 const {
   cheapestPack, findPrice, extractJson, PRICES,
   DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL,
-  resolveDataPath, RECIPE_SOURCES, buildPlanSystemPrompt,
+  resolveDataPath, RECIPE_SOURCES, APPROVED_RECIPES, isApprovedRecipeCitation, buildPlanSystemPrompt,
   handlePlanRequest, handleVisionRequest, normalizeVisionResult, handleGeoPostal,
   haversineMiles, isValidCoordinate, resolveCatalogItem, optimizeCart,
   describeLocation, handleGeoDescribe,
@@ -43,18 +43,40 @@ ok(cheapestPack("spinach") && cheapestPack("spinach").packPrice > 0, "spinach is
 ok(extractJson('```json\n{"a":1}\n```').a === 1, "fenced JSON parsed");
 ok(extractJson('{"a":2}').a === 2, "raw JSON parsed");
 
-// Approved recipe sources: the AI planner prompt is grounded to this DB.
+// Approved recipes: the AI planner prompt is grounded to exact recipe pages.
 ok(Array.isArray(RECIPE_SOURCES.sources) && RECIPE_SOURCES.sources.length >= 3, `approved sources DB has ${RECIPE_SOURCES.sources.length} sources`);
 ok(RECIPE_SOURCES.sources.every((s) => s.name && /^https?:\/\//.test(s.url)), "every approved source has a name and URL");
+ok(Array.isArray(APPROVED_RECIPES) && APPROVED_RECIPES.length >= 10, `approved recipe DB has ${APPROVED_RECIPES.length} exact recipes`);
+ok(
+  APPROVED_RECIPES.every((recipe) =>
+    recipe.title && /^https?:\/\//.test(recipe.url) && Number(recipe.timeMin) > 0 &&
+    recipe.equipment.length && recipe.ingredients.length && recipe.method
+  ),
+  "every approved recipe has an exact title, page URL, and verified facts"
+);
+const priceIngredientNames = new Set(PRICES.items.map((item) => item.name));
+ok(
+  APPROVED_RECIPES.every((recipe) => recipe.ingredients.every((ingredient) => priceIngredientNames.has(ingredient))),
+  "every curated recipe ingredient can be fulfilled by the price catalog"
+);
+ok(new Set(APPROVED_RECIPES.map((recipe) => recipe.url)).size === APPROVED_RECIPES.length, "approved recipe page URLs are unique");
+ok(
+  APPROVED_RECIPES.every((recipe) => !RECIPE_SOURCES.sources.some((source) => recipe.url.replace(/\/$/, "") === source.url.replace(/\/$/, ""))),
+  "publisher homepages are not accepted as recipe pages"
+);
 const planPrompt = buildPlanSystemPrompt("(price context)");
-ok(planPrompt.includes("ONLY") && planPrompt.includes("approved sources"), "plan prompt restricts recipes to approved sources");
-ok(planPrompt.includes('"source"') && planPrompt.includes('"sourceUrl"'), "plan prompt requires source name/URL in dinner data");
+ok(planPrompt.includes("NEVER") && planPrompt.includes("curated recipe records"), "plan prompt restricts generation to curated recipes");
+ok(planPrompt.includes('"sourceRecipe"') && planPrompt.includes('"source"') && planPrompt.includes('"sourceUrl"'), "plan prompt requires the exact recipe citation triple");
 ok(planPrompt.includes('"leftovers"') && planPrompt.includes("leftover estimate"), "plan prompt asks AI for leftover estimates");
-ok(planPrompt.includes("adaptationNote") && planPrompt.includes("CLOSEST matching approved recipe"), "plan prompt chooses the closest approved recipe with an adaptation note");
-ok(planPrompt.includes("NEVER invent a new recipe from scratch"), "plan prompt forbids inventing recipes");
-for (const s of RECIPE_SOURCES.sources) {
-  ok(planPrompt.includes(s.name) && planPrompt.includes(s.url), `plan prompt lists approved source: ${s.name}`);
+ok(planPrompt.includes("adaptationNote") && planPrompt.includes("choose the closest record"), "plan prompt chooses the closest curated recipe with an adaptation note");
+ok(planPrompt.includes("NEVER invent a source recipe"), "plan prompt forbids invented recipe citations");
+for (const recipe of APPROVED_RECIPES) {
+  ok(
+    planPrompt.includes(recipe.title) && planPrompt.includes(recipe.source) && planPrompt.includes(recipe.url) && planPrompt.includes(recipe.method),
+    `plan prompt includes verified recipe facts: ${recipe.source} / ${recipe.title}`
+  );
 }
+ok(!isApprovedRecipeCitation("Budget Bytes", "Invented Recipe", "https://www.budgetbytes.com"), "a publisher homepage cannot validate an invented recipe");
 ok(
   typeof resolveDataPath === "function" &&
     toSlashes(resolveDataPath("/var/task/netlify/functions", "/var/task", (candidate) => toSlashes(candidate) === "/var/task/data/recipe-sources.json", "recipe-sources.json")) === "/var/task/data/recipe-sources.json",
@@ -164,8 +186,8 @@ ok(
   "chat and pantry photo buttons open the native image picker directly"
 );
 ok(
-  appJs.includes("meal.sourceUrl") && appJs.includes("meal.source"),
-  "meal cards expose approved recipe citations"
+  appJs.includes("meal.sourceRecipe") && appJs.includes("meal.sourceUrl") && appJs.includes("meal.source"),
+  "meal cards expose the exact approved recipe citation"
 );
 const recipeSourceHandling = appJs.match(/function isLegacyRecipeCitation[\s\S]*?function recordMessage/)?.[0] || "";
 ok(
@@ -540,14 +562,15 @@ const validAiPlan = {
     fiber: 5,
     equip: ["microwave"],
     usesPantry: ["spinach", "rice", "eggs"],
-    needs: ["soy sauce"],
+    needs: ["butter"],
     steps: ["Microwave the spinach, rice, and eggs until the eggs are fully set."],
+    sourceRecipe: "Spinach Rice Breakfast Bowls",
     source: "Budget Bytes",
-    sourceUrl: "https://www.budgetbytes.com",
+    sourceUrl: "https://www.budgetbytes.com/snap-challenge-spinach-rice-breakfast-bowls/",
     adaptationNote: ""
   }],
   shoppingList: [],
-  leftovers: [{ item: "soy sauce", amount: "most of the bottle" }],
+  leftovers: [{ item: "butter", amount: "most of the pack" }],
   totalCost: 0,
   notes: ""
 };
@@ -606,11 +629,33 @@ async function runRouteChecks() {
   });
   ok(live.statusCode === 200 && live.payload.ok && live.payload.model === AIR_MODEL, "plan route returns the configured text model response");
   ok(liveCalls === 1 && !live.payload.mock && !live.payload.fallback, "a plan request calls the text model exactly once");
-  ok(live.payload.shoppingList.length === 1 && live.payload.shoppingList[0].item === "soy sauce", "AI shopping needs are grounded against the price catalog");
+  ok(live.payload.shoppingList.length === 1 && live.payload.shoppingList[0].item === "butter", "AI shopping needs are grounded against the price catalog");
   ok(
-    live.payload.dinners[0].source === validAiPlan.dinners[0].source &&
+    live.payload.dinners[0].sourceRecipe === validAiPlan.dinners[0].sourceRecipe &&
+      live.payload.dinners[0].source === validAiPlan.dinners[0].source &&
       live.payload.dinners[0].sourceUrl === validAiPlan.dinners[0].sourceUrl,
     "AI plans preserve approved recipe citations"
+  );
+
+  const fabricatedCitationPlan = {
+    ...validAiPlan,
+    dinners: validAiPlan.dinners.map((dinner) => ({
+      ...dinner,
+      sourceRecipe: "Invented spinach rice surprise",
+      sourceUrl: "https://www.budgetbytes.com"
+    }))
+  };
+  let fabricatedCitationCalls = 0;
+  const fabricatedCitation = await callPlan(request, async () => {
+    fabricatedCitationCalls++;
+    return aiEnvelope(fabricatedCitationPlan);
+  });
+  ok(
+    fabricatedCitationCalls === 2 &&
+      fabricatedCitation.statusCode === 502 &&
+      fabricatedCitation.payload.ok === false &&
+      /recipe/i.test(fabricatedCitation.payload.failure?.message || ""),
+    "a publisher homepage cannot validate an invented recipe title"
   );
 
   const unapprovedAiPlan = {
@@ -627,7 +672,7 @@ async function runRouteChecks() {
     return aiEnvelope(unapprovedAiPlan);
   });
   ok(
-    unapprovedCalls === 2 && unapproved.statusCode === 502 && unapproved.payload.ok === false && /approved recipe list/.test(unapproved.payload.failure?.message || ""),
+    unapprovedCalls === 2 && unapproved.statusCode === 502 && unapproved.payload.ok === false && /approved recipe catalog/.test(unapproved.payload.failure?.message || ""),
     "unapproved AI recipe citations are rejected after repair"
   );
 
@@ -757,9 +802,16 @@ async function runRouteChecks() {
     ...validAiPlan,
     dinners: validAiPlan.dinners.map((dinner) => ({
       ...dinner,
+      title: "Vegetable stir fry with rice",
+      sourceRecipe: "Easy Vegetable Stir Fry",
+      sourceUrl: "https://www.budgetbytes.com/easy-vegetable-stir-fry/",
+      adaptationNote: "Added pantry spinach and served the stir fry over pantry rice.",
+      timeMin: 25,
       usesPantry: ["spinach", "rice"],
+      needs: ["soy sauce"],
       steps: ["Microwave the spinach and rice, then season with soy sauce."]
-    }))
+    })),
+    leftovers: [{ item: "soy sauce", amount: "most of the bottle" }]
   };
   let dietPrompt = "";
   const dietPlan = await callPlan({ ...request, diet: "vegan, halal" }, async (messages) => {
