@@ -2,6 +2,7 @@
 // Run: node test.js
 const assert = require("assert");
 const path = require("path");
+const vm = require("vm");
 const {
   cheapestPack, findPrice, extractJson, PRICES,
   DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL,
@@ -81,11 +82,69 @@ ok(html.includes("app.js") && html.includes("api/plan") === false, "index.html l
 const appJs = fs.readFileSync("public/app.js", "utf8");
 const serverSrc = fs.readFileSync("server.js", "utf8");
 const recipeSourcesJson = fs.readFileSync("data/recipe-sources.json", "utf8");
+
+async function exerciseFrontendMessage(message, parsed, pantryAfter) {
+  const normalizedAppJs = appJs.replaceAll("\r\n", "\n");
+  const handlerSource = normalizedAppJs.match(/async function handleMessage\(message\) \{[\s\S]*?\n\}\n\nasync function buildPlan/)?.[0]
+    ?.replace(/\n\nasync function buildPlan$/, "") || "";
+  const intentSource = normalizedAppJs.match(/function isPantryOnlyRequest\(message\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert(handlerSource, "could not extract handleMessage from public/app.js");
+
+  const assistantMessages = [];
+  let buildPlanCalls = 0;
+  const context = {
+    state: { pantry: [], plan: null },
+    addUserMessage() {},
+    addExclusion() {},
+    addAssistantMessage(...args) { assistantMessages.push(args); },
+    buildPlan: async () => { buildPlanCalls++; },
+    capitalize(value) { return value ? value[0].toUpperCase() + value.slice(1) : value; },
+    mentionIndex(lower, ingredient) { return lower.indexOf(ingredient); },
+    parseMessage() {
+      context.state.pantry = pantryAfter;
+      return parsed;
+    },
+    setMobileView() {},
+    $() { return { hidden: false }; }
+  };
+  vm.createContext(context);
+  if (intentSource) vm.runInContext(intentSource, context);
+  else context.isPantryOnlyRequest = () => false;
+  vm.runInContext(handlerSource, context);
+  await vm.runInContext(`handleMessage(${JSON.stringify(message)})`, context);
+  return { assistantMessages, buildPlanCalls };
+}
 ok(appJs.includes("/api/plan"), "app.js calls /api/plan");
 ok(!/catalogOnly\s*:\s*true/.test(appJs), "frontend planning requests do not bypass the text model");
 ok(!/\b(?:localPlan|RECIPES|catalogOnly|FALLBACK_PACK_PRICE|FALLBACK_STORE|estimatedLeftover)\b/.test(serverSrc), "server has no local recipe planner or demo price fallback");
 ok(!recipeSourcesJson.includes("FridgeFuse Demo Catalog"), "approved sources contain no demo catalog entry");
+ok(!recipeSourcesJson.toLowerCase().includes("github.com"), "approved recipe sources do not link to GitHub");
 ok(/VOYAGER_KEY[\s\S]*required/i.test(fs.readFileSync(".env.example", "utf8")), "environment guidance requires the Voyager key");
+const mealSequenceLabelSource = appJs.match(/function mealSequenceLabel\(index\) \{[\s\S]*?\n\}/)?.[0] || "";
+const mealSequenceLabel = mealSequenceLabelSource
+  ? Function(`return (${mealSequenceLabelSource})`)()
+  : () => "";
+ok(mealSequenceLabel(0) === "TONIGHT", "the first dinner is labeled TONIGHT");
+ok(
+  [1, 2, 3, 4, 5, 6].every((index) => mealSequenceLabel(index) === `NIGHT ${index + 1}`),
+  "later dinners are labeled NIGHT 2 through NIGHT 7"
+);
+ok(
+  !appJs.includes('const dayLabels = ["TONIGHT", "NEXT", "THEN", "LATER", "LAST"]') &&
+    !appJs.includes("`DAY ${index + 1}`"),
+  "the mixed sequence labels and DAY fallback are removed"
+);
+ok(
+  html.includes("Your dinner plan") &&
+    html.includes("After your final dinner") &&
+    !html.includes("Your next few nights") &&
+    !html.includes("After dinner three"),
+  "plan and leftovers headings work for every dinner count"
+);
+ok(
+  appJs.includes('plan.dinners.length === 1 ? "dinner" : "dinners"'),
+  "the plan title uses singular dinner for a one-meal plan"
+);
 const buildPlanSource = appJs.replaceAll("\r\n", "\n").match(/async function buildPlan[\s\S]*?\n}\n\nfunction formatMoney/)?.[0] || "";
 const planAssignment = buildPlanSource.indexOf("state.plan =");
 const groceryRefresh = buildPlanSource.indexOf("renderGroceryList();");
@@ -106,6 +165,37 @@ ok(
 ok(
   appJs.includes("meal.sourceUrl") && appJs.includes("meal.source"),
   "meal cards expose approved recipe citations"
+);
+const recipeSourceHandling = appJs.match(/function isLegacyRecipeCitation[\s\S]*?function recordMessage/)?.[0] || "";
+ok(
+  /function isLegacyRecipeCitation/.test(recipeSourceHandling) &&
+    /function sanitizeStoredPlan/.test(recipeSourceHandling) &&
+    /plan:\s*sanitizeStoredPlan\(stored\.plan/.test(appJs) &&
+    /sourceUnavailable/.test(recipeSourceHandling),
+  "legacy saved recipe citations are removed instead of linking to the project repository"
+);
+
+const grocerySummaryBlock = appJs.match(/const best = options\[0\];[\s\S]*?const cards =/)?.[0] || "";
+ok(
+  /const completeOptions/.test(grocerySummaryBlock) &&
+    /const priciest/.test(grocerySummaryBlock) &&
+    /priciest\.distanceMi/.test(grocerySummaryBlock),
+  "grocery savings summary uses the priciest complete store's distance"
+);
+const locationFailureBlock = appJs.match(/function requestLocation\([\s\S]*?async function compareStores/)?.[0] || "";
+ok(
+  /const hadPreviousLocation = Boolean\(state\.location\)/.test(locationFailureBlock) &&
+    /const reportLocationFailure/.test(locationFailureBlock) &&
+    /reportLocationFailure\("This browser has no location support\."\)/.test(locationFailureBlock) &&
+    /reportLocationFailure\("Location needs HTTPS or localhost\."\)/.test(locationFailureBlock) &&
+    /Keeping your previous location/.test(locationFailureBlock),
+  "failed location refreshes distinguish a retained location from the fallback origin"
+);
+const postalLookupBlock = appJs.match(/async function resolveProfileZip[\s\S]*?function requestLocation/)?.[0] || "";
+ok(
+  /state\.allowPlaceLookup === false/.test(postalLookupBlock) &&
+    /pendingZipLookup = null/.test(postalLookupBlock),
+  "declined place lookup consent is respected for later ZIP searches"
 );
 
 // ---------- grocery optimizer ----------
@@ -413,6 +503,38 @@ const validAiPlan = {
 };
 
 async function runRouteChecks() {
+  const pantryOnly = await exerciseFrontendMessage(
+    "can you add rice and potatoes to my pantry",
+    { ingredients: ["potatoes", "rice"], pantryChanged: true, removal: false, urgency: false },
+    [{ name: "potatoes" }, { name: "rice" }]
+  );
+  ok(
+    pantryOnly.buildPlanCalls === 0 &&
+      pantryOnly.assistantMessages[0]?.[0] === "Added rice and potatoes to your pantry.",
+    "a pantry-only chat command confirms the update without requesting a meal plan"
+  );
+
+  const shorthandPantryAdd = await exerciseFrontendMessage(
+    "add milk",
+    { ingredients: ["milk"], pantryChanged: true, removal: false, urgency: false },
+    [{ name: "milk" }]
+  );
+  ok(
+    shorthandPantryAdd.buildPlanCalls === 0 &&
+      shorthandPantryAdd.assistantMessages[0]?.[0] === "Added milk to your pantry.",
+    "a shorthand add command confirms the pantry update without requesting a meal plan"
+  );
+
+  const pantryAndPlan = await exerciseFrontendMessage(
+    "add rice to my pantry and build a dinner plan",
+    { ingredients: ["rice"], pantryChanged: true, removal: false, urgency: false },
+    [{ name: "rice" }]
+  );
+  ok(
+    pantryAndPlan.buildPlanCalls === 1 && pantryAndPlan.assistantMessages.length === 0,
+    "a combined pantry and planning request still requests a meal plan"
+  );
+
   const request = {
     pantry: ["spinach", "rice", "eggs"],
     useSoon: ["spinach"],
