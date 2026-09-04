@@ -54,12 +54,11 @@
         <section class="side-section" id="pantryDrawer" aria-labelledby="inventoryTitle">
           <div class="side-header">
             <div>
-              <p class="eyebrow">Saved on this device</p>
               <h2 id="inventoryTitle">Your inventory</h2>
             </div>
             <span class="side-count" id="pantryNavCount">0</span>
           </div>
-        <p class="drawer-intro">Rough amounts are enough. Mark anything that needs using soon.</p>
+        <p class="drawer-intro">Rough amounts are fine. Tap an item to mark what needs eating first.</p>
         <form class="pantry-add" id="pantryForm">
           <label class="sr-only" for="pantryInput">Add inventory item</label>
           <input id="pantryInput" type="text" placeholder="Add eggs, some rice…" autocomplete="off">
@@ -68,12 +67,12 @@
         <section class="vision-review" id="visionReview" aria-labelledby="visionReviewTitle" hidden>
           <div class="vision-review-heading">
             <div>
-              <p class="eyebrow">Check the photo</p>
-              <h3 id="visionReviewTitle">Confirm uncertain items</h3>
+              <p class="eyebrow">From your photo</p>
+              <h3 id="visionReviewTitle">Is this right?</h3>
             </div>
             <span id="visionReviewCount"></span>
           </div>
-          <p>I did not add these automatically. Confirm the name, correct it, or dismiss the crop.</p>
+          <p>I was not sure about these. Keep, rename, or remove each one.</p>
           <div class="vision-review-list" id="visionReviewList"></div>
         </section>
         <div class="pantry-list" id="pantryList"></div>
@@ -83,11 +82,10 @@
         </button>
         </section>
 
-        <section class="side-section" id="savedRecipes" aria-labelledby="savedRecipesTitle">
+        <section class="side-section" id="savedRecipes" aria-labelledby="savedRecipesTitle" hidden>
           <div class="side-header">
             <div>
-              <p class="eyebrow">Kept for later</p>
-              <h2 id="savedRecipesTitle">Saved recipes</h2>
+              <h2 id="savedRecipesTitle">Saved meals</h2>
             </div>
             <span class="side-count" id="savedRecipeCount">0</span>
           </div>
@@ -97,16 +95,15 @@
         <section class="side-section" id="groceryView" aria-label="Grocery cost comparison">
           <div class="plan-header">
             <div>
-              <p class="eyebrow">One list, one cheapest run <span class="side-count" id="groceryNavCount">0</span></p>
-              <h2>Where should you shop?</h2>
-              <p>Add what you need to buy. FridgeFuse prices the whole basket at every nearby store and ranks them by what you would actually pay.</p>
+              <h2>Shopping list <span class="side-count" id="groceryNavCount">0</span></h2>
+              <p>Add what you need to buy, then see which nearby store is cheapest for the whole list.</p>
             </div>
             <span class="mock-label">Mock Tempe prices</span>
           </div>
 
           <div class="location-bar" id="locationBar">
             <div class="tape-label">
-              <span class="tape-kicker">SHOPPING FROM</span>
+              <span class="tape-kicker">SHOPPING NEAR</span>
               <strong id="locationLabel">No location shared yet</strong>
               <small id="locationDetail" hidden></small>
             </div>
@@ -145,8 +142,8 @@
           <div class="grocery-list" id="groceryList"></div>
 
           <div class="grocery-actions">
-            <button class="ghost-button" id="fromPlanButton" type="button">Add my meal-plan items</button>
-            <button class="primary-button" id="compareButton" type="button">Compare nearby stores</button>
+            <button class="ghost-button" id="fromPlanButton" type="button">Add what my plan needs</button>
+            <button class="primary-button" id="compareButton" type="button">Find the cheapest store</button>
           </div>
 
           <div class="grocery-results" id="groceryResults" aria-live="polite"></div>
@@ -159,7 +156,6 @@
       <section class="conversation-panel" id="chatView" aria-label="Conversation with FridgeFuse">
         <div class="conversation-heading">
           <div>
-            <p class="eyebrow">Your kitchen copilot</p>
             <h1>What are we working with?</h1>
           </div>
           <button class="icon-button mobile-pantry-button" id="openPantryButton" aria-label="Open inventory">
@@ -180,7 +176,7 @@
         <div class="starter-prompts" id="starterPrompts">
           <button data-prompt="I need 3 easy dinners under $20. I only have a microwave.">Plan my next 3 dinners</button>
           <button data-prompt="I need something cheap I can make tonight in 15 minutes.">Help me eat tonight</button>
-          <button id="samplePantryButton">Try a sample mini-fridge</button>
+          <button id="samplePantryButton">Show me an example</button>
         </div>
 
         <form class="composer" id="chatForm">
@@ -230,8 +226,8 @@
               <span></span><span></span><span></span>
               <b>TOTAL&nbsp;&nbsp; $—</b>
             </div>
-            <h3>Start with whatever you know</h3>
-            <p>A few ingredients and a dollar limit are enough. FridgeFuse will ask if anything important is missing.</p>
+            <h3>Tell me what food you have</h3>
+            <p>Two or three things is enough. Say how much you can spend, and I will do the rest.</p>
           </div>
 
           <div id="planContent" hidden>
@@ -241,8 +237,8 @@
             <section class="shopping-section">
               <div class="section-heading">
                 <div>
-                  <p class="eyebrow">One trip, full packages</p>
-                  <h3>Grocery list</h3>
+                  
+                  <h3>What to buy</h3>
                 </div>
                 <span class="mock-label">Mock Tempe prices</span>
               </div>
