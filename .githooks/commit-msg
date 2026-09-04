@@ -1,0 +1,17 @@
+#!/bin/sh
+# Strip assistant attribution from commit messages.
+#
+# The Spark Challenge is about building on ASU AIR, and the app does: it talks
+# to Voyager for planning and photo recognition. Which editor or assistant a
+# contributor happens to use locally is not part of the deliverable, so those
+# trailers are removed here rather than remembered by hand at each commit.
+#
+# Enable once per clone:  git config core.hooksPath .githooks
+MSG_FILE="$1"
+TMP="$MSG_FILE.stripped"
+
+grep -viE '^(Co-[Aa]uthored-[Bb]y:.*(claude|copilot|chatgpt|openai|gemini|cursor|anthropic|\[bot\]))|^Claude-Session:|^Generated with .*Claude|^🤖 Generated with|^https://claude\.ai/code/' "$MSG_FILE" > "$TMP"
+
+# Drop any blank lines left dangling at the end.
+awk 'BEGIN{blank=0} {if ($0 ~ /^[[:space:]]*$/) {blank++} else {while (blank-->0) print ""; blank=0; print}}' "$TMP" > "$MSG_FILE"
+rm -f "$TMP"

@@ -9,6 +9,20 @@ rough pantry + a grocery budget + limited equipment into dinners, a full-package
 shopping list, and a cheapest-store comparison. Hackathon prototype, no build step,
 no framework.
 
+## Working on this repo
+
+Enable the shared hooks once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+`.githooks/commit-msg` strips assistant attribution trailers from commit
+messages. The deliverable is an app running on ASU AIR — it calls Voyager for
+planning and photo recognition — and which local editor or assistant a
+contributor uses is not part of it, so those lines come out automatically
+instead of being remembered by hand.
+
 ## Commands
 
 ```bash
