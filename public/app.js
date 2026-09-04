@@ -508,7 +508,7 @@ async function handleMessage(message) {
   if (!state.pantry.length && !parsed.ingredients.length) {
     addAssistantMessage(
       "What is already in your mini-fridge or room?",
-      "Type a rough list, add a photo, or try the sample pantry. Even two ingredients help."
+      "Tell me two or three things you have, or add a photo."
     );
     setMobileView("chat");
     return;
@@ -576,7 +576,7 @@ async function buildPlan(request = "") {
     const soonText = soon.length ? ` I put ${soon.join(" and ")} first so it gets used.` : "";
     const dietText = state.constraints.diet ? ` Every dinner is ${state.constraints.diet}.` : "";
     const offLimitsText = offLimits.length
-      ? ` I left ${offLimits.join(" and ")} out of the cooking — ${offLimits.length === 1 ? "it does not" : "they do not"} fit ${state.constraints.diet}. If yours is a safe version, add it under its own name (for example "gluten free pasta") and I will use it.`
+      ? ` I left ${offLimits.join(" and ")} out of the cooking — ${offLimits.length === 1 ? "it does not" : "they do not"} fit ${state.constraints.diet || "your food restrictions"}. If yours is a safe version, add it under its own name (for example "gluten free pasta") and I will use it.`
       : "";
     if (result.swapUnavailable) {
       addAssistantMessage(
@@ -585,15 +585,15 @@ async function buildPlan(request = "") {
       );
     }
     addAssistantMessage(
-      `I built ${result.dinners.length} beginner-friendly dinners for the equipment you have.${soonText}${dietText}${offLimitsText}`,
-      `${budgetStatus} Say "swap dinner two," lower the budget, or tell me what you dislike.`
+      `Here ${result.dinners.length === 1 ? "is" : "are"} ${result.dinners.length} dinner${result.dinners.length === 1 ? "" : "s"} you can make.${soonText}${dietText}${offLimitsText}`,
+      `${budgetStatus} Do not like one? Say "swap dinner two".`
     );
     setMobileView("plan");
   } catch (error) {
     hideThinking();
     addAssistantMessage(
-      "I could not build the plan.",
-      "Check that the server is running, then send the message again."
+      "I could not make a plan.",
+      "Send that again in a moment."
     );
     toast(error.message, "error");
   }
@@ -748,8 +748,10 @@ function toggleSavedRecipe(meal) {
 function renderSavedRecipes() {
   const host = $("savedRecipeList");
   $("savedRecipeCount").textContent = state.savedRecipes.length;
+  // An empty section is noise on a first visit: it appears once it has content.
+  $("savedRecipes").hidden = state.savedRecipes.length === 0;
   if (!state.savedRecipes.length) {
-    host.innerHTML = `<p class="saved-empty">Nothing saved yet. Press <strong>Save</strong> on a dinner you want to keep.</p>`;
+    host.innerHTML = "";
     return;
   }
   host.innerHTML = state.savedRecipes.map((recipe, index) => `
@@ -771,12 +773,12 @@ function renderPantry() {
   $("mobilePantryCount").textContent = state.pantry.length;
   const soon = state.pantry.filter((item) => item.soon);
   $("useFirstText").textContent = soon.length ? soon.map((item) => titleCase(item.name)).join(" · ") : "Nothing marked yet";
-  $("markUseSoonButton").textContent = soon.length ? "Edit pantry" : "Mark an item";
+  $("markUseSoonButton").textContent = soon.length ? "Edit" : "Mark what to use first";
 
   if (!state.pantry.length) {
     $("pantryList").innerHTML = `
       <div class="pantry-empty">
-        Your pantry is empty. Type what you have in the conversation, add it here, or take a photo.
+        Nothing here yet. Type what food you have, or add a photo of your fridge.
       </div>`;
     return;
   }
@@ -787,15 +789,16 @@ function renderPantry() {
   const offLimits = new Set((state.offLimitsPantry || []).map((name) => String(name).toLowerCase()));
   $("pantryList").innerHTML = state.pantry.map((item, index) => `
     <div class="pantry-item ${item.soon ? "soon" : ""}${offLimits.has(item.name.toLowerCase()) ? " off-limits" : ""}">
-      <span class="pantry-icon" aria-hidden="true">${escapeHtml(item.name[0])}</span>
-      <span class="pantry-info">
-        <strong>${escapeHtml(item.name)}</strong>
-        <span>${escapeHtml(item.amount)}${item.soon ? " · use soon" : ""}${offLimits.has(item.name.toLowerCase()) ? ` · not cooked · does not fit ${escapeHtml(state.constraints.diet)}` : ""}</span>
-      </span>
-      <span class="pantry-actions">
-        <button data-pantry-action="soon" data-index="${index}">${item.soon ? "Unmark" : "Use soon"}</button>
-        <button data-pantry-action="remove" data-index="${index}" aria-label="Remove ${escapeHtml(item.name)}">Remove</button>
-      </span>
+      <button class="pantry-toggle" data-pantry-action="soon" data-index="${index}"
+        aria-pressed="${Boolean(item.soon)}"
+        title="${item.soon ? "Stop using this first" : "Use this one first"}">
+        <span class="pantry-icon" aria-hidden="true">${escapeHtml(item.name[0])}</span>
+        <span class="pantry-info">
+          <strong>${escapeHtml(item.name)}</strong>
+          <span>${escapeHtml(item.amount)}${item.soon ? " · use first" : ""}${offLimits.has(item.name.toLowerCase()) ? ` · not used · does not fit ${escapeHtml(state.constraints.diet || "your food restrictions")}` : ""}</span>
+        </span>
+      </button>
+      <button class="pantry-remove" data-pantry-action="remove" data-index="${index}" aria-label="Remove ${escapeHtml(item.name)}" title="Remove">&times;</button>
     </div>
   `).join("");
 }

@@ -657,8 +657,23 @@ ok(/Kept \$\{dietSummary\}/.test(appJs), "the plan header names the restrictions
 ok(/addExclusion\(meal\.sourceRecipe \|\| meal\.title\)/.test(appJs), "a swap excludes the recipe identity, not just the display title");
 ok(/swapUnavailable/.test(appJs), "the client tells the student when no other recipe fits");
 ok(/offLimitsPantry/.test(appJs) && /I left \$\{offLimits\.join/.test(appJs), "the planner tells the student which pantry items it left out");
-ok(/off-limits/.test(appJs) && /does not fit/.test(appJs), "the pantry marks an item the current diet rules out");
+ok(/off-limits/.test(appJs) && /does not fit/.test(appJs), "the inventory marks an item the current diet rules out");
 ok(fs.readFileSync("public/styles.css", "utf8").includes(".pantry-item.off-limits"), "an off-limits pantry item is styled as excluded");
+
+// ---------- written for someone in a hurry ----------
+// A first visit should show what you can act on, not headings over empty boxes.
+ok(/id="savedRecipes"[^>]*hidden/.test(html), "the saved-meals section stays out of the way until something is saved");
+ok(/\$\("savedRecipes"\)\.hidden = state\.savedRecipes\.length === 0/.test(appJs), "and appears the moment something is");
+// "1 dinners" reads as broken software to someone skimming.
+ok(/dinners\.length === 1 \? "is" : "are"/.test(appJs) && /dinners\.length === 1 \? "" : "s"/.test(appJs), "the plan message agrees with its own count");
+ok(/state\.constraints\.diet \|\| "your food restrictions"/.test(appJs), "a sentence about a diet still reads when no diet is named");
+
+// An inventory row is a thing you scan, not a form: the row itself marks what to
+// use first, and one × removes it, instead of two labelled buttons per line.
+ok(/class="pantry-toggle"[\s\S]{0,200}data-pantry-action="soon"/.test(appJs), "tapping the row marks what to use first");
+ok(/class="pantry-remove"[\s\S]{0,120}&times;/.test(appJs), "removing an item is a single ×");
+ok(!/>Use soon<|>Unmark</.test(appJs), "the row no longer carries two labelled buttons");
+
 
 // ---------- running it without a terminal ----------
 // Not every teammate works in a shell; the launchers are the supported path, so
@@ -1368,7 +1383,7 @@ async function runRouteChecks() {
 
   ok(clientSaid.length > 0, "public/app.js runs end to end against a stub DOM");
   ok(
-    clientSaid.some((line) => /I built 1 beginner-friendly dinners/.test(line)),
+    clientSaid.some((line) => /Here is 1 dinner you can make/.test(line)),
     `a successful plan reaches the chat (said: ${JSON.stringify(clientSaid)})`
   );
   ok(

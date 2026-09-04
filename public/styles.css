@@ -1334,16 +1334,26 @@ body[data-welcome-open="true"] { overflow: hidden; }
 }
 .pantry-info strong { display: block; font-size: 13px; text-transform: capitalize; }
 .pantry-info span { display: block; margin-top: 2px; color: var(--ink-soft); font-size: 11px; }
-.pantry-actions { display: flex; gap: 4px; }
-.pantry-actions button {
-  padding: 5px 6px;
+.pantry-toggle {
+  display: contents;
   border: 0;
-  border-radius: 6px;
+  background: none;
+  text-align: left;
+}
+.pantry-remove {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
   background: transparent;
   color: var(--ink-soft);
-  font-size: 10px;
-  font-weight: 700;
+  font-size: 17px;
+  line-height: 1;
 }
+.pantry-remove:hover { background: var(--maroon-wash); color: var(--maroon); }
+.pantry-item:hover { border-color: var(--maroon); }
 .pantry-actions button:hover { background: var(--enamel); color: var(--ink); }
 .pantry-empty {
   padding: 28px 18px;
