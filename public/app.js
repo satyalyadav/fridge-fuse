@@ -169,7 +169,7 @@ async function importKitchen(file) {
       throw new Error("That file came from a newer version of FridgeFuse.");
     }
     const restored = normaliseState(incoming);
-    const summary = `${restored.pantry.length} pantry items, ${restored.savedRecipes.length} saved recipes`;
+    const summary = `${restored.pantry.length} inventory items, ${restored.savedRecipes.length} saved recipes`;
     if (!window.confirm(`Restore this kitchen? It replaces what is on this device with ${summary}.`)) return;
 
     state = restored;
@@ -492,12 +492,12 @@ async function handleMessage(message) {
     let confirmation;
     if (parsed.removal) {
       confirmation = parsed.pantryChanged
-        ? `Removed ${names} from your pantry.`
-        : `${capitalize(names)} ${orderedIngredients.length === 1 ? "was" : "were"} not in your pantry.`;
+        ? `Removed ${names} from your inventory.`
+        : `${capitalize(names)} ${orderedIngredients.length === 1 ? "was" : "were"} not in your inventory.`;
     } else {
       confirmation = parsed.pantryChanged
-        ? `Added ${names} to your pantry.`
-        : `${capitalize(names)} ${orderedIngredients.length === 1 ? "is" : "are"} already in your pantry.`;
+        ? `Added ${names} to your inventory.`
+        : `${capitalize(names)} ${orderedIngredients.length === 1 ? "is" : "are"} already in your inventory.`;
     }
     addAssistantMessage(confirmation, "Ask me to build a meal plan when you want one.");
     setMobileView("chat");
@@ -507,7 +507,7 @@ async function handleMessage(message) {
   if (!state.pantry.length && !parsed.ingredients.length) {
     addAssistantMessage(
       "What is already in your mini-fridge or room?",
-      "Type a rough list, add a photo, or try the sample pantry. Even two ingredients help."
+      "Type a rough list, add a photo, or try the sample inventory. Even two ingredients help."
     );
     setMobileView("chat");
     return;
@@ -644,7 +644,7 @@ function renderPlan() {
     const reason = useSoon.length
       ? `Uses ${useSoon.join(" and ")} while it is still fresh`
       : pantryUsed.length
-        ? `Uses ${pantryUsed.join(", ")} from your pantry`
+        ? `Uses ${pantryUsed.join(", ")} from your inventory`
         : "Built from the same grocery run";
     const steps = (meal.steps || []).map((step) => `<li>${escapeHtml(step)}</li>`).join("");
     const recipeSource = meal.sourceUnavailable
@@ -770,12 +770,12 @@ function renderPantry() {
   $("mobilePantryCount").textContent = state.pantry.length;
   const soon = state.pantry.filter((item) => item.soon);
   $("useFirstText").textContent = soon.length ? soon.map((item) => titleCase(item.name)).join(" · ") : "Nothing marked yet";
-  $("markUseSoonButton").textContent = soon.length ? "Edit pantry" : "Mark an item";
+  $("markUseSoonButton").textContent = soon.length ? "Edit inventory" : "Mark an item";
 
   if (!state.pantry.length) {
     $("pantryList").innerHTML = `
       <div class="pantry-empty">
-        Your pantry is empty. Type what you have in the conversation, add it here, or take a photo.
+        Your inventory is empty. Type what you have in the conversation, add it here, or take a photo.
       </div>`;
     return;
   }
@@ -1011,7 +1011,7 @@ function setSidebar(open, { remember = true } = {}) {
   document.querySelector(".app-shell").classList.toggle("sidebar-hidden", !open);
   const toggle = $("sidebarToggle");
   toggle.setAttribute("aria-expanded", String(open));
-  toggle.setAttribute("aria-label", open ? "Hide pantry and shop" : "Show pantry and shop");
+  toggle.setAttribute("aria-label", open ? "Hide inventory and shop" : "Show inventory and shop");
   if (remember) {
     state.sidebarOpen = open;
     saveState();
@@ -1048,7 +1048,7 @@ function setMobileView(view) {
 }
 
 function loadSamplePantry() {
-  if (state.pantry.length && !window.confirm("Replace your current pantry with the sample mini-fridge?")) return;
+  if (state.pantry.length && !window.confirm("Replace your current inventory with the sample mini-fridge?")) return;
   state.pantry = [
     { name: "eggs", amount: "4 left", soon: true },
     { name: "spinach", amount: "half a bag", soon: true },
@@ -1167,7 +1167,7 @@ async function handlePhoto(file) {
     addAssistantMessage(
       confirmed.length ? `I clearly found ${confirmed.map((item) => item.name).join(", ")}.` : "I did not add anything I could not clearly identify.",
       uncertain.length
-        ? `${uncertain.length} item${uncertain.length === 1 ? " needs" : "s need"} your confirmation. Check the cropped photo${uncertain.length === 1 ? "" : "s"} in the pantry.`
+        ? `${uncertain.length} item${uncertain.length === 1 ? " needs" : "s need"} your confirmation. Check the cropped photo${uncertain.length === 1 ? "" : "s"} in the inventory.`
         : confirmed.length ? "I added only the fully visible matches." : "Try a closer photo with the whole item and label visible."
     );
     openPantry();
@@ -1728,7 +1728,7 @@ $("savedRecipeList").addEventListener("click", (event) => {
 });
 
 function resetDemo() {
-  const warning = "Reset the demo? This clears your profile, pantry, meal plan, chat history, Shop list, and saved location.";
+  const warning = "Reset the demo? This clears your settings, inventory, meal plan, chat history, Shop list, and saved location.";
   if (!window.confirm(warning)) return;
   state = clone(DEFAULT_STATE);
   saveState();
@@ -1760,7 +1760,7 @@ if (state.messages?.length) {
 } else if (state.plan) {
   $("starterPrompts").hidden = true;
   const firstMessage = document.querySelector(".assistant-message .message-copy");
-  firstMessage.innerHTML = "<p>Your last plan and pantry are still here. Tell me what changed.</p><p class=\"message-example\">Try \"lower my budget to $15\" or swap a meal from the plan.</p>";
+  firstMessage.innerHTML = "<p>Your last plan and inventory are still here. Tell me what changed.</p><p class=\"message-example\">Try \"lower my budget to $15\" or swap a meal from the plan.</p>";
 }
 
 renderProfile();

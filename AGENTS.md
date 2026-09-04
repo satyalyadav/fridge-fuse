@@ -58,6 +58,12 @@ a failing test blocks the deploy.
 
 ## Things that will bite you
 
+**The interface says "inventory"; the code says "pantry".** The rename was
+user-facing only: element ids, CSS classes, `state.pantry` and the `/api/plan`
+`pantry` field are unchanged, so nothing on the wire moved. A test fails any
+user-visible "pantry" in the markup.
+
+
 **The tests assert on source text.** `test.js` reads `public/app.js`,
 `public/index.html`, and `server.js` as strings and matches them with regexes — e.g.
 `buildPlanSource` is captured with `/async function buildPlan[\s\S]*?\n}\n\nfunction formatMoney/`,
