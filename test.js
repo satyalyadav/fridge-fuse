@@ -710,6 +710,61 @@ ok(/off-limits/.test(appJs) && /does not fit/.test(appJs), "the pantry marks an 
 ok(fs.readFileSync("public/styles.css", "utf8").includes(".pantry-item.off-limits"), "an off-limits pantry item is styled as excluded");
 ok(/failure\?\.message/.test(buildPlanSource), "the planner surfaces the server's refusal reason, not just a status code");
 
+// ---------- the client actually runs ----------
+// Source-matching cannot catch a use-before-declaration: buildPlan's own
+// try/catch turns one into "I could not build the plan" and the chat looks
+// dead. So app.js is executed against a stub DOM and driven once, end to end.
+function runClient({ planPayload }) {
+  const stubEl = () => new Proxy(function () {}, {
+    get(target, key) {
+      if (key === "classList") return { add() {}, remove() {}, toggle() {}, contains: () => false };
+      if (key === "dataset") return {};
+      if (key === "style") return {};
+      if (key === "value" || key === "textContent" || key === "innerHTML") return "";
+      if (key === "hidden" || key === "disabled" || key === "checked") return false;
+      if (key === "files") return [];
+      if (key === "length") return 0;
+      if (key === Symbol.toPrimitive) return () => "";
+      if (key === "querySelectorAll" || key === "getElementsByTagName") return () => [];
+      return stubEl();
+    },
+    set: () => true,
+    apply: () => stubEl(),
+  });
+  const said = [];
+  const sandbox = {
+    console: { log() {}, warn() {}, error() {} },
+    document: new Proxy({}, { get(target, key) {
+      if (key === "getElementById" || key === "querySelector" || key === "createElement") return () => stubEl();
+      if (key === "querySelectorAll") return () => [];
+      if (key === "addEventListener") return () => {};
+      return stubEl();
+    }}),
+    window: { matchMedia: () => ({ matches: false, addEventListener() {} }), addEventListener() {}, location: { protocol: "https:" } },
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    navigator: { geolocation: { getCurrentPosition() {} } },
+    structuredClone: (value) => JSON.parse(JSON.stringify(value)),
+    setTimeout, clearTimeout, requestAnimationFrame: (fn) => fn(), Intl,
+    Image: function () {}, FileReader: function () {},
+    fetch: async () => ({ ok: true, json: async () => planPayload }),
+  };
+  sandbox.globalThis = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(appJs, sandbox, { filename: "app.js" });
+  sandbox.addAssistantMessage = (text) => said.push(String(text));
+  sandbox.toast = (text) => said.push(`TOAST:${text}`);
+  return sandbox.buildPlan("build me a plan").then(() => said);
+}
+
+const clientSaid = [];
+runClient({
+  planPayload: {
+    ok: true,
+    dinners: [{ title: "T", usesPantry: [], needs: [], steps: ["step"], source: "s", sourceUrl: "u", sourceRecipe: "r" }],
+    shoppingList: [], leftovers: [], totalCost: 3, offLimitsPantry: ["pasta"], dietRules: ["gluten-free"],
+  },
+}).then((said) => clientSaid.push(...said));
+
 function aiEnvelope(plan) {
   return {
     ok: true,
@@ -1275,6 +1330,20 @@ async function runRouteChecks() {
   const updatedAppJs = fs.readFileSync("public/app.js", "utf8");
   ok(updatedHtml.includes("visionReviewList") && updatedAppJs.includes("data-vision-action"), "frontend includes an uncertain-item confirmation interface");
   ok(/MAX_VISION_IMAGE_EDGE\s*=\s*1024/.test(updatedAppJs) && /resizeImageForVision\(file\)/.test(updatedAppJs), "frontend caps large vision uploads at the tested 1024-pixel edge");
+
+  ok(clientSaid.length > 0, "public/app.js runs end to end against a stub DOM");
+  ok(
+    clientSaid.some((line) => /I built 1 beginner-friendly dinners/.test(line)),
+    `a successful plan reaches the chat (said: ${JSON.stringify(clientSaid)})`
+  );
+  ok(
+    !clientSaid.some((line) => /could not build the plan|TOAST:.*before initialization/.test(line)),
+    "no runtime error is swallowed into a generic failure message"
+  );
+  ok(
+    clientSaid.some((line) => /I left pasta out of the cooking/.test(line)),
+    "the off-limits explanation is produced by the real code path, not just present in the source"
+  );
 
   await runGeoConsentChecks();
   await runPostalCodeChecks();
