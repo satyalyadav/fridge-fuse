@@ -76,7 +76,11 @@ ok(!planPrompt.includes('"leftovers":[{'), "plan prompt no longer asks the model
 ok(/Do NOT return shoppingList, leftovers, or totalCost/.test(planPrompt), "plan prompt tells the model the server does the package arithmetic");
 ok(planPrompt.includes('{"item","amount","unit"}') && /how much that dinner actually uses/.test(planPrompt), "plan prompt asks for a quantity per ingredient, not a package");
 ok(/Never answer a weight item in cups/.test(planPrompt), "plan prompt pins each amount to the catalog's unit family");
-ok(planPrompt.includes("adaptationNote") && planPrompt.includes("choose the closest record"), "plan prompt chooses the closest curated recipe with an adaptation note");
+ok(
+  planPrompt.includes("adaptationNote") && planPrompt.includes("at least half") && planPrompt.includes("within 25%") &&
+    planPrompt.includes("Owning an unrelated pantry item"),
+  "plan prompt limits recipe adaptations by ingredients and verified time"
+);
 ok(planPrompt.includes("NEVER invent a source recipe"), "plan prompt forbids invented recipe citations");
 for (const recipe of APPROVED_RECIPES) {
   ok(
@@ -288,6 +292,7 @@ const fs = require("fs");
 for (const f of ["public/index.html", "public/app.js", "public/styles.css", "data/prices.json", "data/recipe-sources.json", ".env.example"]) {
   ok(fs.existsSync(f), `${f} exists`);
 }
+ok(!fs.existsSync("public/designs.html"), "the obsolete designs.html prototype is removed");
 const vercelConfig = JSON.parse(fs.readFileSync("vercel.json", "utf8"));
 const vercelServer = require("./server.js");
 const vercelFunction = vercelConfig.functions?.["server.js"] || {};
@@ -308,6 +313,21 @@ ok(html.includes("app.js") && html.includes("api/plan") === false, "index.html l
 const appJs = fs.readFileSync("public/app.js", "utf8");
 const serverSrc = fs.readFileSync("server.js", "utf8");
 const recipeSourcesJson = fs.readFileSync("data/recipe-sources.json", "utf8");
+
+const ingredientMentionsSource = appJs.replaceAll("\r\n", "\n")
+  .match(/function getIngredientMentions\(message\) \{[\s\S]*?\n\}/)?.[0] || "";
+const ingredientConfigSource = appJs.replaceAll("\r\n", "\n")
+  .match(/const KNOWN_INGREDIENTS = \[[\s\S]*?\n\];\n\nconst ALIASES = \{[\s\S]*?\n\};/)?.[0] || "";
+ok(Boolean(ingredientMentionsSource && ingredientConfigSource), "the pantry ingredient parser is available for chat commands");
+if (ingredientMentionsSource && ingredientConfigSource) {
+  const ingredientContext = {};
+  vm.createContext(ingredientContext);
+  vm.runInContext(`${ingredientConfigSource}\n${ingredientMentionsSource}\nthis.testIngredientMentions = getIngredientMentions;`, ingredientContext);
+  ok(
+    ingredientContext.testIngredientMentions("add tomatoes").join(",") === "tomatoes",
+    'the exact shorthand command "add tomatoes" identifies the pantry item'
+  );
+}
 
 async function exerciseFrontendMessage(message, parsed, pantryAfter) {
   const normalizedAppJs = appJs.replaceAll("\r\n", "\n");
@@ -371,6 +391,10 @@ ok(
 ok(
   appJs.includes('plan.dinners.length === 1 ? "dinner" : "dinners"'),
   "the plan title uses singular dinner for a one-meal plan"
+);
+ok(
+  appJs.includes('result.dinners.length === 1 ? "Use the Swap button."'),
+  "one-dinner guidance does not tell the user to swap dinner two"
 );
 const buildPlanSource = appJs.replaceAll("\r\n", "\n").match(/async function buildPlan[\s\S]*?\n}\n\nfunction formatMoney/)?.[0] || "";
 const planAssignment = buildPlanSource.indexOf("state.plan =");
@@ -935,6 +959,17 @@ async function runRouteChecks() {
     "a shorthand add command confirms the pantry update without requesting a meal plan"
   );
 
+  const tomatoPantryAdd = await exerciseFrontendMessage(
+    "add tomatoes",
+    { ingredients: ["tomatoes"], pantryChanged: true, removal: false, urgency: false },
+    [{ name: "tomatoes" }]
+  );
+  ok(
+    tomatoPantryAdd.buildPlanCalls === 0 &&
+      tomatoPantryAdd.assistantMessages[0]?.[0] === "Added tomatoes to your pantry.",
+    '"add tomatoes" updates the pantry without starting a plan or showing a pricing error'
+  );
+
   const pantryAndPlan = await exerciseFrontendMessage(
     "add rice to my pantry and build a dinner plan",
     { ingredients: ["rice"], pantryChanged: true, removal: false, urgency: false },
@@ -972,6 +1007,65 @@ async function runRouteChecks() {
       live.payload.dinners[0].source === validAiPlan.dinners[0].source &&
       live.payload.dinners[0].sourceUrl === validAiPlan.dinners[0].sourceUrl,
     "AI plans preserve approved recipe citations"
+  );
+  ok(
+    live.payload.dinners[0].equip.join(",") === "stove,microwave",
+    "dinner cards use the cited recipe's verified equipment"
+  );
+
+  const unrelatedPotatoAdaptation = {
+    dinners: [{
+      title: "Microwave Scrambled Eggs with Rice",
+      sourceRecipe: "Microwave Potato",
+      source: "Food Network",
+      sourceUrl: "https://www.foodnetwork.com/recipes/food-network-kitchen/microwave-potato-10076489",
+      adaptationNote: "use eggs instead of potato, add rice",
+      timeMin: 3,
+      servings: 1,
+      usesPantry: ["eggs", "rice"],
+      needs: [],
+      steps: ["Microwave the eggs until set and serve them with rice."]
+    }],
+    notes: ""
+  };
+  let groundingCalls = 0;
+  const grounded = await callPlan(request, async () => {
+    groundingCalls++;
+    return aiEnvelope(groundingCalls === 1 ? unrelatedPotatoAdaptation : validAiPlan);
+  });
+  ok(
+    groundingCalls === 2 && grounded.payload.ok && grounded.payload.repaired === true &&
+      grounded.payload.dinners[0].sourceRecipe === "Spinach Rice Breakfast Bowls",
+    "an egg-and-rice dinner cannot retain the Microwave Potato citation"
+  );
+
+  const implausiblyFastPotato = {
+    dinners: [{
+      title: "Microwave Potato",
+      sourceRecipe: "Microwave Potato",
+      source: "Food Network",
+      sourceUrl: "https://www.foodnetwork.com/recipes/food-network-kitchen/microwave-potato-10076489",
+      adaptationNote: "",
+      timeMin: 7,
+      servings: 1,
+      usesPantry: ["potatoes"],
+      needs: [
+        { item: "olive oil", amount: 1, unit: "tbsp" },
+        { item: "butter", amount: 1, unit: "tbsp" }
+      ],
+      steps: ["Pierce and oil the potato, microwave until tender, then split and add butter."]
+    }],
+    notes: ""
+  };
+  let timeValidationCalls = 0;
+  const timeRejected = await callPlan(request, async () => {
+    timeValidationCalls++;
+    return aiEnvelope(implausiblyFastPotato);
+  });
+  ok(
+    timeValidationCalls === 2 && timeRejected.statusCode === 502 &&
+      /not credible/.test(timeRejected.payload.failure?.message || ""),
+    "a cited recipe cannot claim an implausibly shorter cooking time"
   );
 
   const fabricatedCitationPlan = {
@@ -1135,40 +1229,60 @@ async function runRouteChecks() {
   );
 
   // A celiac must be able to get a plan at all: the substitutes have to price.
-  const celiacRequest = { ...request, pantry: ["rice", "spinach"], useSoon: [], diet: "celiac" };
+  const celiacRequest = { ...request, pantry: ["rice", "spinach"], useSoon: [], equipment: ["stove", "skillet"], diet: "celiac" };
   const glutenFreePlan = {
     ...validAiPlan,
     dinners: validAiPlan.dinners.map((dinner) => ({
       ...dinner,
-      title: "Gluten-free pasta bowl",
-      usesPantry: ["spinach"],
-      needs: [{ item: "gluten free pasta", amount: 4, unit: "oz" }, { item: "marinara", amount: 8, unit: "oz" }],
-      steps: ["Boil the gluten free pasta, then stir in the marinara and spinach."]
+      title: "Gluten-free black bean quesadilla",
+      sourceRecipe: "Hearty Black Bean Quesadillas",
+      sourceUrl: "https://www.budgetbytes.com/hearty-black-bean-quesadillas/",
+      adaptationNote: "Use corn tortillas instead of flour tortillas.",
+      timeMin: 15,
+      usesPantry: [],
+      needs: [
+        { item: "black beans", amount: 8, unit: "oz" },
+        { item: "onion", amount: 2, unit: "oz" },
+        { item: "garlic", amount: 2, unit: "clove" },
+        { item: "cheddar", amount: 2, unit: "oz" },
+        { item: "corn tortillas", amount: 2, unit: "each" }
+      ],
+      steps: ["Mix the bean filling, fill the corn tortillas, and toast both sides in a skillet."]
     }))
   };
   const celiac = await callPlan(celiacRequest, async () => aiEnvelope(glutenFreePlan));
   ok(
-    celiac.statusCode === 200 && celiac.payload.ok && celiac.payload.shoppingList.length === 2,
+    celiac.statusCode === 200 && celiac.payload.ok && celiac.payload.shoppingList.length === 5,
     "a celiac plan built from gluten-free substitutes is accepted and priced"
   );
   ok(
-    celiac.payload.shoppingList.some((entry) => entry.item === "gluten free pasta" && entry.packPrice > 0),
-    "the gluten-free substitute is priced as itself, not as wheat pasta"
+    celiac.payload.shoppingList.some((entry) => entry.item === "corn tortillas" && entry.packPrice > 0),
+    "the gluten-free substitute is priced as itself, not as flour tortillas"
   );
 
   const wheatForCeliac = {
     ...validAiPlan,
     dinners: validAiPlan.dinners.map((dinner) => ({
       ...dinner,
-      usesPantry: ["spinach"],
-      needs: [{ item: "pasta", amount: 4, unit: "oz" }],
-      steps: ["Boil the pasta."]
+      title: "Black bean quesadilla",
+      sourceRecipe: "Hearty Black Bean Quesadillas",
+      sourceUrl: "https://www.budgetbytes.com/hearty-black-bean-quesadillas/",
+      timeMin: 15,
+      usesPantry: [],
+      needs: [
+        { item: "black beans", amount: 8, unit: "oz" },
+        { item: "onion", amount: 2, unit: "oz" },
+        { item: "garlic", amount: 2, unit: "clove" },
+        { item: "cheddar", amount: 2, unit: "oz" },
+        { item: "tortillas", amount: 2, unit: "each" }
+      ],
+      steps: ["Fill the flour tortillas with the bean mixture and toast both sides."]
     }))
   };
   const celiacBlocked = await callPlan(celiacRequest, async () => aiEnvelope(wheatForCeliac));
   ok(
     celiacBlocked.statusCode === 502 && /gluten/.test(celiacBlocked.payload.failure?.message || ""),
-    "wheat pasta in a celiac plan is rejected by the catalog tag, naming gluten"
+    "flour tortillas in a celiac plan are rejected by the catalog tag, naming gluten"
   );
 
   // End to end: the model's implausible amount gets one correction attempt.
@@ -1223,10 +1337,18 @@ async function runRouteChecks() {
       ...validAiPlan,
       dinners: validAiPlan.dinners.map((dinner) => ({
         ...dinner,
-        title: "Microwave potato with cheese",
+        title: "Microwave potato with butter",
         sourceRecipe: "Microwave Potato",
         source: "Food Network",
-        sourceUrl: "https://www.foodnetwork.com/recipes/food-network-kitchen/microwave-potato-10076489"
+        sourceUrl: "https://www.foodnetwork.com/recipes/food-network-kitchen/microwave-potato-10076489",
+        adaptationNote: "",
+        timeMin: 10,
+        usesPantry: ["potatoes"],
+        needs: [
+          { item: "olive oil", amount: 1, unit: "tbsp" },
+          { item: "butter", amount: 1, unit: "tbsp" }
+        ],
+        steps: ["Pierce and oil the potato, microwave it until tender, then split it and add butter."]
       }))
     });
   });
@@ -1483,8 +1605,13 @@ async function runRouteChecks() {
       adaptationNote: "Added pantry spinach and served the stir fry over pantry rice.",
       timeMin: 25,
       usesPantry: ["spinach", "rice"],
-      needs: [{ item: "soy sauce", amount: 2, unit: "tbsp" }],
-      steps: ["Microwave the spinach and rice, then season with soy sauce."]
+      needs: [
+        { item: "soy sauce", amount: 2, unit: "tbsp" },
+        { item: "garlic", amount: 2, unit: "clove" },
+        { item: "carrots", amount: 3, unit: "oz" },
+        { item: "onion", amount: 2, unit: "oz" }
+      ],
+      steps: ["Stir-fry the garlic, carrots, onion, and spinach, add the soy sauce, and serve over rice."]
     }))
   };
   let dietPrompt = "";

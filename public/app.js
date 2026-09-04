@@ -15,6 +15,8 @@ const ALIASES = {
   "cheese": "cheddar",
   "chicken": "chicken breast",
   "peas": "frozen peas",
+  "tomato": "tomatoes",
+  "tomatoes": "tomatoes",
   "tomato sauce": "marinara",
   "spaghetti sauce": "marinara",
   "wraps": "tortillas"
@@ -586,7 +588,7 @@ async function buildPlan(request = "") {
     }
     addAssistantMessage(
       `Here ${result.dinners.length === 1 ? "is" : "are"} ${result.dinners.length} dinner${result.dinners.length === 1 ? "" : "s"} you can make.${soonText}${dietText}${offLimitsText}`,
-      `${budgetStatus} Do not like one? Say "swap dinner two".`
+      `${budgetStatus} ${result.dinners.length === 1 ? "Use the Swap button." : 'Do not like one? Say "swap dinner two".'}`
     );
     setMobileView("plan");
   } catch (error) {

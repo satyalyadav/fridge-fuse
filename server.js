@@ -231,6 +231,37 @@ function isApprovedRecipeCitation(source, sourceRecipe, sourceUrl) {
   return !!approvedRecipeForCitation(source, sourceRecipe, sourceUrl);
 }
 
+function assertDinnerMatchesRecipe(dinner, recipe, dinnerNumber) {
+  const rawIngredients = [
+    ...(dinner.usesPantry || []),
+    ...(dinner.needs || []).map((need) => typeof need === "string" ? need : need?.item)
+  ];
+  const dinnerIngredients = new Set(rawIngredients.map((name) => {
+    const resolved = resolveCatalogItem(name);
+    return resolved?.name || String(name || "").trim().toLowerCase();
+  }).filter(Boolean));
+  const recipeIngredients = new Set(recipe.ingredients);
+  const matchingIngredients = [...dinnerIngredients].filter((name) => recipeIngredients.has(name));
+
+  // A substitution is an adaptation; once fewer than half of either side still
+  // matches, it is a different recipe wearing the old citation.
+  if (!dinnerIngredients.size || matchingIngredients.length * 2 < recipeIngredients.size ||
+      matchingIngredients.length * 2 < dinnerIngredients.size) {
+    const listed = [...dinnerIngredients].join(", ") || "none";
+    throw new Error(`Dinner ${dinnerNumber} does not match its cited recipe "${recipe.title}": planned ingredients are ${listed}`);
+  }
+
+  const time = Number(dinner.timeMin);
+  const minimumTime = Math.max(1, Number(recipe.timeMin) * 0.75);
+  const maximumTime = Number(recipe.timeMin) * 1.25;
+  if (time < minimumTime || time > maximumTime) {
+    throw new Error(`Dinner ${dinnerNumber} timeMin ${time} is not credible for the cited ${recipe.timeMin}-minute recipe "${recipe.title}"`);
+  }
+  // The card should describe the recipe it actually cites, not whichever
+  // appliance happens to be first in the user's profile.
+  dinner.equip = [...recipe.equipment];
+}
+
 // Typed words a student uses -> catalog item ("cheese" -> "cheddar"). Lives in
 // the data file so the UI can fetch it instead of keeping a second copy.
 const ITEM_ALIASES = PRICES.aliases || {};
@@ -1077,7 +1108,8 @@ function parseAiPlan(content, expectedDinners, { strictAmounts = true } = {}) {
     if (!dinner || typeof dinner !== "object") throw new Error(`Dinner ${index + 1} must be an object`);
     if (typeof dinner.title !== "string" || !dinner.title.trim()) throw new Error(`Dinner ${index + 1} needs a title`);
     if (!Number.isFinite(Number(dinner.timeMin))) throw new Error(`Dinner ${index + 1} needs a numeric timeMin`);
-    if (!isApprovedRecipeCitation(dinner.source, dinner.sourceRecipe, dinner.sourceUrl)) {
+    const approvedRecipe = approvedRecipeForCitation(dinner.source, dinner.sourceRecipe, dinner.sourceUrl);
+    if (!approvedRecipe) {
       throw new Error(`Dinner ${index + 1} needs an exact sourceRecipe/source/sourceUrl match from the approved recipe catalog`);
     }
     if (dinner.adaptationNote !== undefined && typeof dinner.adaptationNote !== "string") {
@@ -1085,6 +1117,9 @@ function parseAiPlan(content, expectedDinners, { strictAmounts = true } = {}) {
     }
     for (const field of ["usesPantry", "needs", "steps"]) {
       if (!Array.isArray(dinner[field])) throw new Error(`Dinner ${index + 1} needs a ${field} array`);
+    }
+    if (dinner.usesPantry.some((item) => typeof item !== "string" || !item.trim())) {
+      throw new Error(`Dinner ${index + 1} usesPantry must contain ingredient names`);
     }
     if (dinner.steps.length === 0) throw new Error(`Dinner ${index + 1} needs at least one cooking step`);
     if (dinner.servings !== undefined && (!Number.isFinite(Number(dinner.servings)) || Number(dinner.servings) < 1 || Number(dinner.servings) > 12)) {
@@ -1099,6 +1134,7 @@ function parseAiPlan(content, expectedDinners, { strictAmounts = true } = {}) {
         throw new Error(`Dinner ${index + 1}: ${error.message}`);
       }
     }
+    assertDinnerMatchesRecipe(dinner, approvedRecipe, index + 1);
   }
   // Leftovers are computed from the requirements in groundShoppingPlan, so
   // whatever the model guessed for them is ignored rather than validated.
@@ -1109,7 +1145,7 @@ async function repairAiPlan(chat, content, expectedDinners, initialError, requir
   return chat([
     {
       role: "system",
-      content: `Repair a malformed FridgeFuse meal-plan response. Reply ONLY with valid JSON containing exactly ${expectedDinners} dinners and notes. Each dinner must have a non-empty title, numeric timeMin, arrays named usesPantry, needs, and steps, and an exact sourceRecipe/source/sourceUrl triple from this curated recipe catalog. Base ingredients and steps on the verified facts in the selected record, with any minor changes stated in adaptationNote:\n${recipeSourcesContext()} Every entry in needs must be an object {"item","amount","unit"} giving how much the dinner uses, with an ingredient name from the supplied price catalog and a unit from the family that catalog lists for it. Do not return shoppingList, leftovers, or totalCost — the server computes them. Preserve the original meal ideas when possible. Do not add commentary or Markdown fences.`
+      content: `Repair a malformed FridgeFuse meal-plan response. Reply ONLY with valid JSON containing exactly ${expectedDinners} dinners and notes. Each dinner must have a non-empty title, numeric timeMin, arrays named usesPantry, needs, and steps, and an exact sourceRecipe/source/sourceUrl triple from this curated recipe catalog. The safest repair is to use one record's exact ingredient list: put only ingredients the user owns in usesPantry, put every remaining record ingredient in needs, and add no other ingredients. Do not force unrelated pantry items into a dinner. Choose another curated record when the malformed meal does not fit its citation. Keep timeMin within 25% of the record's verified time, base steps on its method, and state any ingredient change in adaptationNote. If you do change ingredients, at least half of the cited ingredients and at least half of the dinner ingredients must still match:\n${recipeSourcesContext()} Every entry in needs must be an object {"item","amount","unit"} giving how much the dinner uses, with an ingredient name from the supplied price catalog and a unit from the family that catalog lists for it. Do not return shoppingList, leftovers, or totalCost — the server computes them. Do not add commentary or Markdown fences.`
     },
     {
       role: "user",
@@ -1355,8 +1391,8 @@ function buildPlanSystemPrompt(priceCtx, dietCtx = "") {
     ? `\nDietary restrictions (STRICT — these are safety constraints):
 - The restrictions below are absolute. NEVER put a forbidden ingredient in a title, usesPantry, needs, steps, leftovers, or notes — not as a garnish, not as an optional topping, not as a "serve with" suggestion.
 - A forbidden ingredient stays forbidden even when the user already has it in their pantry. Leave it in the pantry and cook something else.
-- Adapt the approved recipe with a compliant substitute and say which swap you made in "adaptationNote".
-- If no approved recipe can be adapted safely, return the closest one that CAN be, rather than serving a forbidden ingredient.
+- Choose a curated recipe that already fits when possible. A compliant substitution is allowed only when the result still passes the recipe-match rules below, and must be named in "adaptationNote".
+- If a cited recipe cannot stay recognizable after a safe substitution, choose a different curated recipe rather than serving a forbidden ingredient.
 ${dietCtx}`
     : "";
   return `You are FridgeFuse, a student meal planner for Tempe AZ 85281. Reply ONLY with JSON:
@@ -1366,10 +1402,12 @@ Rules: plan EXACTLY the requested number of dinners. The user is a freshman cook
 Quantities (REQUIRED): every need is how much that dinner actually uses — {"item","amount","unit"} — not a package. Three eggs is {"item":"eggs","amount":3,"unit":"each"}, even though eggs are sold by the dozen. Use only ingredient names from the price context, and give each amount in the unit family the price context shows for that item: count items in each, weight items in oz or lb, liquids in fl oz, cups, or tbsp. Never answer a weight item in cups or a count item in ounces. Amounts are the TOTAL the dinner uses; "servings" says how many portions that makes (1 for a student cooking for themselves), and each amount must be a sensible size for that many portions — a dinner does not use forty ounces of spinach. Do NOT return shoppingList, leftovers, or totalCost — the server buys whole packages from its own catalog, sums the cost, and works out what is left over. Price context: ${priceCtx}.
 Recipe grounding (STRICT):
 - Select every dinner from the curated recipe records below. NEVER invent a source recipe, cite a publisher homepage, or use an unlisted recipe.
-- Treat each record's verified ingredients and method outline as authoritative. Build the dinner's ingredients and steps from those facts, adjusted only for the user's pantry, budget, equipment, time, and diet. Do not rely on other knowledge about the publisher's site.
+- Prefer each selected record's exact ingredient list. Put its pantry-owned ingredients in usesPantry and its missing ingredients in needs. Owning an unrelated pantry item does not mean it belongs in every dinner.
+- Treat each record's verified ingredients, time, and method outline as authoritative. The union of usesPantry and needs must retain at least half of the cited ingredients, and at least half of the dinner ingredients must come from that record. Keep timeMin within 25% of the verified time. The server checks all three rules.
+- Use adaptationNote for small ingredient changes. If those limits do not work for the user's pantry, budget, equipment, time, or diet, select another curated recipe. Do not rely on other knowledge about the publisher's site.
 - Copy "sourceRecipe", "source", and "sourceUrl" from one record exactly. The server rejects any mismatched title, publisher, or URL.
-- The dinner "title" may describe the adapted result. State every minor substitution or omission in "adaptationNote". Use "" only when the generated dinner follows the selected record without changes.
-- If no record is an exact fit, choose the closest record and make only the changes needed for the user's constraints. Never turn it into an unrelated recipe.
+- The dinner "title" may describe the adapted result. State every ingredient substitution, addition, or omission in "adaptationNote". Use "" only when the ingredient list follows the selected record without changes.
+- Never keep a citation after turning its recipe into a different meal. Select a better-matching record instead.
 Curated recipes:
 ${sourcesCtx}${dietSection}`;
 }
@@ -1631,7 +1669,7 @@ app.get("/api/failures", (req, res) => res.json({ ok: true, count: failures.leng
 module.exports = app;
 Object.assign(module.exports, {
   app, cheapestPack, findPrice, extractJson, PRICES, STORES,
-  RECIPE_SOURCES, APPROVED_RECIPES, approvedRecipeForCitation, isApprovedRecipeCitation,
+  RECIPE_SOURCES, APPROVED_RECIPES, approvedRecipeForCitation, isApprovedRecipeCitation, assertDinnerMatchesRecipe,
   buildPlanSystemPrompt, reportFailure, resolveDataPath,
   DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL,
   handlePlanRequest, handleVisionRequest, normalizeVisionResult,
