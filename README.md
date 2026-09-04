@@ -198,6 +198,19 @@ honoured, requests are throttled to their ~1/second limit, and the browser never
 makes a cross-origin call. If the service is slow or down, the local description
 stands and the failure is logged like any other external call.
 
+## Swapping a dinner
+
+"Swap" excludes the **recipe**, not the dinner's title: the plan prompt lets a title
+describe the adapted result, so the same curated record could otherwise come back
+under a new name and the swap would look like it did nothing. The server refuses a
+plan that reuses an excluded recipe and asks the model again.
+
+The curated catalog is small, and equipment, time, and budget narrow it further, so a
+swap can genuinely have nowhere to go. When the second attempt still has no
+alternative the plan is returned with `swapUnavailable`, and the chat says so rather
+than silently handing back the same dinner. More microwave-only records in
+`data/recipe-sources.json` is what widens this.
+
 ## Recipe sources
 
 - AI meal generation is constrained to the exact recipe records in

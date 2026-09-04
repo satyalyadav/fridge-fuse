@@ -15,7 +15,8 @@ const {
   pantryDietConflicts, dietRulesContext, catalogTagsFor, findIngredientConflict,
   DIET_OPTIONS, EQUIPMENT_OPTIONS, parseDietSelections, blockedIngredientsForDiet,
   unitInfo, toBaseAmount, packSizeOf, normalizeRequirement, groundShoppingPlan,
-  servingBandOf, amountImplausibility, servingsOf, MAX_PACKAGES_PER_DINNER
+  servingBandOf, amountImplausibility, servingsOf, MAX_PACKAGES_PER_DINNER,
+  findRepeatedExclusion
 } = require("./server.js");
 
 // Normalize OS-native path separators to forward slashes so assertions are
@@ -702,6 +703,8 @@ for (const term of PROFILE_EXTRA_DIET_TERMS_SOURCE) {
   ok(resolveDietRules(term).length > 0, `chat-only diet term "${term}" resolves to an enforceable rule`);
 }
 ok(/Kept \$\{dietSummary\}/.test(appJs), "the plan header names the restrictions it was held to");
+ok(/addExclusion\(meal\.sourceRecipe \|\| meal\.title\)/.test(appJs), "a swap excludes the recipe identity, not just the display title");
+ok(/swapUnavailable/.test(appJs), "the client tells the student when no other recipe fits");
 ok(/offLimitsPantry/.test(appJs) && /I left \$\{offLimits\.join/.test(appJs), "the planner tells the student which pantry items it left out");
 ok(/off-limits/.test(appJs) && /does not fit/.test(appJs), "the pantry marks an item the current diet rules out");
 ok(fs.readFileSync("public/styles.css", "utf8").includes(".pantry-item.off-limits"), "an off-limits pantry item is styled as excluded");
@@ -1049,6 +1052,48 @@ async function runRouteChecks() {
       /stated amount was not usable/.test(bandStubborn.payload.shoppingList[0].requiredLabel),
     "the receipt says the stated amount was not usable rather than repeating it"
   );
+
+  // Swapping a dinner: the exclusion is on the recipe, not the display title,
+  // because the prompt lets a title describe the adapted result.
+  const swapRequest = { ...request, exclude: [validAiPlan.dinners[0].sourceRecipe] };
+  let swapCalls = 0;
+  const swapped = await callPlan(swapRequest, async (messages) => {
+    swapCalls++;
+    if (swapCalls === 1) {
+      // Same curated recipe, new title — what a silent swap failure looks like.
+      return aiEnvelope({
+        ...validAiPlan,
+        dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, title: "A totally different sounding bowl" }))
+      });
+    }
+    assert(/Do NOT use these recipes again/.test(messages.map((m) => String(m.content)).join(" ")));
+    return aiEnvelope({
+      ...validAiPlan,
+      dinners: validAiPlan.dinners.map((dinner) => ({
+        ...dinner,
+        title: "Microwave potato with cheese",
+        sourceRecipe: "Microwave Potato",
+        source: "Food Network",
+        sourceUrl: "https://www.foodnetwork.com/recipes/food-network-kitchen/microwave-potato-10076489"
+      }))
+    });
+  });
+  ok(swapCalls === 2, "a repeated recipe under a new title is sent back rather than accepted");
+  ok(
+    swapped.statusCode === 200 && swapped.payload.dinners[0].sourceRecipe === "Microwave Potato" && !swapped.payload.swapUnavailable,
+    "the swap returns a different curated recipe"
+  );
+
+  const swapImpossible = await callPlan(swapRequest, async () => aiEnvelope(validAiPlan));
+  ok(
+    swapImpossible.statusCode === 200 && swapImpossible.payload.swapUnavailable === true,
+    "a swap the small catalog cannot satisfy says so instead of silently repeating"
+  );
+  ok(
+    findRepeatedExclusion({ dinners: [{ title: "x", sourceRecipe: "Microwave Potato" }] }, ["microwave potato"]) !== null,
+    "exclusion matching ignores case and punctuation"
+  );
+  ok(findRepeatedExclusion({ dinners: [{ title: "x", sourceRecipe: "y" }] }, []) === null, "nothing is excluded when nothing was swapped");
 
   // A celiac who says "I have pasta" must be told their pasta was left out,
   // not left to wonder whether the planner noticed it at all.

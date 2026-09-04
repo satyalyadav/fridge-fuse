@@ -415,7 +415,7 @@ async function handleMessage(message) {
   if (swapMatch && state.plan?.dinners?.length) {
     const positions = { one: 0, two: 1, three: 2, four: 3, five: 4, six: 5, seven: 6, first: 0, second: 1, third: 2, fourth: 3, fifth: 4, sixth: 5, seventh: 6, 1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6 };
     const meal = state.plan.dinners[positions[swapMatch[1]]];
-    if (meal) addExclusion(meal.title);
+    if (meal) addExclusion(meal.sourceRecipe || meal.title);
   }
   await loadPreferences();
   const parsed = parseMessage(clean);
@@ -512,6 +512,12 @@ async function buildPlan(request = "") {
     const offLimitsText = offLimits.length
       ? ` I left ${offLimits.join(" and ")} out of the cooking — ${offLimits.length === 1 ? "it does not" : "they do not"} fit ${state.constraints.diet}. If yours is a safe version, add it under its own name (for example "gluten free pasta") and I will use it.`
       : "";
+    if (result.swapUnavailable) {
+      addAssistantMessage(
+        "I could not find a different recipe that fits your budget, time, and equipment, so that dinner is still here.",
+        "Loosening one of those — more time, another appliance, a higher budget — usually opens up more options."
+      );
+    }
     addAssistantMessage(
       `I built ${result.dinners.length} beginner-friendly dinners for the equipment you have.${soonText}${dietText}${offLimitsText}`,
       `${budgetStatus} Say "swap dinner two," lower the budget, or tell me what you dislike.`
@@ -1753,7 +1759,9 @@ $("mealList").addEventListener("click", async (event) => {
   }
 
   if (button.dataset.action === "swap") {
-    addExclusion(meal.title);
+    // The plan prompt lets a title describe the adapted result, so the title
+    // alone does not identify the recipe to avoid; the citation does.
+    addExclusion(meal.sourceRecipe || meal.title);
     saveState();
     setMobileView("chat");
     addUserMessage(`Swap ${meal.title}. Keep the same budget and equipment.`);
