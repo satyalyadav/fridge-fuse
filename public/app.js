@@ -152,6 +152,10 @@ function capitalize(value) {
   return text ? text[0].toUpperCase() + text.slice(1) : text;
 }
 
+function mealSequenceLabel(index) {
+  return index === 0 ? "TONIGHT" : `NIGHT ${index + 1}`;
+}
+
 function toast(message, type = "") {
   const node = document.createElement("div");
   node.className = `toast ${type}`;
@@ -482,7 +486,7 @@ function renderPlan() {
   $("emptyPlan").hidden = true;
   $("planContent").hidden = false;
   $("budgetStamp").hidden = false;
-  $("planTitle").textContent = `${plan.dinners.length} dinners, one small grocery run`;
+  $("planTitle").textContent = `${plan.dinners.length} ${plan.dinners.length === 1 ? "dinner" : "dinners"}, one small grocery run`;
   $("planSubtitle").textContent = `Built for ${planConstraints.equipment.join(" + ") || "the equipment you have"}, ${planConstraints.maxTimeMin} minutes or less each.`;
   $("budgetTotal").textContent = formatMoney(plan.totalCost);
   $("budgetLimit").textContent = `of ${formatMoney(planConstraints.budget)}`;
@@ -498,7 +502,6 @@ function renderPlan() {
   logicParts.push(plan.totalCost <= planConstraints.budget ? `${formatMoney(planConstraints.budget - plan.totalCost)} stays in your budget` : `${formatMoney(plan.totalCost - planConstraints.budget)} over budget`);
   $("planLogic").textContent = logicParts.join(". ") + ".";
 
-  const dayLabels = ["TONIGHT", "NEXT", "THEN", "LATER", "LAST"];
   $("mealList").innerHTML = plan.dinners.map((meal, index) => {
     const pantryUsed = meal.usesPantry || [];
     const useSoon = pantryUsed.filter((name) => soon.includes(name));
@@ -515,7 +518,7 @@ function renderPlan() {
       : "";
     return `
       <article class="meal-card" data-meal-index="${index}">
-        <div class="meal-day">${dayLabels[index] || `DAY ${index + 1}`}</div>
+        <div class="meal-day">${mealSequenceLabel(index)}</div>
         <div class="meal-main">
           <h3>${escapeHtml(meal.title)}</h3>
           <p class="meal-meta">${Number(meal.timeMin) || "—"} min · beginner · ${escapeHtml((meal.equip || []).join(" + ") || planConstraints.equipment[0] || "simple equipment")}</p>

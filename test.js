@@ -86,6 +86,31 @@ ok(!/\b(?:localPlan|RECIPES|catalogOnly|FALLBACK_PACK_PRICE|FALLBACK_STORE|estim
 ok(!recipeSourcesJson.includes("FridgeFuse Demo Catalog"), "approved sources contain no demo catalog entry");
 ok(!recipeSourcesJson.toLowerCase().includes("github.com"), "approved recipe sources do not link to GitHub");
 ok(/VOYAGER_KEY[\s\S]*required/i.test(fs.readFileSync(".env.example", "utf8")), "environment guidance requires the Voyager key");
+const mealSequenceLabelSource = appJs.match(/function mealSequenceLabel\(index\) \{[\s\S]*?\n\}/)?.[0] || "";
+const mealSequenceLabel = mealSequenceLabelSource
+  ? Function(`return (${mealSequenceLabelSource})`)()
+  : () => "";
+ok(mealSequenceLabel(0) === "TONIGHT", "the first dinner is labeled TONIGHT");
+ok(
+  [1, 2, 3, 4, 5, 6].every((index) => mealSequenceLabel(index) === `NIGHT ${index + 1}`),
+  "later dinners are labeled NIGHT 2 through NIGHT 7"
+);
+ok(
+  !appJs.includes('const dayLabels = ["TONIGHT", "NEXT", "THEN", "LATER", "LAST"]') &&
+    !appJs.includes("`DAY ${index + 1}`"),
+  "the mixed sequence labels and DAY fallback are removed"
+);
+ok(
+  html.includes("Your dinner plan") &&
+    html.includes("After your final dinner") &&
+    !html.includes("Your next few nights") &&
+    !html.includes("After dinner three"),
+  "plan and leftovers headings work for every dinner count"
+);
+ok(
+  appJs.includes('plan.dinners.length === 1 ? "dinner" : "dinners"'),
+  "the plan title uses singular dinner for a one-meal plan"
+);
 const buildPlanSource = appJs.replaceAll("\r\n", "\n").match(/async function buildPlan[\s\S]*?\n}\n\nfunction formatMoney/)?.[0] || "";
 const planAssignment = buildPlanSource.indexOf("state.plan =");
 const groceryRefresh = buildPlanSource.indexOf("renderGroceryList();");
