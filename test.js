@@ -10,6 +10,7 @@ const {
   handlePlanRequest, handleVisionRequest, normalizeVisionResult, handleGeoPostal,
   haversineMiles, isValidCoordinate, resolveCatalogItem, optimizeCart,
   describeLocation, handleGeoDescribe,
+  DIET_OPTIONS, EQUIPMENT_OPTIONS, parseDietSelections, blockedIngredientsForDiet,
   STORE_DATA, BRANCHES, DEFAULT_ORIGIN, ITEM_ALIASES
 } = require("./server.js");
 
@@ -103,6 +104,7 @@ async function exerciseFrontendMessage(message, parsed, pantryAfter) {
       context.state.pantry = pantryAfter;
       return parsed;
     },
+    loadPreferences: async () => {},
     setMobileView() {},
     $() { return { hidden: false }; }
   };
@@ -270,6 +272,91 @@ const tight = optimizeCart({ items: ["eggs"], ...campus, maxDistanceMi: 0.01 });
 ok(tight.widenedSearch && tight.options.length > 0, "an over-tight radius widens instead of returning nothing");
 const near = optimizeCart({ items: ["eggs"], ...campus, maxDistanceMi: 2 });
 ok(near.options.length < BRANCHES.length && near.options.every((o) => o.distanceMi <= 2), "the distance filter excludes far branches");
+
+// ---------- preference catalogs + onboarding ----------
+const catalogNames = new Set(PRICES.items.map((item) => item.name));
+
+ok(DIET_OPTIONS.length >= 15, `diet catalog offers ${DIET_OPTIONS.length} options`);
+ok(EQUIPMENT_OPTIONS.length >= 10, `equipment catalog offers ${EQUIPMENT_OPTIONS.length} options`);
+ok(new Set(DIET_OPTIONS.map((d) => d.id)).size === DIET_OPTIONS.length, "diet ids are unique");
+ok(new Set(EQUIPMENT_OPTIONS.map((e) => e.id)).size === EQUIPMENT_OPTIONS.length, "equipment ids are unique");
+ok(DIET_OPTIONS.every((d) => d.id && d.label && d.group && Array.isArray(d.blocks)), "every diet option is fully formed");
+ok(EQUIPMENT_OPTIONS.every((e) => e.id && e.label), "every equipment option is fully formed");
+// A restriction that names an ingredient the catalog does not have would silently do nothing.
+const strayBlocks = [...new Set(DIET_OPTIONS.flatMap((d) => d.blocks).filter((item) => !catalogNames.has(item)))];
+ok(strayBlocks.length === 0, `every diet block names a real catalog item${strayBlocks.length ? ` (stray: ${strayBlocks})` : ""}`);
+// An option that blocks nothing must say why, so it never looks broken.
+ok(DIET_OPTIONS.every((d) => d.blocks.length > 0 || d.note), "diet options that restrict nothing explain why");
+const dietGroups = new Set(DIET_OPTIONS.map((d) => d.group));
+ok(dietGroups.has("Diet") && dietGroups.has("Allergy") && dietGroups.has("Avoid"), "diet options are grouped for the form");
+for (const required of ["halal", "kosher", "pescatarian", "egg allergy", "soy allergy", "shellfish allergy", "no beef"]) {
+  ok(DIET_OPTIONS.some((d) => d.id === required), `catalog covers "${required}"`);
+}
+
+// Every equipment option has a short "vibe" phrase — the client's live note
+// describes cooking style from this text with no server round trip.
+ok(EQUIPMENT_OPTIONS.every((e) => typeof e.vibe === "string" && e.vibe.length > 0), "every equipment option has a vibe description for the live note");
+ok(
+  EQUIPMENT_OPTIONS.find((option) => option.id === "pressure cooker")?.aliases?.includes("instant pot") &&
+    EQUIPMENT_OPTIONS.find((option) => option.id === "stove")?.aliases?.includes("hot plate"),
+  "equipment options expose common chat aliases"
+);
+
+const preferenceMentionSource = appJs.replaceAll("\r\n", "\n")
+  .match(/function preferenceMentions\(message, options\) \{[\s\S]*?\n\}\n\nfunction parseMessage/)?.[0]
+  ?.replace(/\n\nfunction parseMessage$/, "") || "";
+ok(Boolean(preferenceMentionSource), "the chat parser reads preference mentions from the shared catalog");
+if (preferenceMentionSource) {
+  const preferenceContext = {};
+  vm.createContext(preferenceContext);
+  vm.runInContext(preferenceMentionSource, preferenceContext);
+  const equipmentMentions = preferenceContext.preferenceMentions(
+    "I only have an Instant Pot and rice cooker",
+    EQUIPMENT_OPTIONS
+  );
+  const dietMentions = preferenceContext.preferenceMentions(
+    "Please make it halal and gluten free",
+    DIET_OPTIONS
+  );
+  ok(
+    equipmentMentions.map((mention) => mention.id).sort().join(",") === "pressure cooker,rice cooker",
+    "chat recognizes expanded equipment ids and aliases"
+  );
+  ok(
+    dietMentions.map((mention) => mention.id).sort().join(",") === "gluten-free,halal",
+    "chat recognizes expanded diet ids and aliases"
+  );
+}
+
+// Saved profiles predate the id scheme, so old spellings must still resolve.
+ok(parseDietSelections("no peanuts")[0]?.id === "peanut allergy", "legacy \"no peanuts\" still maps to the peanut option");
+ok(parseDietSelections("gluten free")[0]?.id === "gluten-free", "unhyphenated \"gluten free\" resolves");
+ok(parseDietSelections("Vegetarian")[0]?.id === "vegetarian", "diet matching ignores case");
+ok(parseDietSelections("lactose intolerant")[0]?.id === "dairy-free", "an alias resolves to its option");
+ok(parseDietSelections("vegan, gluten-free").length === 2, "multiple selections all resolve");
+ok(parseDietSelections("").length === 0 && parseDietSelections(null).length === 0, "empty diet input resolves to nothing");
+ok(blockedIngredientsForDiet("vegan").has("eggs") && !blockedIngredientsForDiet("vegetarian").has("eggs"), "vegan restricts more than vegetarian");
+ok(blockedIngredientsForDiet("egg allergy").has("eggs"), "an allergy blocks its ingredient");
+
+// Onboarding wiring: a one-time wizard, not a recurring login screen.
+ok(html.includes('id="welcomeScreen"'), "the welcome screen exists");
+ok(html.includes('data-step="identity"') && html.includes('data-step="kitchen"') && html.includes('data-step="food"'), "the wizard has its three steps");
+ok(/onboarded:\s*false/.test(appJs), "onboarding defaults to not-yet-done");
+ok(appJs.includes("if (needsOnboarding()) openWelcome();"), "the wizard only opens once — never on a return visit");
+ok(
+  appJs.includes('welcomeSteps = ["identity", "kitchen", "food"];') &&
+    !/\["kitchen",\s*"food"\]/.test(appJs),
+  "the wizard always has all three steps; there is no shortened returning-visit mode"
+);
+ok(appJs.includes("/api/preferences"), "the form renders from the server catalog");
+// Dinners and minutes-per-meal change per request, so the chat parses them
+// (already true before this feature) and the profile must not duplicate them.
+ok(!html.includes('id="welcomeDinners"') && !html.includes('id="welcomeMaxTime"'), "the wizard does not ask for dinners or minutes per meal");
+ok(!html.includes('id="profileDinners"') && !html.includes('id="profileMaxTime"'), "the profile drawer does not ask for dinners or minutes per meal");
+ok(/if\s*\(dinners\)\s*state\.constraints\.dinners/.test(appJs) && /if\s*\(time\)\s*state\.constraints\.maxTimeMin/.test(appJs), "the chat parser still sets dinners and minutes per meal per request");
+// The live note is qualitative text derived from PREFERENCES, not a fabricated count.
+ok(appJs.includes("equipmentVibeText") && appJs.includes("dietVibeText"), "the live note describes cooking style instead of a recipe count");
+ok(!/\bmatching\/total\b|dinners fit/i.test(appJs), "no leftover copy claims a specific recipe match count");
 
 // ---------- location description + third-party consent ----------
 // The wording is derived from stores.json, never a hardcoded place string.
@@ -644,6 +731,49 @@ async function runRouteChecks() {
 
   await runGeoConsentChecks();
   await runPostalCodeChecks();
+
+  // With planning fully AI-driven and no local recipe filter, a diet
+  // restriction only means something if it reaches the model as a concrete
+  // ingredient list rather than a word the model might not parse correctly.
+  const veganSafePlan = {
+    ...validAiPlan,
+    dinners: validAiPlan.dinners.map((dinner) => ({
+      ...dinner,
+      usesPantry: ["spinach", "rice"],
+      steps: ["Microwave the spinach and rice, then season with soy sauce."]
+    }))
+  };
+  let dietPrompt = "";
+  const dietPlan = await callPlan({ ...request, diet: "vegan, halal" }, async (messages) => {
+    dietPrompt = messages.map((m) => String(m.content)).join(" ");
+    return aiEnvelope(veganSafePlan);
+  });
+  ok(dietPlan.payload.ok, "a plan request with diet restrictions still succeeds");
+  ok(/Hard exclusions/.test(dietPrompt), "the prompt states hard exclusions for an active diet");
+  for (const item of blockedIngredientsForDiet("vegan")) {
+    ok(dietPrompt.includes(item), `the exclusion list names "${item}" for a vegan request`);
+  }
+  ok(dietPrompt.includes("No pork or alcohol"), "an advisory-only restriction's note reaches the prompt");
+
+  let unsafeDietCalls = 0;
+  const unsafeDietPlan = await callPlan({ ...request, diet: "vegan" }, async () => {
+    unsafeDietCalls++;
+    return aiEnvelope(validAiPlan);
+  });
+  ok(
+    unsafeDietCalls === 2 &&
+      unsafeDietPlan.statusCode === 502 &&
+      unsafeDietPlan.payload.ok === false &&
+      /diet/i.test(unsafeDietPlan.payload.failure?.message || ""),
+    "a plan using a diet-blocked ingredient is rejected after one repair attempt"
+  );
+
+  let noDietPrompt = "";
+  await callPlan({ ...request, diet: "" }, async (messages) => {
+    noDietPrompt = messages.map((m) => String(m.content)).join(" ");
+    return aiEnvelope(validAiPlan);
+  });
+  ok(!/Hard exclusions/.test(noDietPrompt), "no diet means no fabricated exclusion list");
 
   console.log(`\nALL ${n} CHECKS PASSED`);
 }
