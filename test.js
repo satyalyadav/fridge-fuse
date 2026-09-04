@@ -395,13 +395,13 @@ ok(
   html.includes('id="resetDemoButton"') &&
     html.includes('id="resetMobileButton"') &&
     !html.includes('id="resetProfileButton"'),
-  "reset is available from the desktop navigation and mobile header"
+  "reset is available from settings and the mobile header"
 );
 ok(
   appJs.includes('$("resetDemoButton").addEventListener("click", resetDemo)') &&
     appJs.includes('$("resetMobileButton").addEventListener("click", resetDemo)') &&
-    appJs.includes("Reset the demo? This clears your profile, pantry, meal plan, chat history, Shop list, and saved location."),
-  "desktop and mobile reset controls share the full-data confirmation handler"
+    appJs.includes("Reset the demo? This clears your settings, inventory, meal plan, chat history, Shop list, and saved location."),
+  "both reset controls share the full-data confirmation handler"
 );
 const resetSource = appJs.match(/function resetDemo\(\) \{[\s\S]*?\n\}/)?.[0] || "";
 ok(
@@ -670,6 +670,18 @@ ok(/offLimitsPantry/.test(appJs) && /I left \$\{offLimits\.join/.test(appJs), "t
 ok(/off-limits/.test(appJs) && /does not fit/.test(appJs), "the pantry marks an item the current diet rules out");
 ok(fs.readFileSync("public/styles.css", "utf8").includes(".pantry-item.off-limits"), "an off-limits pantry item is styled as excluded");
 
+// ---------- one working screen, one settings drawer ----------
+// The rail is for the things you work with; everything you configure lives
+// behind one control instead of alongside them.
+ok(/id="editPreferencesButton"/.test(html) && /class="kitchen-summary"/.test(html), "the rail shows what is in force as a single line that opens settings");
+ok(!/<dl>/.test(html.slice(html.indexOf('sidebar-scroll'), html.indexOf('side-section'))), "that summary is one line, not a block of labels");
+ok(/<h2 id="profileTitle">Settings<\/h2>/.test(html), "the drawer is called settings, not a profile page");
+ok(html.indexOf('id="resetDemoButton"') > html.indexOf('id="profileDrawer"'), "reset lives in settings, not under the working lists");
+ok(!/class="sidebar-foot"/.test(html), "the rail no longer carries a footer of its own");
+// The word the interface uses for what you have in the kitchen.
+ok(!/pantry/i.test(html.replace(/id="[^"]*"|class="[^"]*"|for="[^"]*"|data-[a-z-]+(="[^"]*")?/g, "")), "the interface says inventory, never pantry");
+ok(/Your inventory/.test(html), "the section is titled Your inventory");
+
 // ---------- running it without a terminal ----------
 // Not every teammate works in a shell; the launchers are the supported path, so
 // they have to keep working.
@@ -899,8 +911,8 @@ async function runRouteChecks() {
   );
   ok(
     pantryOnly.buildPlanCalls === 0 &&
-      pantryOnly.assistantMessages[0]?.[0] === "Added rice and potatoes to your pantry.",
-    "a pantry-only chat command confirms the update without requesting a meal plan"
+      pantryOnly.assistantMessages[0]?.[0] === "Added rice and potatoes to your inventory.",
+    "an inventory-only chat command confirms the update without requesting a meal plan"
   );
 
   const shorthandPantryAdd = await exerciseFrontendMessage(
@@ -910,8 +922,8 @@ async function runRouteChecks() {
   );
   ok(
     shorthandPantryAdd.buildPlanCalls === 0 &&
-      shorthandPantryAdd.assistantMessages[0]?.[0] === "Added milk to your pantry.",
-    "a shorthand add command confirms the pantry update without requesting a meal plan"
+      shorthandPantryAdd.assistantMessages[0]?.[0] === "Added milk to your inventory.",
+    "a shorthand add command confirms the inventory update without requesting a meal plan"
   );
 
   const pantryAndPlan = await exerciseFrontendMessage(
