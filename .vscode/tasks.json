@@ -1,0 +1,22 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run FridgeFuse",
+      "detail": "Installs anything missing, runs the checks, then serves http://localhost:3000",
+      "type": "shell",
+      "command": "npm install --no-audit --no-fund && npm start",
+      "isBackground": true,
+      "problemMatcher": [],
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "Run the checks",
+      "type": "shell",
+      "command": "npm install --no-audit --no-fund && npm test",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    }
+  ]
+}
