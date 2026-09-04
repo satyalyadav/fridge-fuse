@@ -773,6 +773,8 @@ function renderPantry() {
   $("mobilePantryCount").textContent = state.pantry.length;
   const soon = state.pantry.filter((item) => item.soon);
   $("useFirstText").textContent = soon.length ? soon.map((item) => titleCase(item.name)).join(" · ") : "Nothing marked yet";
+  // Gold is for something to act on, not for an empty list.
+  document.querySelector(".use-first-strip")?.classList.toggle("is-empty", soon.length === 0);
   $("markUseSoonButton").textContent = soon.length ? "Edit" : "Mark what to use first";
 
   if (!state.pantry.length) {

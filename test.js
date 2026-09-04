@@ -101,8 +101,12 @@ ok(unitInfo("nonsense") === null, "an unknown unit is rejected rather than assum
 // A quantity we cannot read falls back to one whole package and says so; only
 // an ingredient the catalog cannot price is fatal, because pricing it would
 // mean inventing a price.
+// Rice now states what a cup of it weighs, so the conversion is the catalog's
+// own number. An item with no such entry still refuses to guess.
 const cupOfRice = normalizeRequirement({ item: "rice", amount: 1, unit: "cup" });
-ok(cupOfRice.assumed && cupOfRice.base === packSizeOf(findPrice("rice")).base, "a volume amount for a weight item buys one package instead of guessing a density");
+ok(!cupOfRice.assumed && cupOfRice.base === 6.5, "a cup of rice uses the weight the catalog states for it");
+const cupOfBananas = normalizeRequirement({ item: "banana", amount: 1, unit: "cup" });
+ok(cupOfBananas.assumed, "an item with no stated equivalent buys one package instead of guessing a density");
 ok(normalizeRequirement({ item: "eggs", amount: 0, unit: "each" }).assumed, "a need with no positive amount falls back to one package");
 ok(normalizeRequirement("eggs").assumed, "a bare ingredient name falls back to one package");
 ok(normalizeRequirement({ item: "eggs", amount: 3, unit: "each" }).assumed === false, "a well-formed quantity is used as given");
@@ -130,6 +134,29 @@ const exact = groundShoppingPlan({ dinners: [{ title: "A", servings: 4, needs: [
 ok(exact.shoppingList[0].qty === 1 && exact.leftovers.length === 0, "a plan that uses a package exactly reports no leftovers");
 const lbs = groundShoppingPlan({ dinners: [{ title: "A", servings: 3, needs: [{ item: "chicken breast", amount: 20, unit: "oz" }] }] });
 ok(lbs.shoppingList[0].qty === 2, "a weight requirement crossing a pack boundary buys two packs");
+
+// ---------- the units people cook in ----------
+// A live plan asked for "1 potato" and "1 tbsp butter" — both natural, both
+// cross-family — and every line fell back to a whole package, so the leftovers
+// the plan promises were always empty.
+ok(PRICES.items.filter((item) => item.equivalents).length >= 15, "most catalog items say what one cooking unit of them weighs");
+for (const [item, amount, unit, expected] of [
+  ["potatoes", 1, "each", 6],
+  ["butter", 1, "tbsp", 0.5],
+  ["black beans", 1, "can", 15],
+  ["bread", 2, "slices", 2],
+  ["rice", 1, "cup", 6.5],
+  ["garlic", 2, "cloves", 0.2],
+]) {
+  const need = normalizeRequirement({ item, amount, unit });
+  ok(!need.assumed && Math.abs(need.base - expected) < 0.001, `${amount} ${unit} of ${item} is ${expected}, not a whole package`);
+}
+// The item's own table beats the generic unit family: a clove is a count, but a
+// clove of garlic is a tenth of the head a shop sells.
+ok(normalizeRequirement({ item: "garlic", amount: 1, unit: "clove" }).base === 0.1, "a clove is judged against the head, not counted as one");
+// Units nobody wrote down still degrade rather than being invented.
+ok(normalizeRequirement({ item: "spinach", amount: 1, unit: "bushel" }).assumed === true, "an unknown unit still falls back to one package");
+ok(normalizeRequirement({ item: "eggs", amount: 3, unit: "each" }).base === 3, "a unit that already matches the pack is untouched");
 
 // ---------- amount plausibility ----------
 const unbanded = PRICES.items.filter((item) => !servingBandOf(item)).map((item) => item.name);
@@ -660,6 +687,15 @@ ok(/offLimitsPantry/.test(appJs) && /I left \$\{offLimits\.join/.test(appJs), "t
 ok(/off-limits/.test(appJs) && /does not fit/.test(appJs), "the inventory marks an item the current diet rules out");
 ok(fs.readFileSync("public/styles.css", "utf8").includes(".pantry-item.off-limits"), "an off-limits pantry item is styled as excluded");
 
+// Faults visible in a real screenshot, so they stay fixed.
+{
+  const styles = fs.readFileSync("public/styles.css", "utf8");
+  ok(/\.composer textarea[\s\S]{0,160}min-height: 44px/.test(styles), "the composer is tall enough for its own placeholder");
+  ok(/\.starter-prompts[\s\S]{0,120}flex-wrap: wrap/.test(styles), "the starter chips wrap instead of running off the edge");
+  ok(/h1 \{[^}]*clamp\(26px/.test(styles), "the heading no longer takes a third of the column");
+  ok(/\.use-first-strip\.is-empty/.test(styles) && /classList\.toggle\("is-empty"/.test(appJs), "the gold band stays quiet when nothing is marked");
+}
+
 // ---------- written for someone in a hurry ----------
 // A first visit should show what you can act on, not headings over empty boxes.
 ok(/id="savedRecipes"[^>]*hidden/.test(html), "the saved-meals section stays out of the way until something is saved");
@@ -1050,13 +1086,24 @@ async function runRouteChecks() {
   );
   ok(legacyNeeds.payload.leftovers.length === 0, "no leftover is claimed for an amount nobody stated");
 
-  const wrongFamily = await callPlan(request, async () => aiEnvelope({
+  // A cup of rice is now the catalog's own stated weight; a cup of something
+  // that states nothing still buys the package rather than guessing.
+  const cookingUnits = await callPlan(request, async () => aiEnvelope({
     ...validAiPlan,
     dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "rice", amount: 1, unit: "cup" }] }))
   }));
   ok(
-    wrongFamily.statusCode === 200 && wrongFamily.payload.shoppingList[0].assumedWholePackage === true,
-    "a cup of a weight item buys the package rather than converting through a guessed density"
+    cookingUnits.statusCode === 200 && !cookingUnits.payload.shoppingList[0].assumedWholePackage &&
+      cookingUnits.payload.shoppingList[0].required === 6.5,
+    "a plan measured in cups is priced from the weight the catalog states"
+  );
+  const noEquivalent = await callPlan(request, async () => aiEnvelope({
+    ...validAiPlan,
+    dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "banana", amount: 1, unit: "cup" }] }))
+  }));
+  ok(
+    noEquivalent.statusCode === 200 && noEquivalent.payload.shoppingList[0].assumedWholePackage === true,
+    "an item with no stated equivalent still buys the package rather than guessing a density"
   );
 
   // ---------- dietary restrictions on the live plan route ----------

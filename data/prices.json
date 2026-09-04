@@ -99,7 +99,11 @@
       },
       "perServing": {
         "min": 2,
-        "max": 8
+        "max": 15
+      },
+      "equivalents": {
+        "can": 15,
+        "cup": 6.3
       }
     },
     {
@@ -136,6 +140,10 @@
       "perServing": {
         "min": 1,
         "max": 6
+      },
+      "equivalents": {
+        "slice": 1,
+        "each": 1
       }
     },
     {
@@ -172,6 +180,11 @@
       "perServing": {
         "min": 0.1,
         "max": 2
+      },
+      "equivalents": {
+        "tbsp": 0.5,
+        "stick": 4,
+        "cup": 8
       }
     },
     {
@@ -206,6 +219,10 @@
       "perServing": {
         "min": 1,
         "max": 8
+      },
+      "equivalents": {
+        "each": 2,
+        "cup": 4.4
       }
     },
     {
@@ -242,6 +259,10 @@
       "perServing": {
         "min": 0.5,
         "max": 4
+      },
+      "equivalents": {
+        "cup": 4,
+        "slice": 0.7
       }
     },
     {
@@ -279,6 +300,10 @@
       "perServing": {
         "min": 3,
         "max": 10
+      },
+      "equivalents": {
+        "each": 6,
+        "breast": 6
       }
     },
     {
@@ -383,6 +408,9 @@
       "perServing": {
         "min": 1,
         "max": 6
+      },
+      "equivalents": {
+        "cup": 4.9
       }
     },
     {
@@ -417,6 +445,10 @@
       "perServing": {
         "min": 0.05,
         "max": 1
+      },
+      "equivalents": {
+        "clove": 0.1,
+        "head": 1
       }
     },
     {
@@ -433,6 +465,10 @@
       "perServing": {
         "min": 1,
         "max": 6
+      },
+      "equivalents": {
+        "slice": 1,
+        "each": 1
       },
       "prices": {
         "aldi": {
@@ -467,6 +503,10 @@
       "perServing": {
         "min": 2,
         "max": 6
+      },
+      "equivalents": {
+        "cup": 3.5,
+        "box": 12
       },
       "prices": {
         "aldi": {
@@ -522,6 +562,9 @@
       "perServing": {
         "min": 3,
         "max": 10
+      },
+      "equivalents": {
+        "patty": 4
       }
     },
     {
@@ -556,6 +599,10 @@
       "perServing": {
         "min": 2,
         "max": 10
+      },
+      "equivalents": {
+        "cup": 8.8,
+        "jar": 24
       }
     },
     {
@@ -626,6 +673,9 @@
       "perServing": {
         "min": 1,
         "max": 4
+      },
+      "equivalents": {
+        "cup": 3.2
       }
     },
     {
@@ -694,6 +744,10 @@
       "perServing": {
         "min": 1,
         "max": 8
+      },
+      "equivalents": {
+        "each": 5,
+        "cup": 5.6
       }
     },
     {
@@ -730,6 +784,10 @@
       "perServing": {
         "min": 2,
         "max": 6
+      },
+      "equivalents": {
+        "cup": 3.5,
+        "box": 16
       }
     },
     {
@@ -766,6 +824,10 @@
       "perServing": {
         "min": 0.5,
         "max": 3
+      },
+      "equivalents": {
+        "tbsp": 0.57,
+        "cup": 9.1
       }
     },
     {
@@ -800,6 +862,10 @@
       "perServing": {
         "min": 4,
         "max": 16
+      },
+      "equivalents": {
+        "each": 6,
+        "cup": 5.3
       }
     },
     {
@@ -833,7 +899,10 @@
       },
       "perServing": {
         "min": 1.5,
-        "max": 6
+        "max": 8
+      },
+      "equivalents": {
+        "cup": 6.5
       }
     },
     {
@@ -867,7 +936,11 @@
       },
       "perServing": {
         "min": 1,
-        "max": 6
+        "max": 10
+      },
+      "equivalents": {
+        "cup": 9,
+        "jar": 16
       }
     },
     {
@@ -940,6 +1013,10 @@
       "perServing": {
         "min": 0.5,
         "max": 4
+      },
+      "equivalents": {
+        "cup": 1,
+        "handful": 1
       }
     },
     {
@@ -1045,6 +1122,9 @@
       "perServing": {
         "min": 2,
         "max": 12
+      },
+      "equivalents": {
+        "cup": 8.6
       }
     }
   ],
@@ -1058,5 +1138,6 @@
   "zip": "85281",
   "tagNote": "tags mark what an item CONTAINS for diet enforcement (data/diet-rules.json excludesTags). Plain oats are a gluten-free grain, so they carry no gluten tag; a celiac who needs certified oats should say so. codes.foodon is an EBI FoodOn ontology id, verified by exact label match — null where the ontology had no unambiguous match.",
   "sizeNote": "size is the canonical pack quantity, read off the pack label. A recipe requirement must use a unit from the same family (count / mass / volume); the server converts within a family and refuses across families rather than guessing a density.",
-  "perServingNote": "perServing is the plausible amount for ONE serving, in the same family base unit as size (count, oz, or fl oz). These are judgement calls, not measured values: they catch order-of-magnitude mistakes, not portion preferences, so they are deliberately wide. An amount outside its band is sent back to the model once; if it comes back wrong again the plan buys one package and says the amount was not usable."
+  "perServingNote": "perServing is the plausible amount for ONE serving, in the same family base unit as size (count, oz, or fl oz). These are judgement calls, not measured values: they catch order-of-magnitude mistakes, not portion preferences, so they are deliberately wide. An amount outside its band is sent back to the model once; if it comes back wrong again the plan buys one package and says the amount was not usable.",
+  "equivalentsNote": "equivalents say what one of a common cooking unit weighs, in the same base unit as size: '1 potato' is 6 oz, '1 can' of black beans is 15 oz, '1 tbsp' of butter is 0.5 oz. They are approximate and exist only so a plan measured the way people cook can still be turned into packages to buy. Units the table does not cover still fall back to buying one package."
 }
