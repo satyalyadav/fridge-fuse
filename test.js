@@ -155,17 +155,18 @@ ok(
   "every diet rule has an id, label, aliases, and forbidden ingredients"
 );
 const dietIds = DIET_RULES.map((rule) => rule.id);
-for (const required of ["vegetarian", "vegan", "dairy-free", "gluten-free", "no-peanuts"]) {
-  ok(dietIds.includes(required), `diet rules cover the profile option: ${required}`);
+for (const required of DIET_OPTIONS.map((option) => option.id)) {
+  ok(dietIds.includes(required), `every profile option is an enforceable rule: ${required}`);
 }
-ok(resolveDietRules("peanut allergy").map((r) => r.id).join(",") === "no-peanuts", "a peanut allergy resolves to the peanut rule");
-ok(resolveDietRules("vegan, no peanuts").map((r) => r.id).sort().join(",") === "no-peanuts,vegan", "a combined diet string resolves to every matching rule");
+ok(dietIds.length === DIET_OPTIONS.length, "the profile catalog and the enforcement rules are the same list");
+ok(resolveDietRules("peanut allergy").map((r) => r.id).join(",") === "peanut allergy", "a peanut allergy resolves to the peanut rule");
+ok(resolveDietRules("vegan, no peanuts").map((r) => r.id).sort().join(",") === "peanut allergy,vegan", "a combined diet string resolves to every matching rule");
 ok(resolveDietRules("").length === 0 && resolveDietRules("   ").length === 0, "an empty diet string enforces nothing");
 
 const veganRule = DIET_RULES.find((rule) => rule.id === "vegan");
 const dairyRule = DIET_RULES.find((rule) => rule.id === "dairy-free");
 const glutenRule = DIET_RULES.find((rule) => rule.id === "gluten-free");
-const peanutRule = DIET_RULES.find((rule) => rule.id === "no-peanuts");
+const peanutRule = DIET_RULES.find((rule) => rule.id === "peanut allergy");
 ok(findForbiddenTerm("Brush the pan with butter", dairyRule) === "butter", "a forbidden ingredient hidden in a cooking step is caught");
 ok(findForbiddenTerm("eggs", veganRule) === "egg", "plural catalog names match their singular forbidden term");
 ok(findForbiddenTerm("chicken breast", veganRule) && findForbiddenTerm("cheddar", veganRule), "vegan plans reject meat and dairy from the catalog");
@@ -935,7 +936,7 @@ async function runRouteChecks() {
   );
   ok(!/Pantry: [^.]*eggs/.test(dietPromptText), "a restricted pantry item is not offered in the cookable pantry list");
   ok(
-    dietAware.statusCode === 200 && dietAware.payload.ok && dietAware.payload.dietRules.join(",") === "vegan,no peanuts",
+    dietAware.statusCode === 200 && dietAware.payload.ok && dietAware.payload.dietRules.join(",") === "vegan,peanut allergy",
     "a compliant plan is returned and reports which restrictions were enforced"
   );
 

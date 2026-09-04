@@ -258,6 +258,12 @@ for (const rule of DIET_RULES_DATA.rules) {
   if (!isNonEmptyStringArray(rule.excludesTags)) {
     throw new Error(`diet rule ${rule.id} needs a non-empty excludesTags array`);
   }
+  if (typeof rule.group !== "string" || !rule.group.trim()) {
+    throw new Error(`diet rule ${rule.id} needs a group for the profile form`);
+  }
+  if (rule.note !== undefined && (typeof rule.note !== "string" || !rule.note.trim())) {
+    throw new Error(`diet rule ${rule.id} note must be a non-empty string when present`);
+  }
 }
 const DIET_RULES = DIET_RULES_DATA.rules;
 
@@ -273,6 +279,42 @@ for (const item of PRICES.items) {
       throw new Error(`price catalog item ${item.name} carries tag "${tag}", which no diet rule excludes`);
     }
   }
+}
+
+// The catalog items each rule rules out, computed from the tags rather than
+// listed by name. Adding an ingredient to data/prices.json with the right tags
+// updates every affected option; there is no second list to keep in step.
+function blocksForRule(rule) {
+  return PRICES.items
+    .filter((item) => (item.tags || []).some((tag) => rule.excludesTags.includes(tag)))
+    .map((item) => item.name);
+}
+
+// The profile form renders itself from this, so an option can never appear in
+// the form without being enforced — it is the same record the plan check uses.
+// An option that blocks nothing carries a note explaining why, so it never
+// looks broken: nothing in the Tempe catalog contains it yet.
+const DIET_OPTIONS = DIET_RULES.map((rule) => ({
+  id: rule.id,
+  label: rule.label,
+  group: rule.group,
+  note: rule.note,
+  aliases: rule.aliases,
+  blocks: blocksForRule(rule),
+}));
+
+// Accepts the comma-joined string the profile saves, in any historic spelling.
+// One resolver for the form, the prompt, and the post-generation check.
+function parseDietSelections(diet) {
+  return resolveDietRules(diet).map((rule) => DIET_OPTIONS.find((option) => option.id === rule.id));
+}
+
+function blockedIngredientsForDiet(diet) {
+  const blocked = new Set();
+  for (const option of parseDietSelections(diet)) {
+    for (const ingredient of option.blocks) blocked.add(ingredient);
+  }
+  return blocked;
 }
 
 // Ingredient text arrives from three directions (the student, the model, the
@@ -769,42 +811,6 @@ function optimizeCart({ items = [], lat, lng, maxDistanceMi } = {}) {
 // `blocks` lists catalog ingredients the option rules out. An empty list is
 // honest: nothing in the Tempe catalog currently contains it, so the option
 // carries a `note` explaining why instead of silently doing nothing.
-const DIET_OPTIONS = [
-  { id: "vegetarian", label: "Vegetarian", group: "Diet",
-    blocks: ["chicken breast", "ground beef"] },
-  { id: "vegan", label: "Vegan", group: "Diet",
-    blocks: ["chicken breast", "ground beef", "eggs", "milk", "cheddar", "butter", "yogurt"] },
-  { id: "pescatarian", label: "Pescatarian", group: "Diet",
-    blocks: ["chicken breast", "ground beef"], note: "Fish is allowed; the catalog has none yet." },
-  { id: "halal", label: "Halal", group: "Diet", aliases: ["halaal"],
-    blocks: [], note: "No pork or alcohol is in the catalog. Choose certified meat in store." },
-  { id: "kosher", label: "Kosher", group: "Diet",
-    blocks: [], note: "No pork or shellfish is in the catalog. Certification is not tracked." },
-
-  { id: "peanut allergy", label: "Peanuts", group: "Allergy",
-    aliases: ["no peanuts", "peanut"], blocks: ["peanut butter"] },
-  { id: "tree nut allergy", label: "Tree nuts", group: "Allergy",
-    aliases: ["nut allergy"], blocks: ["peanut butter"],
-    note: "Peanut products are excluded as a precaution." },
-  { id: "dairy-free", label: "Dairy or lactose", group: "Allergy",
-    aliases: ["dairy free", "lactose intolerant"], blocks: ["milk", "cheddar", "butter", "yogurt"] },
-  { id: "gluten-free", label: "Gluten", group: "Allergy",
-    aliases: ["gluten free", "celiac", "coeliac"], blocks: ["bread", "pasta", "tortillas"] },
-  { id: "egg allergy", label: "Eggs", group: "Allergy", blocks: ["eggs"] },
-  { id: "soy allergy", label: "Soy", group: "Allergy", blocks: ["soy sauce"] },
-  { id: "shellfish allergy", label: "Shellfish", group: "Allergy",
-    blocks: [], note: "No shellfish is in the catalog." },
-  { id: "fish allergy", label: "Fish", group: "Allergy",
-    blocks: [], note: "No fish is in the catalog." },
-  { id: "sesame allergy", label: "Sesame", group: "Allergy",
-    blocks: [], note: "No sesame is in the catalog." },
-
-  { id: "no pork", label: "No pork", group: "Avoid",
-    blocks: [], note: "No pork is in the catalog." },
-  { id: "no beef", label: "No beef", group: "Avoid", blocks: ["ground beef"] },
-  { id: "low sodium", label: "Low sodium", group: "Avoid", blocks: ["soy sauce"] },
-];
-
 // `vibe` is a short, human phrase used client-side to describe what a kitchen
 // setup is good for, without claiming a precise recipe count the AI-only
 // planner can't guarantee ahead of a real request.
@@ -821,63 +827,6 @@ const EQUIPMENT_OPTIONS = [
   { id: "blender", label: "Blender", hint: "Smoothies and sauces", vibe: "smoothies and blended sauces" },
   { id: "sandwich press", label: "Sandwich press", aliases: ["panini press", "grill press"], hint: "Panini or grill press", vibe: "pressed sandwiches and paninis" },
 ];
-
-const DIET_BY_KEY = (() => {
-  const map = new Map();
-  for (const option of DIET_OPTIONS) {
-    for (const key of [option.id, option.label, ...(option.aliases || [])]) {
-      map.set(String(key).toLowerCase(), option);
-    }
-  }
-  return map;
-})();
-
-// Accepts the comma-joined string the profile saves, in any historic spelling,
-// and returns the matched options.
-function parseDietSelections(diet) {
-  const text = typeof diet === "string" ? diet : "";
-  const selected = new Map();
-  for (const rawToken of text.split(",")) {
-    const token = rawToken.trim().toLowerCase();
-    if (!token) continue;
-    const exact = DIET_BY_KEY.get(token);
-    if (exact) {
-      selected.set(exact.id, exact);
-      continue;
-    }
-    // Free-text from the chat parser ("no peanuts please") still has to match.
-    for (const [key, option] of DIET_BY_KEY) {
-      if (token.includes(key)) selected.set(option.id, option);
-    }
-  }
-  return [...selected.values()];
-}
-
-function blockedIngredientsForDiet(diet) {
-  const blocked = new Set();
-  for (const option of parseDietSelections(diet)) {
-    for (const ingredient of option.blocks) blocked.add(ingredient);
-  }
-  return blocked;
-}
-
-function validatePlanDiet(plan, diet) {
-  const blocked = blockedIngredientsForDiet(diet);
-  if (!blocked.size) return plan;
-
-  const violations = [];
-  for (const [index, dinner] of (plan.dinners || []).entries()) {
-    for (const rawIngredient of [...(dinner.usesPantry || []), ...(dinner.needs || [])]) {
-      const ingredient = String(rawIngredient).trim().toLowerCase();
-      const canonical = resolveCatalogItem(ingredient)?.name || ingredient;
-      if (blocked.has(canonical)) violations.push(`${canonical} in dinner ${index + 1}`);
-    }
-  }
-  if (violations.length) {
-    throw new Error(`AI plan violates diet restrictions: ${[...new Set(violations)].join(", ")}`);
-  }
-  return plan;
-}
 
 // ---------- units: a recipe requirement is a quantity of an ingredient ----------
 // Three families, converted only within a family. Turning cups of rice into
@@ -1403,7 +1352,7 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
   const content = out.data?.choices?.[0]?.message?.content;
   try {
     const plan = groundShoppingPlan(assertPlanRespectsDiet(parseAiPlan(content, expectedDinners), dietRules));
-    return res.json({ ok: true, model: AIR_MODEL, diet: safeDiet, dietRules: dietRules.map((rule) => rule.label), ...plan });
+    return res.json({ ok: true, model: AIR_MODEL, diet: safeDiet, dietRules: dietRules.map((rule) => rule.id), ...plan });
   } catch (initialError) {
     const repaired = await repairAiPlan(chat, content, expectedDinners, initialError, `${planningMessages[1].content}\n\nPrice catalog:\n${priceCtx}${dietCtx ? `\n\nDietary restrictions (absolute):\n${dietCtx}` : ""}`);
     if (!repaired.ok) {
@@ -1416,7 +1365,7 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
     try {
       const repairedContent = repaired.data?.choices?.[0]?.message?.content;
       const plan = groundShoppingPlan(assertPlanRespectsDiet(parseAiPlan(repairedContent, expectedDinners), dietRules));
-      return res.json({ ok: true, model: AIR_MODEL, repaired: true, diet: safeDiet, dietRules: dietRules.map((rule) => rule.label), ...plan });
+      return res.json({ ok: true, model: AIR_MODEL, repaired: true, diet: safeDiet, dietRules: dietRules.map((rule) => rule.id), ...plan });
     } catch (repairError) {
       const failure = reportFailure("asu-air", "plan-repair", {
         status: "parse-error",
@@ -1636,7 +1585,7 @@ Object.assign(module.exports, {
   DIET_RULES, resolveDietRules, findForbiddenTerm, findDietViolations,
   assertPlanRespectsDiet, pantryDietConflicts, dietRulesContext,
   catalogTagsFor, findCatalogTagConflict, findIngredientConflict,
-  DIET_OPTIONS, EQUIPMENT_OPTIONS, parseDietSelections, blockedIngredientsForDiet, validatePlanDiet,
+  DIET_OPTIONS, EQUIPMENT_OPTIONS, parseDietSelections, blockedIngredientsForDiet,
   unitInfo, toBaseAmount, packSizeOf, normalizeRequirement, groundShoppingPlan
 });
 

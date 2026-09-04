@@ -457,7 +457,8 @@
       },
       "unit": "lb",
       "tags": [
-        "meat"
+        "meat",
+        "beef"
       ],
       "codes": {
         "foodon": null
@@ -795,7 +796,9 @@
       },
       "unit": "bottle",
       "tags": [
-        "gluten"
+        "gluten",
+        "soy",
+        "high-sodium"
       ],
       "codes": {
         "foodon": null
@@ -838,7 +841,10 @@
     {
       "name": "tamari",
       "unit": "bottle",
-      "tags": [],
+      "tags": [
+        "soy",
+        "high-sodium"
+      ],
       "codes": {
         "foodon": null
       },
