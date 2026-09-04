@@ -82,9 +82,8 @@ a:focus-visible {
   height: 100vh;
   height: 100dvh;
   display: grid;
-  grid-template-columns: var(--sidebar-w, 336px) minmax(0, 1fr);
+  grid-template-columns: 76px minmax(0, 1fr);
   grid-template-rows: 68px minmax(0, 1fr);
-  transition: grid-template-columns 180ms ease;
 }
 
 .topbar {
@@ -121,6 +120,12 @@ a:focus-visible {
   height: 30px;
   display: block;
   transform: rotate(-2deg);
+}
+
+.welcome-logo {
+  width: 168px;
+  height: auto;
+  display: block;
 }
 
 .trip-status {
@@ -162,228 +167,67 @@ button.mobile-reset-button { display: none; }
   font-weight: 600;
 }
 
-/* Pantry and shopping live beside the conversation rather than behind tabs, so
-   the whole kitchen is on one screen. The rail can be hidden when the plan
-   needs the width. */
-.sidebar {
+.desktop-nav {
   grid-column: 1;
   grid-row: 2;
-  min-width: 0;
-  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 9px;
+  padding: 14px 10px;
   border-right: 1px solid var(--line);
   background: var(--enamel);
-  overflow: hidden;
 }
 
-.sidebar-scroll {
-  height: 100%;
-  overflow-y: auto;
-  padding: 20px 18px 28px;
-  scrollbar-width: thin;
-  scrollbar-color: #d5cdc9 transparent;
-}
-
-/* One line, and the line is the control: what is in force, and the way to
-   change it, without a block of labels above the things you came here to use. */
-.kitchen-summary {
-  width: 100%;
+.nav-item {
+  position: relative;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 18px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 11px;
-  background: var(--paper);
-  text-align: left;
-}
-.kitchen-summary:hover { border-color: var(--maroon); }
-.kitchen-summary-line {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 8px;
-  min-width: 0;
-  color: var(--ink);
-  font-size: 12px;
-  font-weight: 600;
-}
-.kitchen-summary-line span:first-child { text-transform: capitalize; }
-.kitchen-summary-line span + span::before { content: "· "; color: var(--ink-soft); }
-.kitchen-summary-hint {
-  flex: 0 0 auto;
-  color: var(--maroon);
-  font-family: var(--utility);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-}
-
-.danger-link {
-  margin-top: 12px;
-  padding: 0;
+  justify-content: center;
+  gap: 5px;
+  min-height: 58px;
+  padding: 7px 4px;
   border: 0;
-  background: none;
-  color: var(--alert);
-  font-size: 12px;
-  font-weight: 700;
-  text-decoration: underline;
-}
-
-.side-section + .side-section {
-  margin-top: 26px;
-  padding-top: 24px;
-  border-top: 1px solid var(--line);
-}
-
-.side-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-.side-header h2 { margin: 2px 0 0; font-family: var(--display); font-size: 19px; letter-spacing: -0.02em; }
-
-.side-count {
-  display: inline-grid;
-  place-items: center;
-  min-width: 22px;
-  height: 22px;
-  padding: 0 7px;
-  border-radius: 999px;
-  background: var(--maroon);
-  color: var(--paper);
-  font-family: var(--utility);
+  border-radius: 13px;
+  background: transparent;
+  color: #6b6360;
   font-size: 11px;
   font-weight: 600;
 }
 
-.profile-backup {
-  margin: 22px 0 4px;
-  padding: 15px 16px;
-  border: 1px solid var(--line);
-  border-radius: 13px;
-  background: var(--enamel);
-}
-.profile-backup h3 { margin: 0 0 5px; font-family: var(--display); font-size: 15px; }
-.profile-backup p { margin: 0 0 12px; color: var(--ink-soft); font-size: 12.5px; line-height: 1.5; }
-.profile-backup-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.profile-backup-actions button { flex: 1 1 auto; }
-
-.saved-recipe-list { display: grid; gap: 8px; }
-.saved-empty { margin: 0; color: var(--ink-soft); font-size: 12.5px; line-height: 1.5; }
-.saved-recipe {
-  display: grid;
-  gap: 7px;
-  padding: 11px 12px;
-  border: 1px solid var(--line);
-  border-radius: 11px;
-  background: var(--paper);
-}
-.saved-recipe-main strong { display: block; font-size: 13.5px; }
-.saved-recipe-main span { display: block; margin-top: 2px; color: var(--ink-soft); font-size: 11.5px; }
-.saved-recipe-actions { display: flex; gap: 7px; }
-.saved-recipe-actions button {
-  flex: 1 1 auto;
-  padding: 6px 9px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: transparent;
-  font-size: 11.5px;
-  font-weight: 700;
-}
-.saved-recipe-actions button:first-child { border-color: var(--maroon); color: var(--maroon); }
-.saved-recipe-actions button:first-child:hover { background: var(--maroon-wash); }
-.meal-actions button[aria-pressed="true"] { border-color: var(--maroon); background: var(--maroon-wash); color: var(--maroon); }
-
-.sidebar-foot {
-  margin-top: 26px;
-  padding-top: 18px;
-  border-top: 1px solid var(--line);
-}
-.sidebar-foot .ghost-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  justify-content: center;
-}
-.sidebar-foot svg { fill: none; stroke: currentColor; stroke-width: 1.8; }
-
-/* The shop panel was built for a full-width workspace. In a 336px rail the same
-   markup has to stack instead of sitting side by side, and the store comparison
-   — a table of stores against prices — scrolls rather than squeezing. */
-.sidebar .plan-header { flex-direction: column; gap: 12px; }
-.sidebar .plan-header > div:first-child { max-width: none; }
-.sidebar .plan-header h2 { font-size: 19px; }
-.sidebar .location-bar { flex-direction: column; align-items: stretch; gap: 10px; }
-.sidebar .location-actions { display: flex; gap: 8px; }
-.sidebar .location-actions button { flex: 1 1 auto; }
-.sidebar .grocery-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.sidebar .grocery-actions button { flex: 1 1 100%; }
-.sidebar .store-breakdown { overflow-x: auto; }
-.sidebar .store-card { grid-template-columns: minmax(0, 1fr) auto; padding: 13px; }
-.sidebar .grocery-add { flex-wrap: wrap; }
-.sidebar img, .sidebar table { max-width: 100%; }
-
-/* Hidden state: the column collapses, the toggle stays in the top bar. */
-.app-shell.sidebar-hidden { --sidebar-w: 0px; }
-.app-shell.sidebar-hidden .sidebar { border-right: 0; }
-
-/* Every inline icon in the markup is a line drawing: bare paths, no fill, meant
-   to be stroked. Without this they paint as solid black shapes, and the ones
-   with no width attribute claim an SVG's default 300x150 inside their button. */
-button svg,
-.icon-button svg {
-  width: 18px;
-  height: 18px;
+.nav-item svg,
+.icon-button svg,
+.tool-button svg,
+.send-button svg,
+.photo-wide-button svg {
+  width: 21px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.9;
   stroke-linecap: round;
   stroke-linejoin: round;
+  stroke-width: 1.8;
 }
 
-/* Icon buttons on the maroon bar cannot keep the white fill they use on white
-   surfaces: the icon inherits the bar's white text and disappears into it. */
-.topbar .icon-button {
-  border-color: rgba(255, 198, 39, 0.45);
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--gold);
+.nav-item.active {
+  background: var(--maroon-wash);
+  color: var(--maroon);
+  box-shadow: inset 3px 0 0 var(--gold);
 }
-.topbar .icon-button:hover { background: rgba(255, 198, 39, 0.18); }
+.nav-item:hover { color: var(--ink); }
+.nav-spacer { flex: 1; }
 
-/* The control sits over the column it opens, at the left edge of the bar. On the
-   maroon band it draws itself in gold: .icon-button's white fill would have put
-   a white icon on a white square. */
-.topbar-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-
-.sidebar-toggle {
-  width: 38px;
-  height: 38px;
-  display: grid;
-  place-items: center;
-  flex: 0 0 auto;
-  border: 1px solid rgba(255, 198, 39, 0.45);
-  border-radius: 11px;
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--gold);
-}
-.sidebar-toggle:hover { background: rgba(255, 198, 39, 0.18); }
-.sidebar-toggle svg {
-  width: 20px;
-  height: 20px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.9;
-  stroke-linecap: round;
+.nav-count {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  min-width: 18px;
+  padding: 2px 4px;
+  border-radius: 20px;
+  background: var(--gold);
+  color: var(--ink);
+  font-family: var(--utility);
+  font-size: 9px;
 }
 
 .workspace {
@@ -827,6 +671,11 @@ button.mobile-pantry-button { display: none; }
 
 /* ---------- groceries ---------- */
 /* The grocery tab takes the whole workspace; chat + plan stay paired. */
+.grocery-panel { display: none; min-width: 0; min-height: 0; overflow: hidden; background: var(--enamel); }
+body[data-view="grocery"] .workspace { grid-template-columns: minmax(0, 1fr); }
+body[data-view="grocery"] .conversation-panel,
+body[data-view="grocery"] .plan-panel { display: none; }
+body[data-view="grocery"] .grocery-panel { display: block; }
 
 .grocery-scroll {
   height: 100%;
@@ -1084,7 +933,77 @@ button.mobile-pantry-button { display: none; }
 .store-breakdown td { padding: 7px 0; border-top: 1px dashed #e0dad6; }
 .store-breakdown td:last-child, .store-breakdown th:last-child { text-align: right; }
 .store-breakdown .pack-note { color: var(--ink-soft); font-family: var(--body); font-size: 11px; }
+
+/* ---------- welcome / onboarding ---------- */
+.welcome {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: clamp(12px, 3vw, 40px);
+  overflow-y: auto;
+  background: linear-gradient(140deg, #8c1d40, #4a0e21 60%);
+}
+body[data-welcome-open="true"] { overflow: hidden; }
+
+.welcome-card {
+  width: min(1040px, 100%);
+  max-height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+  overflow: hidden;
+  border-radius: 22px;
+  background: var(--paper);
+  box-shadow: 0 40px 90px rgba(6, 20, 16, 0.45);
+}
+
+.welcome-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: clamp(24px, 3vw, 38px);
+  background: linear-gradient(165deg, var(--maroon), var(--maroon-deep));
+  color: var(--maroon-wash);
+}
+.welcome-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--display);
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
 .eyebrow.light { color: var(--gold); }
+.welcome-hero-copy h1 {
+  max-width: 15ch;
+  font-size: clamp(26px, 2.6vw, 36px);
+  line-height: 1.02;
+}
+.welcome-hero-copy p {
+  max-width: 34ch;
+  margin: 12px 0 0;
+  color: #edd6de;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+/* Describes the cooking style a selection unlocks — deliberately not a count.
+   Planning is fully AI-driven, so there is no fixed list to count against
+   without making a real request. */
+.kitchen-note p { margin: 0 0 6px; }
+.kitchen-note p:last-child { margin-bottom: 0; }
+.welcome-hero .kitchen-note {
+  margin-top: auto;
+  padding: 14px 16px;
+  border: 1px solid rgba(234, 243, 238, 0.22);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.07);
+  color: #edd6de;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
 #profileKitchenNote:not(:empty) {
   margin: -4px 0 4px;
   padding: 11px 13px;
@@ -1094,6 +1013,52 @@ button.mobile-pantry-button { display: none; }
   font-size: 12.5px;
   line-height: 1.5;
 }
+.welcome-privacy {
+  margin: 0;
+  color: #e9c8d3;
+  font-family: var(--utility);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.welcome-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: clamp(22px, 2.6vw, 32px);
+}
+
+.welcome-progress {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 20px;
+  padding: 0;
+  list-style: none;
+}
+.welcome-progress li {
+  flex: 1;
+  padding-top: 8px;
+  border-top: 3px solid var(--line);
+  color: #9a908c;
+  font-family: var(--utility);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  transition: color 160ms ease, border-color 160ms ease;
+}
+.welcome-progress li.done { border-top-color: var(--gold-edge); color: var(--ink-soft); }
+.welcome-progress li.current { border-top-color: var(--maroon); color: var(--maroon); }
+
+.welcome-form { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.welcome-step h2 { font-size: clamp(21px, 2vw, 27px); }
+.step-intro {
+  max-width: 48ch;
+  margin: 9px 0 18px;
+  color: var(--ink-soft);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.step-error { margin: 12px 0 0; color: var(--alert); font-size: 12.5px; font-weight: 600; }
 
 .field { display: block; margin-bottom: 16px; }
 .field-label {
@@ -1193,6 +1158,16 @@ button.mobile-pantry-button { display: none; }
   font-size: 12px;
   line-height: 1.45;
 }
+
+.welcome-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.welcome-spacer { flex: 1; }
 .link-button {
   border: 0;
   background: none;
@@ -1205,27 +1180,36 @@ button.mobile-pantry-button { display: none; }
 .link-button:hover { color: var(--ink); }
 
 @media (max-width: 860px) {
+  .welcome { padding: 0; align-items: stretch; }
+  .welcome-card {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 100%;
+    border-radius: 0;
+  }
+  .welcome-hero { gap: 16px; padding: 22px 18px; }
+  .welcome-hero-copy h1 { max-width: none; font-size: 25px; }
+  .welcome-hero-copy p { max-width: none; }
+  .welcome-hero .kitchen-note { margin-top: 4px; }
+  .welcome-privacy { display: none; }
+  .welcome-main { padding: 20px 18px 26px; }
   .option-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
 }
 
-/* The profile is the one thing still shown over the workspace: it is a form you
-   finish and dismiss, not a panel you work alongside. These rules used to be
-   shared with the pantry drawer, which is now part of the sidebar. */
-.profile-drawer {
+.pantry-drawer {
   position: fixed;
   z-index: 30;
   inset: 0;
   visibility: hidden;
 }
-.profile-drawer.open { visibility: visible; }
+.pantry-drawer.open { visibility: visible; }
 .drawer-scrim {
   position: absolute;
   inset: 0;
-  background: rgba(35, 8, 17, 0.38);
+  background: rgba(15, 25, 22, 0.38);
   opacity: 0;
   transition: opacity 200ms ease;
 }
-.profile-drawer.open .drawer-scrim { opacity: 1; }
+.pantry-drawer.open .drawer-scrim { opacity: 1; }
 .drawer-sheet {
   position: absolute;
   top: 0;
@@ -1239,13 +1223,7 @@ button.mobile-pantry-button { display: none; }
   box-shadow: var(--shadow);
   transition: transform 240ms cubic-bezier(.2,.7,.2,1);
 }
-.profile-drawer.open .drawer-sheet { transform: translateX(0); }
-
-/* Describes the cooking style a selection unlocks — deliberately not a count. */
-.kitchen-note p { margin: 0 0 6px; font-size: 12.5px; color: var(--ink-soft); }
-.kitchen-note p:last-child { margin-bottom: 0; }
-.kitchen-note:empty { display: none; }
-
+.pantry-drawer.open .drawer-sheet { transform: translateX(0); }
 .drawer-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .drawer-intro { margin: 13px 0 22px; color: var(--ink-soft); font-size: 14px; line-height: 1.45; }
 
@@ -1407,6 +1385,74 @@ button.mobile-pantry-button { display: none; }
 }
 .photo-wide-button:hover { background: var(--enamel); }
 .photo-wide-button svg { width: 18px; }
+
+/* Saved meals sit under the pantry list in the same drawer, so the section
+   needs its own rule off the top of the list rather than a heading that
+   competes with the drawer's own title. */
+.side-section {
+  margin-top: 26px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.side-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 13px;
+}
+.side-header h2 { font-size: 17px; letter-spacing: -0.03em; }
+.side-count {
+  flex: 0 0 auto;
+  min-width: 20px;
+  padding: 2px 7px;
+  border-radius: 20px;
+  background: var(--gold);
+  color: var(--ink);
+  font-family: var(--utility);
+  font-size: 10px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.saved-recipe-list { display: grid; gap: 8px; }
+.saved-empty { margin: 0; color: var(--ink-soft); font-size: 12.5px; line-height: 1.5; }
+.saved-recipe {
+  display: grid;
+  gap: 7px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--paper);
+}
+.saved-recipe-main strong { display: block; font-size: 13.5px; }
+.saved-recipe-main span { display: block; margin-top: 2px; color: var(--ink-soft); font-size: 11.5px; }
+.saved-recipe-actions { display: flex; gap: 7px; }
+.saved-recipe-actions button {
+  flex: 1 1 auto;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+.saved-recipe-actions button:first-child { border-color: var(--maroon); color: var(--maroon); }
+.saved-recipe-actions button:first-child:hover { background: var(--maroon-wash); }
+.meal-actions button[aria-pressed="true"] { border-color: var(--maroon); background: var(--maroon-wash); color: var(--maroon); }
+
+.profile-backup {
+  margin: 22px 0 4px;
+  padding: 15px 16px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--enamel);
+}
+.profile-backup h3 { margin: 0 0 5px; font-family: var(--display); font-size: 15px; }
+.profile-backup p { margin: 0 0 12px; color: var(--ink-soft); font-size: 12.5px; line-height: 1.5; }
+.profile-backup-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.profile-backup-actions button { flex: 1 1 auto; }
+
 .mobile-nav { display: none; }
 
 .toast-region {
@@ -1581,7 +1627,7 @@ button.mobile-pantry-button { display: none; }
     padding: 0 16px;
     backdrop-filter: blur(12px);
   }
-  .trip-status { display: none; }
+  .trip-status, .desktop-nav { display: none; }
   .brand { font-size: 19px; }
   .brand-mark { width: 25px; height: 31px; }
   button.mobile-reset-button {
@@ -1589,20 +1635,6 @@ button.mobile-pantry-button { display: none; }
     height: 36px;
     display: grid;
   }
-  /* The sidebar is a column on a laptop and a sheet on a phone; either way it
-     holds the same pantry and shop, and the same control opens it. */
-  .app-shell { grid-template-columns: minmax(0, 1fr); }
-  .sidebar {
-    position: fixed;
-    z-index: 25;
-    inset: 61px 0 61px 0;
-    display: none;
-    border-right: 0;
-    border-top: 1px solid var(--line);
-  }
-  body[data-view="sidebar"] .sidebar { display: block; }
-  .sidebar-scroll { padding: 22px 17px 40px; }
-  .app-shell.sidebar-hidden .sidebar { display: none; }
   .workspace { display: block; }
   .conversation-panel, .plan-panel {
     min-height: calc(100vh - 130px);
@@ -1620,6 +1652,11 @@ button.mobile-pantry-button { display: none; }
   .composer-hint { display: none; }
   .plan-panel { display: none; }
   .plan-panel.mobile-active { display: block; }
+  .grocery-panel {
+    min-height: calc(100vh - 130px);
+    min-height: calc(100dvh - 130px);
+  }
+  .grocery-scroll { height: auto; padding: 28px 17px 48px; }
   .use-first-strip { min-height: 68px; padding: 10px 17px; }
   .plan-scroll { height: auto; min-height: calc(100dvh - 198px); padding: 28px 17px 48px; }
   .plan-header { gap: 14px; }
@@ -1633,7 +1670,7 @@ button.mobile-pantry-button { display: none; }
     left: 0;
     height: 69px;
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     border-top: 1px solid var(--line);
     background: rgba(255, 255, 255, 0.96);
     backdrop-filter: blur(12px);
@@ -1688,6 +1725,7 @@ button.mobile-pantry-button { display: none; }
   .meal-actions { grid-column: 2; justify-content: flex-start; margin-top: 2px; }
   .meal-details { grid-column: 2; }
   .receipt { padding-right: 14px; padding-left: 14px; }
+  .drawer-sheet { padding: 25px 18px 90px; }
   .location-bar { flex-direction: column; align-items: stretch; gap: 10px; }
   .grocery-actions button { flex: 1 1 100%; }
   .store-card { grid-template-columns: minmax(0, 1fr) auto; padding: 15px 13px; }

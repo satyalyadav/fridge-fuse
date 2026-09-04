@@ -15,17 +15,84 @@
 <body>
   <a class="skip-link" href="#chatInput">Skip to conversation</a>
 
+  <div class="welcome" id="welcomeScreen" role="dialog" aria-modal="true" aria-labelledby="welcomeTitle" hidden>
+    <div class="welcome-card">
+      <aside class="welcome-hero">
+        <div class="welcome-brand">
+          <img class="welcome-logo" src="/logo-lockup-light.png" alt="FridgeFuse — snap, shop, cook" width="560" height="564">
+        </div>
+
+        <div class="welcome-hero-copy">
+          <p class="eyebrow light" id="welcomeKicker">Let's set up your kitchen</p>
+          <h1 id="welcomeTitle">Dinner that fits your room, your rules, and your budget.</h1>
+          <p id="welcomeSubtitle">Two minutes here means every plan after this already knows what you can cook and what you cannot eat.</p>
+        </div>
+
+        <!-- Live feedback: the whole point of the form, made visible. Describes
+             the cooking style a choice unlocks rather than a recipe count —
+             planning is fully AI-driven, so there is no fixed list to count. -->
+        <div class="kitchen-note" id="welcomeKitchenNote" aria-live="polite">
+          <p>Pick your equipment to see what kind of meals you'll get.</p>
+        </div>
+
+        <p class="welcome-privacy">Saved on this device only. Nothing is uploaded.</p>
+      </aside>
+
+      <div class="welcome-main">
+        <ol class="welcome-progress" id="welcomeProgress" aria-label="Setup progress"></ol>
+
+        <form class="welcome-form" id="welcomeForm">
+          <section class="welcome-step" data-step="identity" hidden>
+            <h2>First, who are we cooking for?</h2>
+            <p class="step-intro">Your name personalises the app. Prices and store distances are Tempe (85281) — FridgeFuse is built for ASU students in the Phoenix metro.</p>
+
+            <label class="field">
+              <span class="field-label">Your name</span>
+              <input id="welcomeName" type="text" maxlength="40" autocomplete="given-name" placeholder="e.g. Uzair">
+            </label>
+          </section>
+
+          <section class="welcome-step" data-step="kitchen" hidden>
+            <h2>What can you actually cook with?</h2>
+            <p class="step-intro">Pick everything you have. Every recipe you are shown will only use these.</p>
+            <div class="option-grid" id="equipmentOptions" role="group" aria-label="Cooking equipment"></div>
+            <p class="step-error" id="equipmentError" hidden>Choose at least one so there is something to cook with.</p>
+          </section>
+
+          <section class="welcome-step" data-step="food" hidden>
+            <h2>Anything you cannot eat?</h2>
+            <p class="step-intro">Skip this if nothing applies. You can change it any time from your profile.</p>
+            <div class="diet-groups" id="dietOptions"></div>
+            <p class="disclaimer" id="dietDisclaimer"></p>
+
+            <!-- How many dinners and how long each takes change on every
+                 request, so those live in the chat, not here — asking again
+                 in the profile would just be a second, staler copy. -->
+            <div class="field-row">
+              <label class="field">
+                <span class="field-label">Budget per plan <output id="welcomeBudgetValue">$20</output></span>
+                <input id="welcomeBudget" type="range" min="5" max="100" step="1" value="20">
+              </label>
+            </div>
+          </section>
+        </form>
+
+        <footer class="welcome-actions">
+          <button type="button" class="ghost-button" id="welcomeBack" hidden>Back</button>
+          <span class="welcome-spacer"></span>
+          <button type="button" class="link-button" id="welcomeSkip">Skip for now</button>
+          <button type="button" class="primary-button" id="welcomeNext">Continue</button>
+        </footer>
+      </div>
+    </div>
+  </div>
+
   <div class="app-shell">
     <header class="topbar">
-      <div class="topbar-left">
-        <button class="sidebar-toggle" id="sidebarToggle" type="button" aria-expanded="true" aria-controls="sidebar" aria-label="Hide inventory and shop">
-          <svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20"><path d="M4 5h16M4 12h16M4 19h16"/></svg>
-        </button>
-        <a class="brand" href="./" aria-label="FridgeFuse home">
-          <img class="brand-mark" src="/logo-mark-gold.png" alt="" width="256" height="456">
-          <span>FridgeFuse</span>
-        </a>
-      </div>
+      <a class="brand" href="./" aria-label="FridgeFuse home">
+        <img class="brand-mark" src="/logo-mark-gold.png" alt="" width="256" height="456">
+        <span>FridgeFuse</span>
+      </a>
       <div class="trip-status" id="tripStatus" aria-label="Current plan summary">
         <span class="trip-dot"></span>
         <span id="tripLabel">No grocery run planned</span>
@@ -34,123 +101,37 @@
         <button class="icon-button mobile-reset-button" id="resetMobileButton" type="button" aria-label="Reset demo">
           <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8M4 3v5h5"/></svg>
         </button>
-        <button class="avatar-button" id="profileButton" type="button" aria-label="Open settings">
+        <button class="avatar-button" id="profileButton" type="button" aria-label="Open profile">
           ME
         </button>
       </div>
     </header>
 
-    <aside class="sidebar" id="sidebar" aria-label="Inventory and shopping">
-      <div class="sidebar-scroll">
-        <button class="kitchen-summary" id="editPreferencesButton" type="button">
-          <span class="kitchen-summary-line">
-            <span id="summaryEquipment">microwave</span>
-            <span id="summaryDiet">nothing yet</span>
-            <span id="summaryBudget">$20</span>
-          </span>
-          <span class="kitchen-summary-hint">Settings</span>
-        </button>
-
-        <section class="side-section" id="pantryDrawer" aria-labelledby="inventoryTitle">
-          <div class="side-header">
-            <div>
-              <h2 id="inventoryTitle">Your inventory</h2>
-            </div>
-            <span class="side-count" id="pantryNavCount">0</span>
-          </div>
-        <p class="drawer-intro">Rough amounts are fine. Tap an item to mark what needs eating first.</p>
-        <form class="pantry-add" id="pantryForm">
-          <label class="sr-only" for="pantryInput">Add inventory item</label>
-          <input id="pantryInput" type="text" placeholder="Add eggs, some rice…" autocomplete="off">
-          <button type="submit">Add</button>
-        </form>
-        <section class="vision-review" id="visionReview" aria-labelledby="visionReviewTitle" hidden>
-          <div class="vision-review-heading">
-            <div>
-              <p class="eyebrow">From your photo</p>
-              <h3 id="visionReviewTitle">Is this right?</h3>
-            </div>
-            <span id="visionReviewCount"></span>
-          </div>
-          <p>I was not sure about these. Keep, rename, or remove each one.</p>
-          <div class="vision-review-list" id="visionReviewList"></div>
-        </section>
-        <div class="pantry-list" id="pantryList"></div>
-        <button class="photo-wide-button" id="drawerPhotoButton" type="button">
-          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h3l1.5-2h7L17 7h3v12H4z"/><circle cx="12" cy="13" r="3"/></svg>
-          Add from a fridge photo
-        </button>
-        </section>
-
-        <section class="side-section" id="savedRecipes" aria-labelledby="savedRecipesTitle" hidden>
-          <div class="side-header">
-            <div>
-              <h2 id="savedRecipesTitle">Saved meals</h2>
-            </div>
-            <span class="side-count" id="savedRecipeCount">0</span>
-          </div>
-          <div class="saved-recipe-list" id="savedRecipeList"></div>
-        </section>
-
-        <section class="side-section" id="groceryView" aria-label="Grocery cost comparison">
-          <div class="plan-header">
-            <div>
-              <h2>Shopping list <span class="side-count" id="groceryNavCount">0</span></h2>
-              <p>Add what you need to buy, then see which nearby store is cheapest for the whole list.</p>
-            </div>
-            <span class="mock-label">Mock Tempe prices</span>
-          </div>
-
-          <div class="location-bar" id="locationBar">
-            <div class="tape-label">
-              <span class="tape-kicker">SHOPPING NEAR</span>
-              <strong id="locationLabel">No location shared yet</strong>
-              <small id="locationDetail" hidden></small>
-            </div>
-            <div class="location-actions">
-              <button id="useLocationButton" type="button">Use my location</button>
-            </div>
-          </div>
-
-          <div class="consent-card" id="lookupConsent" hidden>
-            <div>
-              <p class="eyebrow">Before we look that up</p>
-              <p class="consent-copy">
-                FridgeFuse worked out your area from its own store list, entirely on
-                this machine. To show a real place name instead, it would send your
-                coordinates — rounded to about 110 metres — to OpenStreetMap's free
-                Nominatim service. That is a third party outside this app.
-              </p>
-              <p class="consent-copy subtle">
-                Say no and nothing leaves your machine. Store distances and prices are
-                calculated locally either way, so the comparison works exactly the same.
-              </p>
-            </div>
-            <div class="consent-actions">
-              <button class="ghost-button" id="declineLookupButton" type="button">No, keep it local</button>
-              <button class="primary-button" id="allowLookupButton" type="button">Look up the name</button>
-            </div>
-          </div>
-
-          <form class="grocery-add" id="groceryForm">
-            <label class="sr-only" for="groceryInput">Add an item to buy</label>
-            <input id="groceryInput" type="text" list="catalogOptions" placeholder="Add eggs, milk, rice…" autocomplete="off">
-            <datalist id="catalogOptions"></datalist>
-            <button type="submit">Add</button>
-          </form>
-
-          <div class="grocery-list" id="groceryList"></div>
-
-          <div class="grocery-actions">
-            <button class="ghost-button" id="fromPlanButton" type="button">Add what my plan needs</button>
-            <button class="primary-button" id="compareButton" type="button">Find the cheapest store</button>
-          </div>
-
-          <div class="grocery-results" id="groceryResults" aria-live="polite"></div>
-        </section>
-
-      </div>
-    </aside>
+    <nav class="desktop-nav" aria-label="Main navigation">
+      <button class="nav-item active" data-view="plan" aria-current="page">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 3h10M5 6h14v15H5zM8 10h8M8 14h5"/></svg>
+        <span>Plan</span>
+      </button>
+      <button class="nav-item" data-view="chat">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v12H8l-4 3z"/></svg>
+        <span>Chat</span>
+      </button>
+      <button class="nav-item" data-view="grocery">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 5h2.2l2.3 10h9.4l2.1-7H6.4"/><circle cx="9" cy="19" r="1.4"/><circle cx="17" cy="19" r="1.4"/></svg>
+        <span>Shop</span>
+        <span class="nav-count" id="groceryNavCount">0</span>
+      </button>
+      <button class="nav-item" data-view="pantry">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 3h12v18H6zM6 9h12M15 6h.01M15 13h.01"/></svg>
+        <span>Pantry</span>
+        <span class="nav-count" id="pantryNavCount">0</span>
+      </button>
+      <div class="nav-spacer"></div>
+      <button class="nav-item" id="resetDemoButton">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8M4 3v5h5"/></svg>
+        <span>Reset</span>
+      </button>
+    </nav>
 
     <main class="workspace">
       <section class="conversation-panel" id="chatView" aria-label="Conversation with FridgeFuse">
@@ -158,7 +139,7 @@
           <div>
             <h1>What are we working with?</h1>
           </div>
-          <button class="icon-button mobile-pantry-button" id="openPantryButton" aria-label="Open inventory">
+          <button class="icon-button mobile-pantry-button" id="openPantryButton" aria-label="Open pantry">
             <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 3h12v18H6zM6 9h12M15 6h.01M15 13h.01"/></svg>
           </button>
         </div>
@@ -237,7 +218,6 @@
             <section class="shopping-section">
               <div class="section-heading">
                 <div>
-                  
                   <h3>What to buy</h3>
                 </div>
                 <span class="mock-label">Mock Tempe prices</span>
@@ -257,10 +237,113 @@
           </div>
         </div>
       </section>
+      <section class="grocery-panel" id="groceryView" aria-label="Grocery cost comparison">
+        <div class="grocery-scroll">
+          <div class="plan-header">
+            <div>
+              <h2>Shopping list</h2>
+              <p>Add what you need to buy, then see which nearby store is cheapest for the whole list.</p>
+            </div>
+            <span class="mock-label">Mock Tempe prices</span>
+          </div>
+
+          <div class="location-bar" id="locationBar">
+            <div class="tape-label">
+              <span class="tape-kicker">SHOPPING NEAR</span>
+              <strong id="locationLabel">No location shared yet</strong>
+              <small id="locationDetail" hidden></small>
+            </div>
+            <div class="location-actions">
+              <button id="useLocationButton" type="button">Use my location</button>
+            </div>
+          </div>
+
+          <div class="consent-card" id="lookupConsent" hidden>
+            <div>
+              <p class="eyebrow">Before we look that up</p>
+              <p class="consent-copy">
+                FridgeFuse worked out your area from its own store list, entirely on
+                this machine. To show a real place name instead, it would send your
+                coordinates — rounded to about 110 metres — to OpenStreetMap's free
+                Nominatim service. That is a third party outside this app.
+              </p>
+              <p class="consent-copy subtle">
+                Say no and nothing leaves your machine. Store distances and prices are
+                calculated locally either way, so the comparison works exactly the same.
+              </p>
+            </div>
+            <div class="consent-actions">
+              <button class="ghost-button" id="declineLookupButton" type="button">No, keep it local</button>
+              <button class="primary-button" id="allowLookupButton" type="button">Look up the name</button>
+            </div>
+          </div>
+
+          <form class="grocery-add" id="groceryForm">
+            <label class="sr-only" for="groceryInput">Add an item to buy</label>
+            <input id="groceryInput" type="text" list="catalogOptions" placeholder="Add eggs, milk, rice…" autocomplete="off">
+            <datalist id="catalogOptions"></datalist>
+            <button type="submit">Add</button>
+          </form>
+
+          <div class="grocery-list" id="groceryList"></div>
+
+          <div class="grocery-actions">
+            <button class="ghost-button" id="fromPlanButton" type="button">Add what my plan needs</button>
+            <button class="primary-button" id="compareButton" type="button">Find the cheapest store</button>
+          </div>
+
+          <div class="grocery-results" id="groceryResults" aria-live="polite"></div>
+        </div>
+      </section>
     </main>
 
+    <aside class="pantry-drawer" id="pantryDrawer" aria-labelledby="pantryTitle" aria-hidden="true">
+      <div class="drawer-scrim" data-close-drawer></div>
+      <div class="drawer-sheet">
+        <div class="drawer-header">
+          <div>
+            <h2 id="pantryTitle">Your pantry</h2>
+          </div>
+          <button class="icon-button" data-close-drawer aria-label="Close pantry">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>
+          </button>
+        </div>
+        <p class="drawer-intro">Rough amounts are fine. Tap an item to mark what needs eating first.</p>
+        <form class="pantry-add" id="pantryForm">
+          <label class="sr-only" for="pantryInput">Add pantry item</label>
+          <input id="pantryInput" type="text" placeholder="Add eggs, some rice…" autocomplete="off">
+          <button type="submit">Add</button>
+        </form>
+        <section class="vision-review" id="visionReview" aria-labelledby="visionReviewTitle" hidden>
+          <div class="vision-review-heading">
+            <div>
+              <p class="eyebrow">From your photo</p>
+              <h3 id="visionReviewTitle">Is this right?</h3>
+            </div>
+            <span id="visionReviewCount"></span>
+          </div>
+          <p>I was not sure about these. Keep, rename, or remove each one.</p>
+          <div class="vision-review-list" id="visionReviewList"></div>
+        </section>
+        <div class="pantry-list" id="pantryList"></div>
+        <button class="photo-wide-button" id="drawerPhotoButton" type="button">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h3l1.5-2h7L17 7h3v12H4z"/><circle cx="12" cy="13" r="3"/></svg>
+          Add from a fridge photo
+        </button>
+
+        <section class="side-section" id="savedRecipes" aria-labelledby="savedRecipesTitle" hidden>
+          <div class="side-header">
+            <div>
+              <h2 id="savedRecipesTitle">Saved meals</h2>
+            </div>
+            <span class="side-count" id="savedRecipeCount">0</span>
+          </div>
+          <div class="saved-recipe-list" id="savedRecipeList"></div>
+        </section>
+      </div>
+    </aside>
     <aside
-      class="profile-drawer"
+      class="pantry-drawer profile-drawer"
       id="profileDrawer"
       role="dialog"
       aria-modal="true"
@@ -273,14 +356,14 @@
         <div class="drawer-header">
           <div>
             <p class="eyebrow">Saved on this device</p>
-            <h2 id="profileTitle">Settings</h2>
+            <h2 id="profileTitle">Your profile</h2>
           </div>
 
           <button
             class="icon-button"
             type="button"
             data-close-profile
-            aria-label="Close settings"
+            aria-label="Close profile"
           >
             <svg aria-hidden="true" viewBox="0 0 24 24">
               <path d="m6 6 12 12M18 6 6 18"/>
@@ -353,7 +436,6 @@
               <button type="button" class="ghost-button" id="importKitchenButton">Restore from a file</button>
             </div>
             <input class="sr-only" id="importKitchenInput" type="file" accept="application/json,.json" tabindex="-1" aria-hidden="true">
-            <button type="button" class="danger-link" id="resetDemoButton">Reset everything on this device</button>
           </div>
 
           <div class="profile-actions">
@@ -370,7 +452,8 @@
     <nav class="mobile-nav" aria-label="Mobile navigation">
       <button class="active" data-view="plan"><span>Plan</span></button>
       <button data-view="chat"><span>Chat</span></button>
-      <button data-view="sidebar"><span>Inventory &amp; Shop</span><b id="mobilePantryCount">0</b><b class="sr-only" id="mobileGroceryCount">0</b></button>
+      <button data-view="grocery"><span>Shop</span><b id="mobileGroceryCount">0</b></button>
+      <button data-view="pantry"><span>Pantry</span><b id="mobilePantryCount">0</b></button>
     </nav>
 
     <div class="toast-region" id="toastRegion" aria-live="assertive"></div>

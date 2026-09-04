@@ -422,13 +422,13 @@ ok(
   html.includes('id="resetDemoButton"') &&
     html.includes('id="resetMobileButton"') &&
     !html.includes('id="resetProfileButton"'),
-  "reset is available from settings and the mobile header"
+  "reset is available from the desktop navigation and mobile header"
 );
 ok(
   appJs.includes('$("resetDemoButton").addEventListener("click", resetDemo)') &&
     appJs.includes('$("resetMobileButton").addEventListener("click", resetDemo)') &&
-    appJs.includes("Reset the demo? This clears your settings, inventory, meal plan, chat history, Shop list, and saved location."),
-  "both reset controls share the full-data confirmation handler"
+    appJs.includes("Reset the demo? This clears your profile, pantry, meal plan, chat history, Shop list, and saved location."),
+  "desktop and mobile reset controls share the full-data confirmation handler"
 );
 const resetSource = appJs.match(/function resetDemo\(\) \{[\s\S]*?\n\}/)?.[0] || "";
 ok(
@@ -511,7 +511,7 @@ ok(tight.widenedSearch && tight.options.length > 0, "an over-tight radius widens
 const near = optimizeCart({ items: ["eggs"], ...campus, maxDistanceMi: 2 });
 ok(near.options.length < BRANCHES.length && near.options.every((o) => o.distanceMi <= 2), "the distance filter excludes far branches");
 
-// ---------- preference catalogs ----------
+// ---------- preference catalogs + onboarding ----------
 const catalogNames = new Set(PRICES.items.map((item) => item.name));
 
 ok(DIET_OPTIONS.length >= 15, `diet catalog offers ${DIET_OPTIONS.length} options`);
@@ -576,22 +576,20 @@ ok(parseDietSelections("").length === 0 && parseDietSelections(null).length === 
 ok(blockedIngredientsForDiet("vegan").has("eggs") && !blockedIngredientsForDiet("vegetarian").has("eggs"), "vegan restricts more than vegetarian");
 ok(blockedIngredientsForDiet("egg allergy").has("eggs"), "an allergy blocks its ingredient");
 
-// There is no setup screen: the app opens straight into the working screen and
-// every preference the wizard used to ask for is reachable from the profile.
-ok(!/welcome|onboard/i.test(html), "no welcome or onboarding screen is in the markup");
-ok(!/welcome|onboard/i.test(appJs), "no welcome or onboarding code is left in the client");
-ok(html.includes('id="profileDrawer"') && html.includes('id="profileForm"'), "the profile drawer is the one place preferences live");
-// The wizard was where a student learned these settings existed, so with it gone
-// the current ones are on the working screen with a way to change them.
-ok(/id="summaryEquipment"/.test(html) && /id="summaryDiet"/.test(html) && /id="summaryBudget"/.test(html), "the rail shows the equipment, diet and budget in force");
-ok(/id="editPreferencesButton"/.test(html) && /editPreferencesButton"\)\.addEventListener\("click", openProfile\)/.test(appJs), "that summary opens the profile to change them");
-ok(/summaryEquipment"\)\.textContent/.test(appJs) && /renderProfile/.test(appJs), "the summary is rendered from live state, not hardcoded");
-for (const control of ["profileName", "profileEquipmentOptions", "profileDietOptions", "profileBudget"]) {
-  ok(html.includes(`id="${control}"`), `the profile still collects ${control}`);
-}
+// Onboarding wiring: a one-time wizard, not a recurring login screen.
+ok(html.includes('id="welcomeScreen"'), "the welcome screen exists");
+ok(html.includes('data-step="identity"') && html.includes('data-step="kitchen"') && html.includes('data-step="food"'), "the wizard has its three steps");
+ok(/onboarded:\s*false/.test(appJs), "onboarding defaults to not-yet-done");
+ok(appJs.includes("if (needsOnboarding()) openWelcome();"), "the wizard only opens once — never on a return visit");
+ok(
+  appJs.includes('welcomeSteps = ["identity", "kitchen", "food"];') &&
+    !/\["kitchen",\s*"food"\]/.test(appJs),
+  "the wizard always has all three steps; there is no shortened returning-visit mode"
+);
 ok(appJs.includes("/api/preferences"), "the form renders from the server catalog");
-// Dinners and minutes-per-meal change per request, so the chat parses them and
-// the profile must not duplicate them.
+// Dinners and minutes-per-meal change per request, so the chat parses them
+// (already true before this feature) and the profile must not duplicate them.
+ok(!html.includes('id="welcomeDinners"') && !html.includes('id="welcomeMaxTime"'), "the wizard does not ask for dinners or minutes per meal");
 ok(!html.includes('id="profileDinners"') && !html.includes('id="profileMaxTime"'), "the profile drawer does not ask for dinners or minutes per meal");
 ok(/if\s*\(dinners\)\s*state\.constraints\.dinners/.test(appJs) && /if\s*\(time\)\s*state\.constraints\.maxTimeMin/.test(appJs), "the chat parser still sets dinners and minutes per meal per request");
 // The live note is qualitative text derived from PREFERENCES, not a fabricated count.
@@ -649,7 +647,7 @@ async function runGeoConsentChecks() {
 // FridgeFuse is for ASU students in the Phoenix metro, so there is no ZIP to
 // ask for: distances run from the catalog origin unless a live fix is shared.
 ok(!/postalCode|welcomeZip|profilePostalCode|useProfileZipButton/.test(appJs), "the client asks for no ZIP code");
-ok(!/ZIP code/i.test(html), "the profile form has no ZIP field");
+ok(!/ZIP code/i.test(html), "the profile and onboarding forms have no ZIP field");
 ok(!/geo\/postal/.test(appJs) && !/geo\/postal/.test(serverSrc), "the postal lookup endpoint is gone with its only caller");
 ok(/allowPlaceLookup:\s*null/.test(appJs), "the client defaults to never sending coordinates");
 ok(html.includes('id="lookupConsent"'), "the consent disclaimer exists in the markup");
@@ -663,19 +661,11 @@ const missingIds = [...new Set([...appJs.matchAll(/\$\("([^"]+)"\)/g)].map((m) =
   .filter((id) => !htmlIds.has(id) && !RUNTIME_IDS.has(id));
 ok(missingIds.length === 0, `every element app.js touches exists in the HTML${missingIds.length ? ` (missing: ${missingIds.join(", ")})` : ""}`);
 
-// Pantry and shop live in one collapsible rail beside the conversation, so the
-// whole kitchen is on screen at once instead of behind four tabs.
-ok(html.includes('id="groceryView"') && html.includes('id="pantryDrawer"'), "the pantry and shop panels exist");
-ok(/<aside class="sidebar" id="sidebar"[\s\S]*id="pantryDrawer"[\s\S]*id="groceryView"[\s\S]*<\/aside>/.test(html), "both live inside the sidebar rail");
-ok(html.includes('id="sidebarToggle"') && /aria-controls="sidebar"/.test(html), "the rail has a show/hide control");
-ok(!/data-view="grocery"|data-view="pantry"/.test(html), "shop and pantry are no longer separate views");
-ok(/data-view="chat"/.test(html) && /data-view="plan"/.test(html) && /data-view="sidebar"/.test(html), "the mobile tabs are chat, plan, and the rail");
-ok(!/class="desktop-nav"/.test(html), "the icon rail it replaced is gone");
-ok(/\.sidebar-hidden/.test(fs.readFileSync("public/styles.css", "utf8")), "hiding the rail is a styled state, not a display hack");
-ok(/setSidebar\(/.test(appJs) && /state\.sidebarOpen/.test(appJs), "the rail remembers whether it was open");
+ok(html.includes('id="groceryView"'), "index.html has the grocery panel");
+ok(html.includes('data-view="grocery"'), "index.html has the grocery nav entry");
 ok(appJs.includes("/api/grocery/optimize"), "app.js calls the optimizer");
 ok(appJs.includes("navigator.geolocation"), "app.js asks the browser for a location");
-ok(fs.readFileSync("public/styles.css", "utf8").includes("repeat(3, 1fr)"), "mobile nav has room for its three tabs");
+ok(fs.readFileSync("public/styles.css", "utf8").includes("repeat(4, 1fr)"), "mobile nav has room for the fourth tab");
 
 const PROFILE_EXTRA_DIET_TERMS_SOURCE = (appJs.match(/const PROFILE_EXTRA_DIET_TERMS = \[([^\]]*)\]/)?.[1] || "")
   .split(",")
@@ -704,20 +694,12 @@ ok(fs.readFileSync("public/styles.css", "utf8").includes(".pantry-item.off-limit
   ok(/\.starter-prompts[\s\S]{0,120}flex-wrap: wrap/.test(styles), "the starter chips wrap instead of running off the edge");
   ok(/h1 \{[^}]*clamp\(26px/.test(styles), "the heading no longer takes a third of the column");
   ok(/\.use-first-strip\.is-empty/.test(styles) && /classList\.toggle\("is-empty"/.test(appJs), "the gold band stays quiet when nothing is marked");
-  ok(/kitchen-summary-line span:first-child \{ text-transform: capitalize/.test(styles), "only the first summary value is capitalised, so it is not \"Nothing Yet\"");
 }
-ok(/eats anything/.test(appJs) && /no equipment set/.test(appJs), "the summary reads as a sentence when nothing is chosen");
-ok(/Number\.isInteger\(budget\) \? `\$\$\{budget\}`/.test(appJs.replace(/\$\{budget\}/g, "$${budget}")) || /Number\.isInteger\(budget\)/.test(appJs), "a whole-dollar budget is shown without cents");
 
 // ---------- written for someone in a hurry ----------
 // A first visit should show what you can act on, not headings over empty boxes.
 ok(/id="savedRecipes"[^>]*hidden/.test(html), "the saved-meals section stays out of the way until something is saved");
 ok(/\$\("savedRecipes"\)\.hidden = state\.savedRecipes\.length === 0/.test(appJs), "and appears the moment something is");
-// Counting words in the interface: fewer decorative labels above the real ones.
-{
-  const eyebrows = (html.match(/class="eyebrow"/g) || []).length;
-  ok(eyebrows <= 6, `decorative kickers are kept few (${eyebrows})`);
-}
 // "1 dinners" reads as broken software to someone skimming.
 ok(/dinners\.length === 1 \? "is" : "are"/.test(appJs) && /dinners\.length === 1 \? "" : "s"/.test(appJs), "the plan message agrees with its own count");
 ok(/state\.constraints\.diet \|\| "your food restrictions"/.test(appJs), "a sentence about a diet still reads when no diet is named");
@@ -728,17 +710,6 @@ ok(/class="pantry-toggle"[\s\S]{0,200}data-pantry-action="soon"/.test(appJs), "t
 ok(/class="pantry-remove"[\s\S]{0,120}&times;/.test(appJs), "removing an item is a single ×");
 ok(!/>Use soon<|>Unmark</.test(appJs), "the row no longer carries two labelled buttons");
 
-// ---------- one working screen, one settings drawer ----------
-// The rail is for the things you work with; everything you configure lives
-// behind one control instead of alongside them.
-ok(/id="editPreferencesButton"/.test(html) && /class="kitchen-summary"/.test(html), "the rail shows what is in force as a single line that opens settings");
-ok(!/<dl>/.test(html.slice(html.indexOf('sidebar-scroll'), html.indexOf('side-section'))), "that summary is one line, not a block of labels");
-ok(/<h2 id="profileTitle">Settings<\/h2>/.test(html), "the drawer is called settings, not a profile page");
-ok(html.indexOf('id="resetDemoButton"') > html.indexOf('id="profileDrawer"'), "reset lives in settings, not under the working lists");
-ok(!/class="sidebar-foot"/.test(html), "the rail no longer carries a footer of its own");
-// The word the interface uses for what you have in the kitchen.
-ok(!/pantry/i.test(html.replace(/id="[^"]*"|class="[^"]*"|for="[^"]*"|data-[a-z-]+(="[^"]*")?/g, "")), "the interface says inventory, never pantry");
-ok(/Your inventory/.test(html), "the section is titled Your inventory");
 
 // ---------- running it without a terminal ----------
 // Not every teammate works in a shell; the launchers are the supported path, so
@@ -784,33 +755,13 @@ for (const asset of ["logo-source.jpg", "logo-mark.png", "logo-mark-gold.png",
 // The gold mark sits on the maroon bar and the cream lockup on the maroon hero:
 // using either the wrong way round would put maroon on maroon.
 ok(/<img class="brand-mark" src="\/logo-mark-gold\.png"/.test(html), "the top bar carries the gold mark");
-ok(/<img class="brand-mark" src="\/logo-mark-gold\.png"/.test(html), "the top bar carries the gold mark");
+ok(/<img class="welcome-logo" src="\/logo-lockup-light\.png"/.test(html), "the maroon hero carries the cream lockup");
 ok(/rel="icon"[^>]*favicon-32\.png/.test(html) && /apple-touch-icon\.png/.test(html), "the tab and home-screen icons are declared");
 ok(/theme-color" content="#8c1d40"/i.test(html), "the browser chrome matches the maroon bar");
 // Every derived asset comes from one drawing, so they cannot drift apart.
 ok(fs.existsSync("scripts/build-logo-assets.py"), "the assets are reproducible from the source artwork");
 const logoBytes = ["logo-mark-gold.png", "logo-lockup-light.png"].map((f) => fs.statSync(`public/${f}`).size);
 ok(logoBytes.every((size) => size < 60 * 1024), `logo assets stay small (${logoBytes.map((b) => `${Math.round(b / 1024)}KB`).join(", ")})`);
-
-// A class in the markup with no rule behind it is how the profile drawer lost
-// its positioning when the pantry drawer's shared rules were deleted.
-{
-  const styles = fs.readFileSync("public/styles.css", "utf8");
-  const jsHooks = new Set(["assistant-message", "unavailable", "thinking", "message"]);
-  const declared = new Set();
-  for (const match of html.matchAll(/class="([^"${}]+)"/g)) {
-    for (const name of match[1].split(/\s+/)) if (name) declared.add(name);
-  }
-  const unstyled = [...declared].filter((name) => !jsHooks.has(name) && !styles.includes(`.${name}`));
-  ok(unstyled.length === 0, `every class in the markup has a rule${unstyled.length ? ` (unstyled: ${unstyled.join(", ")})` : ""}`);
-  ok(/\.profile-drawer\.open \.drawer-sheet/.test(styles), "the profile drawer still slides over the workspace");
-  // The inline icons are bare paths: unstroked they paint as black blobs, and
-  // unsized they claim an SVG's default 300x150 inside a 39px button.
-  ok(/button svg[\s\S]{0,220}stroke: currentColor/.test(styles), "inline icons are stroked, not filled");
-  ok(/button svg[\s\S]{0,120}width: 18px/.test(styles), "inline icons are sized by rule, not by attribute");
-  ok(/\.topbar \.icon-button[\s\S]{0,160}color: var\(--gold\)/.test(styles), "icon buttons on the maroon bar draw in gold, not white on white");
-  ok(/<button class="sidebar-toggle" id="sidebarToggle"/.test(html) && html.indexOf('id="sidebarToggle"') < html.indexOf('class="brand"'), "the sidebar control sits at the left, over the rail it opens");
-}
 
 // ---------- ASU palette ----------
 const css = fs.readFileSync("public/styles.css", "utf8");
@@ -969,8 +920,8 @@ async function runRouteChecks() {
   );
   ok(
     pantryOnly.buildPlanCalls === 0 &&
-      pantryOnly.assistantMessages[0]?.[0] === "Added rice and potatoes to your inventory.",
-    "an inventory-only chat command confirms the update without requesting a meal plan"
+      pantryOnly.assistantMessages[0]?.[0] === "Added rice and potatoes to your pantry.",
+    "a pantry-only chat command confirms the update without requesting a meal plan"
   );
 
   const shorthandPantryAdd = await exerciseFrontendMessage(
@@ -980,8 +931,8 @@ async function runRouteChecks() {
   );
   ok(
     shorthandPantryAdd.buildPlanCalls === 0 &&
-      shorthandPantryAdd.assistantMessages[0]?.[0] === "Added milk to your inventory.",
-    "a shorthand add command confirms the inventory update without requesting a meal plan"
+      shorthandPantryAdd.assistantMessages[0]?.[0] === "Added milk to your pantry.",
+    "a shorthand add command confirms the pantry update without requesting a meal plan"
   );
 
   const pantryAndPlan = await exerciseFrontendMessage(

@@ -22,7 +22,9 @@ const ALIASES = {
 
 const DEFAULT_STATE = {
   profile: {
-    displayName: ""
+    displayName: "",
+    // false until the first-run wizard is completed once.
+    onboarded: false
   },
   pantry: [],
   constraints: {
@@ -38,7 +40,6 @@ const DEFAULT_STATE = {
   groceryList: [],
   savedRecipes: [],
   offLimitsPantry: [],
-  sidebarOpen: true,
   location: null,
   // null = never asked. Only true sends coordinates to the place-name service.
   allowPlaceLookup: null
@@ -111,7 +112,7 @@ function normaliseState(stored) {
       profile: {
         ...DEFAULT_STATE.profile,
         ...(stored.profile || {}),
-        displayName: String(stored.profile?.displayName || "").slice(0, 40)
+        onboarded: stored.profile?.onboarded === true
       },
       constraints: { ...DEFAULT_STATE.constraints, ...(stored.constraints || {}) },
       plan: sanitizeStoredPlan(stored.plan || null),
@@ -169,7 +170,7 @@ async function importKitchen(file) {
       throw new Error("That file came from a newer version of FridgeFuse.");
     }
     const restored = normaliseState(incoming);
-    const summary = `${restored.pantry.length} inventory items, ${restored.savedRecipes.length} saved recipes`;
+    const summary = `${restored.pantry.length} pantry items, ${restored.savedRecipes.length} saved recipes`;
     if (!window.confirm(`Restore this kitchen? It replaces what is on this device with ${summary}.`)) return;
 
     state = restored;
@@ -492,12 +493,12 @@ async function handleMessage(message) {
     let confirmation;
     if (parsed.removal) {
       confirmation = parsed.pantryChanged
-        ? `Removed ${names} from your inventory.`
-        : `${capitalize(names)} ${orderedIngredients.length === 1 ? "was" : "were"} not in your inventory.`;
+        ? `Removed ${names} from your pantry.`
+        : `${capitalize(names)} ${orderedIngredients.length === 1 ? "was" : "were"} not in your pantry.`;
     } else {
       confirmation = parsed.pantryChanged
-        ? `Added ${names} to your inventory.`
-        : `${capitalize(names)} ${orderedIngredients.length === 1 ? "is" : "are"} already in your inventory.`;
+        ? `Added ${names} to your pantry.`
+        : `${capitalize(names)} ${orderedIngredients.length === 1 ? "is" : "are"} already in your pantry.`;
     }
     addAssistantMessage(confirmation, "Ask me to build a meal plan when you want one.");
     setMobileView("chat");
@@ -644,7 +645,7 @@ function renderPlan() {
     const reason = useSoon.length
       ? `Uses ${useSoon.join(" and ")} while it is still fresh`
       : pantryUsed.length
-        ? `Uses ${pantryUsed.join(", ")} from your inventory`
+        ? `Uses ${pantryUsed.join(", ")} from your pantry`
         : "Built from the same grocery run";
     const steps = (meal.steps || []).map((step) => `<li>${escapeHtml(step)}</li>`).join("");
     const recipeSource = meal.sourceUnavailable
@@ -804,7 +805,7 @@ function renderPantry() {
   `).join("");
 }
 
-/* ---------------- preference catalogs ---------------- */
+/* ---------------- preference catalogs + onboarding ---------------- */
 
 // Option lists come from the server so the form and the planner's filter can
 // never disagree. Falls back to the minimum viable set if the fetch fails.
@@ -842,7 +843,7 @@ function selectedDietSet() {
 }
 
 // Renders equipment cards and diet chips into a given pair of containers, so
-// the profile drawer renders its controls from the server catalogs.
+// the welcome wizard and the profile drawer share one implementation.
 function renderPreferenceControls({ equipmentHost, dietHost, namePrefix }) {
   const chosenEquipment = new Set((state.constraints.equipment || []).map((item) => String(item).toLowerCase()));
   if (equipmentHost) {
@@ -891,6 +892,10 @@ function bindOptionToggles(root, notePrefix) {
     if (!input) return;
     const holder = input.closest(".option-card, .chip");
     if (holder) holder.classList.toggle("is-checked", input.checked);
+    // Clear the "pick something" warning the moment it stops being true.
+    if (input.name === `${notePrefix}-equipment` && readCheckedValues(`${notePrefix}-equipment`).length) {
+      $("equipmentError").hidden = true;
+    }
     updateKitchenNote(notePrefix);
   });
   root.addEventListener("focusin", (event) => {
@@ -928,14 +933,85 @@ function dietVibeText(ids) {
 }
 
 function updateKitchenNote(prefix) {
-  const host = $("profileKitchenNote");
+  const host = $(prefix === "welcome" ? "welcomeKitchenNote" : "profileKitchenNote");
   if (!host) return;
   const equipmentText = equipmentVibeText(readCheckedValues(`${prefix}-equipment`));
   const dietText = dietVibeText(readCheckedValues(`${prefix}-diet`));
-  // Stays silent until there is something to say (:empty hides it in CSS),
-  // since it sits above an already-labelled form.
-  host.innerHTML = [equipmentText, dietText].filter(Boolean)
-    .map((text) => `<p>${escapeHtml(text)}</p>`).join("");
+  const parts = [equipmentText, dietText].filter(Boolean);
+
+  if (prefix === "welcome") {
+    // The hero panel always shows something, even before a choice is made.
+    host.innerHTML = parts.length
+      ? parts.map((text) => `<p>${escapeHtml(text)}</p>`).join("")
+      : "<p>Pick your equipment to see what kind of meals you'll get.</p>";
+  } else {
+    // The profile drawer stays silent until there is something to say
+    // (:empty hides it in CSS), since it sits above an already-labelled form.
+    host.innerHTML = parts.map((text) => `<p>${escapeHtml(text)}</p>`).join("");
+  }
+}
+
+/* ----- the welcome wizard ----- */
+
+let welcomeSteps = [];
+let welcomeIndex = 0;
+
+function needsOnboarding() {
+  return state.profile?.onboarded !== true;
+}
+
+function stepLabels() {
+  return { identity: "About you", kitchen: "Your kitchen", food: "Your food" };
+}
+
+function renderWelcomeStep() {
+  const current = welcomeSteps[welcomeIndex];
+  document.querySelectorAll(".welcome-step").forEach((section) => {
+    section.hidden = section.dataset.step !== current;
+  });
+
+  const labels = stepLabels();
+  $("welcomeProgress").innerHTML = welcomeSteps.map((step, index) => `
+    <li class="${index === welcomeIndex ? "current" : index < welcomeIndex ? "done" : ""}">${escapeHtml(labels[step] || step)}</li>
+  `).join("");
+
+  $("welcomeBack").hidden = welcomeIndex === 0;
+  const isLast = welcomeIndex === welcomeSteps.length - 1;
+  $("welcomeNext").textContent = isLast ? "Start cooking" : "Continue";
+  updateKitchenNote("welcome");
+}
+
+// Runs once, ever — the first time the app opens with no saved profile. Later
+// visits go straight to the app; preferences after that are only ever changed
+// by deliberately opening the profile drawer, never re-asked on login.
+async function openWelcome() {
+  await loadPreferences();
+
+  welcomeSteps = ["identity", "kitchen", "food"];
+  welcomeIndex = 0;
+
+  $("welcomeName").value = state.profile?.displayName || "";
+
+  const budget = clampNumber(state.constraints.budget, PREFERENCES.limits.budget, 20);
+  $("welcomeBudget").value = budget;
+  $("welcomeBudgetValue").textContent = `$${budget}`;
+
+  renderPreferenceControls({
+    equipmentHost: $("equipmentOptions"),
+    dietHost: $("dietOptions"),
+    namePrefix: "welcome",
+  });
+  $("dietDisclaimer").textContent = PREFERENCES.disclaimer;
+
+  $("welcomeScreen").hidden = false;
+  document.body.dataset.welcomeOpen = "true";
+  renderWelcomeStep();
+  requestAnimationFrame(() => $("welcomeName").focus());
+}
+
+function closeWelcome() {
+  $("welcomeScreen").hidden = true;
+  delete document.body.dataset.welcomeOpen;
 }
 
 function clampNumber(value, limit, fallback) {
@@ -946,6 +1022,52 @@ function clampNumber(value, limit, fallback) {
 
 // Saves whatever the wizard currently holds. Called on finish and on skip so a
 // partly-filled form is never silently discarded.
+function commitWelcome({ markOnboarded }) {
+  const equipment = readCheckedValues("welcome-equipment");
+  const diets = readCheckedValues("welcome-diet");
+
+  if (state.plan && !state.plan.constraints) {
+    state.plan.constraints = clone(state.constraints);
+  }
+
+  state.profile = {
+    ...state.profile,
+    displayName: $("welcomeName").value.trim().slice(0, 40),
+    onboarded: markOnboarded ? true : state.profile?.onboarded === true,
+  };
+
+  if (equipment.length) state.constraints.equipment = equipment;
+  state.constraints.diet = diets.join(", ");
+  state.constraints.budget = clampNumber($("welcomeBudget").value, PREFERENCES.limits.budget, 20);
+
+  saveState();
+  renderProfile();
+  renderLocation();
+}
+
+function advanceWelcome() {
+  const current = welcomeSteps[welcomeIndex];
+
+  if (current === "kitchen" && !readCheckedValues("welcome-equipment").length) {
+    $("equipmentError").hidden = false;
+    return;
+  }
+  $("equipmentError").hidden = true;
+
+  if (welcomeIndex < welcomeSteps.length - 1) {
+    welcomeIndex += 1;
+    renderWelcomeStep();
+    // A long step can leave the next one scrolled halfway down.
+    $("welcomeForm").scrollTop = 0;
+    return;
+  }
+
+  commitWelcome({ markOnboarded: true });
+  closeWelcome();
+  const name = state.profile.displayName;
+  toast(name ? `You're set, ${name}. Plans will use these preferences.` : "You're set. Plans will use these preferences.");
+}
+
 function profileInitials(name) {
   const parts = String(name || "")
     .trim()
@@ -962,14 +1084,6 @@ function profileInitials(name) {
 
 function renderProfile() {
   const name = state.profile?.displayName?.trim() || "";
-
-  // The wizard used to be where a student learned they could set these. With it
-  // gone, the settings have to be visible on the working screen instead of
-  // hidden behind an avatar.
-  $("summaryEquipment").textContent = state.constraints.equipment.join(", ") || "no equipment set";
-  $("summaryDiet").textContent = state.constraints.diet || "eats anything";
-  const budget = Number(state.constraints.budget) || 0;
-  $("summaryBudget").textContent = Number.isInteger(budget) ? `$${budget}` : formatMoney(budget);
 
   $("profileButton").textContent = profileInitials(name);
   $("profileButton").setAttribute(
@@ -988,6 +1102,7 @@ async function openProfile() {
   $("profileBudget").value = budget;
   $("profileBudgetValue").textContent = `$${budget}`;
 
+  // Same renderer as the welcome wizard, so both stay in step automatically.
   renderPreferenceControls({
     equipmentHost: $("profileEquipmentOptions"),
     dietHost: $("profileDietOptions"),
@@ -1009,52 +1124,40 @@ function closeProfile() {
   delete document.body.dataset.drawerOpen;
 }
 
-// Pantry and shop share one rail beside the conversation. Opening either means
-// showing that rail; on a phone it covers the workspace, on a laptop it takes a
-// column back. The preference is remembered because it is a working choice, not
-// a one-off.
-function setSidebar(open, { remember = true } = {}) {
-  document.querySelector(".app-shell").classList.toggle("sidebar-hidden", !open);
-  const toggle = $("sidebarToggle");
-  toggle.setAttribute("aria-expanded", String(open));
-  toggle.setAttribute("aria-label", open ? "Hide inventory and shop" : "Show inventory and shop");
-  if (remember) {
-    state.sidebarOpen = open;
-    saveState();
-  }
-  if (open) loadCatalog();
-}
-
 function openPantry() {
-  setSidebar(true);
-  if (window.matchMedia("(max-width: 980px)").matches) setMobileView("sidebar");
-  $("pantryDrawer").scrollIntoView({ behavior: "smooth", block: "start" });
+  closeProfile();
+  $("pantryDrawer").classList.add("open");
+  $("pantryDrawer").setAttribute("aria-hidden", "false");
+  document.body.dataset.drawerOpen = "true";
+  requestAnimationFrame(() => $("pantryInput").focus());
 }
 
 function closePantry() {
-  setSidebar(false);
+  $("pantryDrawer").classList.remove("open");
+  $("pantryDrawer").setAttribute("aria-hidden", "true");
+  delete document.body.dataset.drawerOpen;
 }
 
 // One view model for both breakpoints. Chat and plan stay paired side by side
 // on desktop (body[data-view] only splits the grocery tab out); on mobile the
 // .mobile-active class picks the single visible panel.
 function setMobileView(view) {
-  if (view === "pantry" || view === "grocery") view = "sidebar";
-  if (view === "sidebar") setSidebar(true, { remember: false });
+  if (view === "pantry") {
+    openPantry();
+    return;
+  }
   activeMobileView = view;
   document.body.dataset.view = view;
   $("chatView").classList.toggle("mobile-active", view === "chat");
   $("planView").classList.toggle("mobile-active", view === "plan");
-  if (view !== "sidebar" && window.matchMedia("(max-width: 980px)").matches) {
-    document.querySelector(".app-shell").classList.add("sidebar-hidden");
-  }
   document.querySelectorAll(".mobile-nav button, .desktop-nav .nav-item").forEach((button) => {
     if (button.dataset.view) button.classList.toggle("active", button.dataset.view === view);
   });
+  if (view === "grocery") loadCatalog();
 }
 
 function loadSamplePantry() {
-  if (state.pantry.length && !window.confirm("Replace your current inventory with the sample mini-fridge?")) return;
+  if (state.pantry.length && !window.confirm("Replace your current pantry with the sample mini-fridge?")) return;
   state.pantry = [
     { name: "eggs", amount: "4 left", soon: true },
     { name: "spinach", amount: "half a bag", soon: true },
@@ -1173,7 +1276,7 @@ async function handlePhoto(file) {
     addAssistantMessage(
       confirmed.length ? `I clearly found ${confirmed.map((item) => item.name).join(", ")}.` : "I did not add anything I could not clearly identify.",
       uncertain.length
-        ? `${uncertain.length} item${uncertain.length === 1 ? " needs" : "s need"} your confirmation. Check the cropped photo${uncertain.length === 1 ? "" : "s"} in the inventory.`
+        ? `${uncertain.length} item${uncertain.length === 1 ? " needs" : "s need"} your confirmation. Check the cropped photo${uncertain.length === 1 ? "" : "s"} in the pantry.`
         : confirmed.length ? "I added only the fully visible matches." : "Try a closer photo with the whole item and label visible."
     );
     openPantry();
@@ -1187,7 +1290,6 @@ async function handlePhoto(file) {
 }
 
 $("profileButton").addEventListener("click", openProfile);
-$("editPreferencesButton").addEventListener("click", openProfile);
 $("exportKitchenButton").addEventListener("click", exportKitchen);
 $("importKitchenButton").addEventListener("click", () => $("importKitchenInput").click());
 $("importKitchenInput").addEventListener("change", (event) => {
@@ -1587,6 +1689,28 @@ $("fromPlanButton").addEventListener("click", () => {
   toast(added ? `${added} item${added === 1 ? "" : "s"} added from your meal plan` : "Those items are already on the list");
 });
 
+/* ----- welcome wizard wiring ----- */
+$("welcomeNext").addEventListener("click", advanceWelcome);
+$("welcomeBack").addEventListener("click", () => {
+  if (welcomeIndex === 0) return;
+  welcomeIndex -= 1;
+  $("equipmentError").hidden = true;
+  renderWelcomeStep();
+});
+$("welcomeSkip").addEventListener("click", () => {
+  // Skipping still keeps whatever was entered, and still counts as onboarded
+  // so the identity step is not asked for again.
+  commitWelcome({ markOnboarded: true });
+  closeWelcome();
+});
+$("welcomeBudget").addEventListener("input", () => {
+  $("welcomeBudgetValue").textContent = `$${$("welcomeBudget").value}`;
+});
+$("welcomeForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  advanceWelcome();
+});
+bindOptionToggles($("welcomeForm"), "welcome");
 bindOptionToggles($("profileForm"), "profile");
 
 $("useLocationButton").addEventListener("click", requestLocation);
@@ -1702,9 +1826,8 @@ $("mealList").addEventListener("click", async (event) => {
 document.querySelectorAll("[data-view]").forEach((button) => {
   button.addEventListener("click", () => {
     const view = button.dataset.view;
-    if (view === "sidebar") {
-      setSidebar(true, { remember: false });
-      setMobileView("sidebar");
+    if (view === "pantry") {
+      openPantry();
       return;
     }
     setMobileView(view);
@@ -1734,7 +1857,7 @@ $("savedRecipeList").addEventListener("click", (event) => {
 });
 
 function resetDemo() {
-  const warning = "Reset the demo? This clears your settings, inventory, meal plan, chat history, Shop list, and saved location.";
+  const warning = "Reset the demo? This clears your profile, pantry, meal plan, chat history, Shop list, and saved location.";
   if (!window.confirm(warning)) return;
   state = clone(DEFAULT_STATE);
   saveState();
@@ -1743,11 +1866,6 @@ function resetDemo() {
 
 $("resetDemoButton").addEventListener("click", resetDemo);
 $("resetMobileButton").addEventListener("click", resetDemo);
-$("sidebarToggle").addEventListener("click", () => {
-  const hidden = document.querySelector(".app-shell").classList.contains("sidebar-hidden");
-  setSidebar(hidden);
-  if (hidden && window.matchMedia("(max-width: 980px)").matches) setMobileView("sidebar");
-});
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
@@ -1766,7 +1884,7 @@ if (state.messages?.length) {
 } else if (state.plan) {
   $("starterPrompts").hidden = true;
   const firstMessage = document.querySelector(".assistant-message .message-copy");
-  firstMessage.innerHTML = "<p>Your last plan and inventory are still here. Tell me what changed.</p><p class=\"message-example\">Try \"lower my budget to $15\" or swap a meal from the plan.</p>";
+  firstMessage.innerHTML = "<p>Your last plan and pantry are still here. Tell me what changed.</p><p class=\"message-example\">Try \"lower my budget to $15\" or swap a meal from the plan.</p>";
 }
 
 renderProfile();
@@ -1775,8 +1893,9 @@ renderPlan();
 renderGroceryList();
 renderSavedRecipes();
 renderLocation();
-// The rail starts open on a laptop, where there is room for it, and closed on a
-// phone, where it would cover the conversation.
-setSidebar(state.sidebarOpen !== false && !window.matchMedia("(max-width: 980px)").matches, { remember: false });
 setMobileView(activeMobileView);
 
+// The welcome wizard is a one-time landing experience: it runs once, ever,
+// on the very first visit. After that, preferences are only ever changed by
+// deliberately opening the profile drawer — never re-asked on login.
+if (needsOnboarding()) openWelcome();
