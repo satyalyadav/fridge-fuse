@@ -116,21 +116,16 @@ a:focus-visible {
 }
 
 .brand-mark {
-  width: 28px;
-  height: 34px;
-  display: grid;
-  grid-template-rows: 1fr 1.25fr;
-  gap: 2px;
-  padding: 4px;
-  border: 2px solid var(--gold);
-  border-radius: 7px;
+  width: auto;
+  height: 30px;
+  display: block;
   transform: rotate(-2deg);
 }
 
-.brand-mark span {
+.welcome-logo {
+  width: 168px;
+  height: auto;
   display: block;
-  border-radius: 2px;
-  background: var(--gold);
 }
 
 .trip-status {
@@ -975,8 +970,6 @@ body[data-welcome-open="true"] { overflow: hidden; }
   font-weight: 700;
   letter-spacing: -0.04em;
 }
-.welcome-brand .brand-mark { border-color: var(--maroon-wash); }
-.welcome-brand .brand-mark span { background: rgba(234, 243, 238, 0.85); }
 .eyebrow.light { color: var(--gold); }
 .welcome-hero-copy h1 {
   max-width: 15ch;
