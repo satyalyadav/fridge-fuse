@@ -1,0 +1,1151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FridgeFuse — five front-end mockups</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700;12..96,800&family=IBM+Plex+Mono:wght@400;500;600;700&family=Instrument+Sans:wght@400;500;600;700&family=Anton&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #172421;
+    --ink-soft: #51605c;
+    --enamel: #f3f6f2;
+    --paper: #ffffff;
+    --cold: #dceff2;
+    --cold-dark: #9fcbd1;
+    --spinach: #21644e;
+    --spinach-dark: #174737;
+    --tape: #f3d56f;
+    --tomato: #e6573f;
+    --line: #d9dfda;
+   --display: "Bricolage Grotesque", "Arial Rounded MT Bold", sans-serif;
+    --body: "Instrument Sans", "Avenir Next", sans-serif;
+    --utility: "IBM Plex Mono", "SFMono-Regular", monospace;
+    --poster: "Anton", "Arial Narrow", sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--ink);
+    color: var(--ink);
+    font-family: var(--body);
+    -webkit-font-smoothing: antialiased;
+  }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  button:focus-visible, a:focus-visible {
+    outline: 3px solid var(--tomato);
+    outline-offset: 3px;
+  }
+  h1, h2, h3, p { margin: 0; text-wrap: pretty; }
+  svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* ---------- switcher chrome ---------- */
+  .switcher {
+    position: fixed;
+    z-index: 99;
+    right: 18px;
+    bottom: 18px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border-radius: 14px;
+    background: rgba(23, 36, 33, 0.94);
+    color: #fff;
+    box-shadow: 0 14px 40px rgba(0,0,0,0.35);
+    backdrop-filter: blur(8px);
+  }
+  .switcher button.nav-arrow {
+    width: 32px; height: 32px;
+    display: grid; place-items: center;
+    border: 1px solid rgba(255,255,255,0.25);
+    border-radius: 9px;
+    background: transparent;
+    color: #fff;
+  }
+  .switcher button.nav-arrow:hover { background: rgba(255,255,255,0.12); }
+  .switcher-label { min-width: 168px; text-align: center; }
+  .switcher-label small {
+    display: block;
+    font-family: var(--utility);
+    font-size: 9px;
+    letter-spacing: 0.14em;
+    color: var(--cold-dark);
+  }
+  .switcher-label strong { font-size: 14px; letter-spacing: -0.01em; }
+  .dots { display: flex; gap: 5px; }
+  .dots i {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.28);
+  }
+  .dots i.on { background: var(--tape); }
+
+  .mock { display: none; min-height: 100vh; }
+  .mock.active { display: block; }
+  .mock-tag {
+    position: fixed;
+    z-index: 98;
+    top: 16px;
+    left: 16px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: rgba(23,36,33,0.88);
+    color: #fff;
+    font-family: var(--utility);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+  }
+  .mock-tag b { color: var(--tape); font-weight: 700; }
+
+  /* =====================================================
+     DESIGN 1 — MAGNET BOARD
+     The current look, amplified: the plan panel becomes a
+     fridge door, meals hang as magnets, lists are pinned.
+     ===================================================== */
+  .d1 { background: var(--enamel); }
+  .d1 .shell {
+    display: grid;
+    grid-template-columns: 78px minmax(0, 1fr);
+    grid-template-rows: 66px minmax(0, 1fr);
+    min-height: 100vh;
+  }
+  .d1 .topbar {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 22px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(243,246,242,0.96);
+  }
+  .d1 .brand { display: inline-flex; align-items: center; gap: 10px; font-family: var(--display); font-weight: 700; font-size: 20px; letter-spacing: -0.04em; text-decoration: none; color: var(--ink); }
+  .d1 .brand-mark {
+    width: 27px; height: 33px;
+    display: grid; grid-template-rows: 1fr 1.25fr; gap: 2px;
+    padding: 4px;
+    border: 2px solid var(--ink);
+    border-radius: 7px;
+    transform: rotate(-2deg);
+  }
+  .d1 .brand-mark span { border-radius: 2px; background: var(--cold-dark); }
+  .d1 .brand-mark span:last-child { background: var(--tape); }
+  .d1 .trip { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-soft); font-size: 12px; font-weight: 600; }
+  .d1 .trip i { width: 8px; height: 8px; border-radius: 50%; background: var(--spinach); }
+  .d1 .avatar {
+    width: 34px; height: 34px; border: 0; border-radius: 50%;
+    background: var(--ink); color: #fff;
+    font-family: var(--utility); font-size: 10px; font-weight: 600;
+  }
+  .d1 .rail {
+    grid-column: 1; grid-row: 2;
+    display: flex; flex-direction: column; align-items: stretch; gap: 8px;
+    padding: 14px 10px;
+    border-right: 1px solid var(--line);
+  }
+  .d1 .rail button {
+    display: flex; flex-direction: column; align-items: center; gap: 5px;
+    min-height: 56px; padding: 8px 4px;
+    border: 0; border-radius: 12px;
+    background: transparent; color: #69746f;
+    font-size: 10px; font-weight: 700;
+  }
+  .d1 .rail button svg { width: 20px; height: 20px; }
+  .d1 .rail button.on { background: var(--cold); color: var(--ink); }
+  .d1 .cols {
+    grid-column: 2; grid-row: 2;
+    display: grid;
+    grid-template-columns: minmax(320px, 0.8fr) minmax(0, 1.2fr);
+    min-height: 0;
+  }
+  /* chat as a taped note */
+  .d1 .chat {
+    display: flex; flex-direction: column;
+    padding: 26px clamp(18px, 2.6vw, 38px) 22px;
+    border-right: 1px solid var(--line);
+    background: var(--paper);
+  }
+  .d1 .eyebrow { color: var(--spinach); font-family: var(--utility); font-size: 10px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; }
+  .d1 .chat h1 { margin-top: 6px; font-family: var(--display); font-size: clamp(26px, 2.8vw, 38px); line-height: 1; letter-spacing: -0.045em; }
+  .d1 .thread { flex: 1; overflow-y: auto; margin: 22px 0 14px; display: grid; gap: 14px; align-content: start; }
+  .d1 .msg { display: flex; gap: 10px; align-items: flex-start; }
+  .d1 .msg .who {
+    flex: 0 0 auto; width: 28px; height: 32px;
+    display: grid; place-items: center;
+    border: 1.5px solid var(--ink); border-radius: 6px;
+    background: var(--cold);
+    font-family: var(--display); font-weight: 700; font-size: 13px;
+16  }
+  .d1 .msg p { max-width: 480px; font-size: 14px; line-height: 1.5; }
+  .d1 .msg.user { justify-content: flex-end; }
+  .d1 .msg.user p {
+    padding: 10px 14px;
+    border-radius: 14px 14px 3px 14px;
+    background: var(--ink); color: #fff;
+  }
+  .d1 .chips { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 12px; }
+  .d1 .chips button {
+    padding: 7px 11px;
+    border: 1px solid var(--line); border-radius: 100px;
+    background: #fff; color: var(--ink-soft);
+    font-size: 12px; font-weight: 600;
+  }
+  .d1 .chips button:hover { border-color: var(--spinach); color: var(--spinach); }
+  .d1 .composer {
+    display: flex; align-items: flex-end; gap: 10px;
+    padding: 10px;
+    border: 1.5px solid #bac5bf; border-radius: 16px;
+    background: #fff;
+    box-shadow: 0 10px 26px rgba(23,36,33,0.07);
+  }
+  .d1 .composer .fake-input { flex: 1; padding: 4px 3px 8px; color: #87908c; font-size: 14px; }
+  .d1 .send {
+    width: 36px; height: 36px; flex: 0 0 auto;
+    display: grid; place-items: center;
+    border: 0; border-radius: 11px;
+    background: var(--spinach); color: #fff;
+  }
+  .d1 .send svg { width: 17px; height: 17px; }
+  /* fridge door */
+  .d1 .door {
+    position: relative;
+    overflow-y: auto;
+    padding: 26px clamp(18px, 3vw, 46px) 48px;
+    background:
+      repeating-linear-gradient(90deg, rgba(23,36,33,0.025) 0 1px, transparent 1px 90px),
+      var(--enamel);
+  }
+  .d1 .tape-strip {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    max-width: 640px;
+    margin-bottom: 26px;
+    padding: 10px 16px;
+    transform: rotate(-0.6deg);
+    border-left: 4px solid #dcc057;
+    background: var(--tape);
+    box-shadow: 0 6px 18px rgba(23,36,33,0.14);
+  }
+  .d1 .tape-strip small { display: block; font-family: var(--utility); font-size: 9px; font-weight: 700; letter-spacing: 0.14em; }
+  .d1 .tape-strip strong { font-size: 14px; }
+  .d1 .tape-strip button {
+    padding: 7px 11px;
+    border: 1px solid rgba(23,36,33,0.28); border-radius: 8px;
+    background: rgba(255,255,255,0.32);
+    font-size: 11px; font-weight: 700;
+  }
+  .d1 .plan-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; max-width: 640px; }
+  .d1 .plan-head h2 { font-family: var(--display); font-size: clamp(24px, 2.4vw, 32px); letter-spacing: -0.04em; line-height: 1; }
+  .d1 .plan-head .sub { margin-top: 8px; color: var(--ink-soft); font-size: 13px; }
+  .d1 .stamp {
+    flex: 0 0 auto;
+    padding: 9px 12px;
+    transform: rotate(1.4deg);
+    border: 2px solid var(--spinach); border-radius: 9px;
+    color: var(--spinach);
+    font-family: var(--utility); text-align: right;
+  }
+  .d1 .stamp small { display: block; font-size: 8px; letter-spacing: 0.1em; }
+  .d1 .stamp b { display: block; margin: 2px 0; font-size: 20px; }
+  .d1 .stamp em { display: block; font-style: normal; font-size: 9px; }
+  .d1 .magnets {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 22px 18px;
+    max-width: 680px;
+    margin-top: 22px;
+  }
+  .d1 .magnet {
+    position: relative;
+    padding: 20px 16px 15px;
+    background: #fff;
+    border-radius: 4px;
+    box-shadow: 0 10px 24px rgba(23,36,33,0.13);
+    transition: transform 150ms ease;
+  }
+  .d1 .magnet:nth-child(odd) { transform: rotate(-1.1deg); }
+  .d1 .magnet:nth-child(even) { transform: rotate(0.9deg); }
+  .d1 .magnet:hover { transform: rotate(0deg) translateY(-2px); }
+  .d1 .magnet::before {
+    content: "";
+    position: absolute;
+    top: -7px; left: 50%;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #f2826c, var(--tomato) 60%, #b23a25);
+    box-shadow: 0 3px 5px rgba(23,36,33,0.3);
+  }
+  .d1 .magnet:nth-child(2)::before { background: radial-gradient(circle at 35% 30%, #ffe08a, var(--tape) 60%, #cf9f2e); }
+  .d1 .magnet:nth-child(3)::before { background: radial-gradient(circle at 35% 30%, #4d9179, var(--spinach) 60%, #14402f); }
+  .d1 .magnet .day { color: var(--spinach); font-family: var(--utility); font-size: 10px; font-weight: 600; letter-spacing: 0.1em; }
+  .d1 .magnet h3 { margin: 5px 0 4px; font-family: var(--display); font-size: 17px; letter-spacing: -0.02em; }
+  .d1 .magnet .meta { color: var(--ink-soft); font-size: 12px; }
+  .d1 .magnet .uses { display: inline-block; margin-top: 9px; padding: 3px 8px; border-radius: 6px; background: #fff6d6; color: #6d5510; font-size: 10px; font-weight: 700; }
+  .d1 .magnet .price { position: absolute; right: 14px; top: 18px; font-family: var(--utility); font-size: 12px; font-weight: 600; color: var(--spinach-dark); }
+  .d1 .pinned-receipt {
+    max-width: 300px;
+    margin: 34px 0 0 8px;
+    padding: 16px 18px 22px;
+    transform: rotate(1.6deg);
+    background: #fff;
+    box-shadow: 0 12px 30px rgba(23,36,33,0.16);
+    font-family: var(--utility);
+  }
+  .d1 .pinned-receipt::before {
+    content: "";
+    position: absolute;
+  }
+  .d1 .pinned-receipt { position: relative; }
+  .d1 .pinned-receipt .pin {
+    position: absolute; top: -8px; left: 50%; margin-left: -7px;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #9fd4db, var(--cold-dark) 60%, #5f98a0);
+    box-shadow: 0 3px 5px rgba(23,36,33,0.3);
+  }
+  .d1 .pinned-receipt h4 { margin: 0 0 4px; font-size: 11px; letter-spacing: 0.12em; text-align: center; }
+  .d1 .pinned-receipt .row {
+    display: flex; justify-content: space-between; gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px dashed #d6ddd9;
+    font-size: 11px;
+  }
+  .d1 .pinned-receipt .row.total { border-bottom: 0; margin-top: 4px; font-weight: 700; font-size: 13px; }
+  .d1 .pinned-receipt .row.total span:last-child { color: var(--spinach); }
+  .d1 .pinned-receipt .tagline { margin-top: 10px; text-align: center; font-size: 9px; letter-spacing: 0.1em; color: var(--ink-soft); }
+
+  /* =====================================================
+     DESIGN 2 — NIGHT FRIDGE
+     Dorm at 11pm: ink-green dark surface, the chat glows
+     like fridge light, tape-yellow is the only warm note.
+     ===================================================== */
+  .d2 { background: #101a17; color: #e8efeb; }
+  .d2 .wrap { max-width: 880px; margin: 0 auto; padding: 0 20px 60px; }
+  .d2 .glow {
+    position: relative;
+    padding: 64px 0 34px;
+    background: radial-gradient(1100px 380px at 50% -140px, rgba(159,203,209,0.22), transparent 70%);
+  }
+  .d2 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; max-width: 880px; margin: 0 auto; padding: 18px 20px 0; }
+  .d2 .brand { display: inline-flex; align-items: center; gap: 9px; font-family: var(--display); font-weight: 700; font-size: 18px; letter-spacing: -0.03em; color: #e8efeb; text-decoration: none; }
+  .d2 .brand-mark { width: 24px; height: 29px; display: grid; grid-template-rows: 1fr 1.25fr; gap: 2px; padding: 3px; border: 1.5px solid #e8efeb; border-radius: 6px; transform: rotate(-2deg); }
+  .d2 .brand-mark span { border-radius: 2px; background: var(--cold-dark); }
+  .d2 .brand-mark span:last-child { background: var(--tape); }
+  .d2 .tabs { display: flex; gap: 4px; padding: 4px; border: 1px solid #26332e; border-radius: 100px; background: #16211d; }
+  .d2 .tabs button { padding: 7px 14px; border: 0; border-radius: 100px; background: transparent; color: #93a29b; font-size: 12px; font-weight: 600; }
+  .d2 .tabs button.on { background: var(--spinach); color: #fff; }
+  .d2 .tabs button .n { margin-left: 5px; padding: 1px 6px; border-radius: 8px; background: var(--tape); color: var(--ink); font-family: var(--utility); font-size: 9px; }
+  .d2 .hero h1 { font-family: var(--display); font-size: clamp(30px, 4.5vw, 46px); line-height: 1.02; letter-spacing: -0.04em; }
+  .d2 .hero h1 em { font-style: normal; color: var(--cold-dark); }
+  .d2 .hero .sub { margin-top: 12px; max-width: 46ch; color: #93a29b; font-size: 14px; line-height: 1.55; }
+  .d2 .thread { display: grid; gap: 12px; margin: 30px 0 0; }
+  .d2 .msg { max-width: 76%; padding: 12px 16px; border-radius: 16px; font-size: 14px; line-height: 1.5; }
+  .d2 .msg.user { justify-self: end; border-bottom-right-radius: 4px; background: #e8efeb; color: var(--ink); }
+  .d2 .msg.bot { justify-self: start; border-bottom-left-radius: 4px; border: 1px solid #26332e; background: #16211d; }
+  .d2 .msg.bot .k { display: block; margin-bottom: 5px; color: var(--cold-dark); font-family: var(--utility); font-size: 9px; letter-spacing: 0.13em; }
+  .d2 .composer {
+    display: flex; align-items: center; gap: 10px;
+    margin-top: 18px;
+    padding: 9px 9px 9px 16px;
+    border: 1px solid #2c3a34;
+    border-radius: 16px;
+    background: #16211d;
+    box-shadow: 0 0 0 1px rgba(159,203,209,0.0), 0 0 34px rgba(159,203,209,0.12);
+  }
+  .d2 .composer .fake-input { flex: 1; color: #6d7d76; font-size: 14px; }
+  .d2 .send { width: 38px; height: 38px; display: grid; place-items: center; border: 0; border-radius: 12px; background: var(--tape); color: var(--ink); box-shadow: 0 0 22px rgba(243,213,111,0.35); }
+  .d2 .send svg { width: 17px; height: 17px; }
+  .d2 .deck-label { display: flex; align-items: baseline; justify-content: space-between; margin: 44px 0 14px; }
+  .d2 .deck-label .eyebrow { color: var(--cold-dark); font-family: var(--utility); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; }
+  .d2 .deck-label .budget { font-family: var(--utility); font-size: 12px; color: #93a29b; }
+  .d2 .deck-label .budget b { color: var(--tape); }
+  .d2 .cards { display: grid; gap: 10px; }
+  .d2 .card {
+    display: grid;
+    grid-template-columns: 54px minmax(0,1fr) auto;
+    gap: 14px; align-items: center;
+    padding: 16px 18px;
+    border: 1px solid #26332e;
+    border-radius: 14px;
+    background: linear-gradient(180deg, #17241f, #141f1b);
+  }
+  .d2 .card.first { border-color: rgba(159,203,209,0.5); box-shadow: 0 0 26px rgba(159,203,209,0.08); }
+  .d2 .card .day { font-family: var(--utility); font-size: 11px; font-weight: 600; letter-spacing: 0.1em; color: var(--cold-dark); }
+  .d2 .card h3 { font-family: var(--display); font-size: 16px; letter-spacing: -0.02em; }
+  .d2 .card .meta { margin-top: 3px; color: #93a29b; font-size: 12px; }
+  .d2 .card .price { font-family: var(--utility); font-size: 13px; color: #e8efeb; }
+  .d2 .card .soon { display: inline-block; margin-top: 7px; padding: 2px 7px; border-radius: 5px; background: rgba(243,213,111,0.16); color: var(--tape); font-size: 10px; font-weight: 700; }
+  .d2 .runline {
+    display: flex; align-items: center; justify-content: space-between; gap: 14px;
+    margin-top: 34px;
+    padding: 14px 18px;
+    border: 1px dashed #3a4a43;
+    border-radius: 14px;
+  }
+  .d2 .runline .txt { font-size: 13px; color: #93a29b; }
+  .d2 .runline .txt b { color: #e8efeb; }
+  .d2 .runline button { padding: 10px 16px; border: 0; border-radius: 10px; background: var(--spinach); color: #fff; font-size: 12px; font-weight: 700; }
+
+  /* =====================================================
+     DESIGN 3 — CHECKOUT RECEIPT
+     The whole session reads like the thermal receipt it
+     produces: mono type, dotted leaders, zigzag edges,
+     one rotated CHECKOUT stamp.
+     ===================================================== */
+  .d3 { background: var(--enamel); }
+  .d3 .frame {
+    min-height: 100vh;
+    display: grid;
+    grid-template-columns: minmax(300px, 0.9fr) minmax(0, 1.1fr);
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 56px clamp(18px, 4vw, 48px) 80px;
+    gap: clamp(28px, 5vw, 72px);
+    align-items: start;
+  }
+  .d3 .brandline { display: flex; align-items: center; gap: 10px; margin-bottom: 34px; font-family: var(--utility); font-size: 11px; font-weight: 700; letter-spacing: 0.18em; }
+  .d3 .brandline .mark { width: 22px; height: 27px; display: grid; grid-template-rows: 1fr 1.25fr; gap: 2px; padding: 3px; border: 1.5px solid var(--ink); border-radius: 5px; transform: rotate(-2deg); }
+  .d3 .brandline .mark span { border-radius: 1px; background: var(--cold-dark); }
+  .d3 .brandline .mark span:last-child { background: var(--tape); }
+  .d3 .notes h1 { font-family: var(--display); font-size: clamp(28px, 3.2vw, 42px); line-height: 1; letter-spacing: -0.045em; }
+  .d3 .notes .sub { margin-top: 12px; color: var(--ink-soft); font-size: 14px; line-height: 1.55; max-width: 40ch; }
+  .d3 .transcript { margin-top: 30px; border-top: 2px solid var(--ink); }
+  .d3 .turn { display: grid; grid-template-columns: 42px minmax(0,1fr); gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+  .d3 .turn .no { font-family: var(--utility); font-size: 11px; font-weight: 600; color: var(--spinach); padding-top: 3px; }
+  .d3 .turn .who { display: block; font-family: var(--utility); font-size: 9px; letter-spacing: 0.14em; color: var(--ink-soft); margin-bottom: 4px; }
+  .d3 .turn p { font-size: 14px; line-height: 1.5; }
+  .d3 .turn.you { background: #fff; }
+  .d3 .ask { margin-top: 22px; }
+  .d3 .ask label { display: block; font-family: var(--utility); font-size: 10px; letter-spacing: 0.12em; color: var(--ink-soft); margin-bottom: 8px; }
+  .d3 .ask .bar { display: flex; gap: 0; border: 1.5px solid var(--ink); background: #fff; }
+  .d3 .ask .fake-input { flex: 1; padding: 12px 13px; font-size: 14px; color: #87908c; }
+  .d3 .ask button { padding: 0 16px; border: 0; border-left: 1.5px solid var(--ink); background: var(--spinach); color: #fff; font-family: var(--utility); font-size: 11px; font-weight: 700; letter-spacing: 0.08em; }
+  /* the receipt */
+  .d3 .receipt-wrap { position: sticky; top: 46px; }
+  .d3 .receipt {
+    position: relative;
+    margin: 0 auto;
+    max-width: 420px;
+    padding: 30px 26px 26px;
+    background: #fff;
+    box-shadow: 0 22px 50px rgba(23,36,33,0.16);
+    font-family: var(--utility);
+  }
+  .d3 .receipt::before, .d3 .receipt::after {
+    content: "";
+    position: absolute; left: 0; right: 0; height: 9px;
+    background: linear-gradient(135deg, #fff 5px, transparent 0) 0 0 / 10px 10px repeat-x,
+                linear-gradient(45deg, #fff 5px, transparent 0) 0 0 / 10px 10px repeat-x;
+  }
+  .d3 .receipt::before { top: -8px; transform: scaleY(-1); }
+  .d3 .receipt::after { bottom: -8px; }
+  .d3 .receipt .rhead { text-align: center; border-bottom: 2px solid var(--ink); padding-bottom: 12px; }
+  .d3 .receipt .rhead b { font-size: 15px; letter-spacing: 0.16em; }
+  .d3 .receipt .rhead small { display: block; margin-top: 5px; font-size: 10px; color: var(--ink-soft); letter-spacing: 0.08em; }
+  .d3 .rsection { margin-top: 14px; }
+  .d3 .rsection > small { display: block; padding: 8px 0 2px; font-size: 9px; font-weight: 700; letter-spacing: 0.16em; color: var(--spinach); }
+  .d3 .rrow { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; font-size: 12px; }
+  .d3 .rrow .dots { flex: 1; border-bottom: 2px dotted #c9d2cc; transform: translateY(-3px); }
+  .d3 .rrow .amt { font-weight: 600; }
+  .d3 .rrow .note { display: block; font-size: 10px; color: var(--tomato); }
+  .d3 .rrow.soon .note { color: #8a6d14; }
+  .d3 .rtotal { display: flex; align-items: baseline; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 2px dashed var(--ink); font-size: 14px; font-weight: 700; }
+  .d3 .rtotal .dots { flex: 1; border-bottom: 0; }
+  .d3 .rtotal .amt { font-size: 20px; color: var(--spinach); }
+  .d3 .rtotal .of { font-size: 10px; font-weight: 500; color: var(--ink-soft); }
+  .d3 .stamp {
+    position: absolute;
+    right: 18px; bottom: 84px;
+    transform: rotate(-8deg);
+    padding: 7px 12px;
+    border: 2.5px solid var(--tomato);
+    border-radius: 6px;
+    color: var(--tomato);
+    font-weight: 700; font-size: 12px; letter-spacing: 0.22em;
+    opacity: 0.85;
+  }
+  .d3 .stores { margin-top: 26px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .d3 .stub {
+    padding: 12px 12px 14px;
+    background: #fff;
+    border: 1px solid var(--line);
+    box-shadow: 0 8px 20px rgba(23,36,33,0.08);
+    font-family: var(--utility);
+  }
+  .d3 .stub.best { border: 1.5px solid var(--spinach); box-shadow: 0 0 0 1px var(--spinach), 0 8px 20px rgba(23,36,33,0.1); }
+  .d3 .stub small { font-size: 9px; letter-spacing: 0.08em; color: var(--ink-soft); }
+  .d3 .stub .rank { display: block; margin-bottom: 3px; font-size: 8px; font-weight: 700; letter-spacing: 0.14em; color: var(--spinach); }
+  .d3 .stub.best .rank { color: #fff; background: var(--spinach); display: inline-block; padding: 2px 5px; border-radius: 3px; }
+  .d3 .stub b { display: block; margin-top: 6px; font-size: 16px; }
+  .d3 .stub .dist { display: block; margin-top: 3px; font-size: 10px; color: var(--ink-soft); }
+  .d3 .stub .miss { display: block; margin-top: 6px; font-size: 9px; font-weight: 600; color: var(--tomato); }
+
+  /* =====================================================
+     DESIGN 4 — DORM DECK
+     Phone-frame app: dinners arrive as a deck you deal
+     from, budget is one ring, tabs along the bottom.
+     ===================================================== */
+  .d4 {
+    background:
+      radial-gradient(900px 500px at 80% -10%, rgba(159,203,209,0.35), transparent 60%),
+      var(--enamel);
+    display: grid;
+    place-items: center;
+    padding: 44px 18px;
+  }
+  .d4 .phone {
+    width: min(400px, 100%);
+    border: 2px solid var(--ink);
+    border-radius: 38px;
+    background: var(--paper);
+    box-shadow: 0 30px 70px rgba(23,36,33,0.28);
+    overflow: hidden;
+  }
+  .d4 .p-top {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 20px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .d4 .p-top .brand { display: inline-flex; align-items: center; gap: 8px; font-family: var(--display); font-weight: 800; font-size: 17px; letter-spacing: -0.03em; }
+  .d4 .p-top .mark { width: 22px; height: 27px; display: grid; grid-template-rows: 1fr 1.25fr; gap: 2px; padding: 3px; border: 2px solid var(--ink); border-radius: 6px; transform: rotate(-2deg); }
+  .d4 .p-top .mark span { border-radius: 2px; background: var(--cold-dark); }
+  .d4 .p-top .mark span:last-child { background: var(--tape); }
+  .d4 .p-top .ava { width: 30px; height: 30px; border: 0; border-radius: 50%; background: var(--ink); color: #fff; font-family: var(--utility); font-size: 9px; font-weight: 600; }
+  .d4 .p-body { padding: 20px 20px 14px; }
+  .d4 .p-eyebrow { color: var(--spinach); font-family: var(--utility); font-size: 9px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; }
+  .d4 .p-title { margin-top: 4px; font-family: var(--display); font-size: 24px; letter-spacing: -0.04em; line-height: 1; }
+  .d4 .ringrow { display: flex; align-items: center; gap: 18px; margin-top: 16px; }
+  .d4 .ring {
+    flex: 0 0 auto;
+    width: 84px; height: 84px;
+    border-radius: 50%;
+    background: conic-gradient(var(--spinach) 0 297deg, #e3e9e4 297deg 360deg);
+    display: grid; place-items: center;
+  }
+  .d4 .ring i {
+    width: 62px; height: 62px;
+    border-radius: 50%;
+    background: #fff;
+    display: grid; place-items: center;
+    font-style: normal;
+    font-family: var(--utility); font-weight: 700; font-size: 13px;
+  }
+  .d4 .ringmeta small { display: block; color: var(--ink-soft); font-size: 11px; }
+  .d4 .ringmeta b { display: block; margin-top: 2px; font-family: var(--display); font-size: 19px; letter-spacing: -0.02em; }
+  .d4 .ringmeta .left { margin-top: 6px; display: inline-block; padding: 3px 8px; border-radius: 6px; background: var(--cold); color: var(--spinach-dark); font-size: 10px; font-weight: 700; }
+  .d4 .deck { position: relative; margin-top: 18px; padding-bottom: 26px; }
+  .d4 .dcard {
+    position: relative;
+    padding: 15px 16px;
+    border: 1.5px solid var(--line);
+    border-radius: 16px;
+    background: #fff;
+  }
+  .d4 .dcard.under1 { position: absolute; top: 10px; left: 10px; right: 10px; transform: scale(0.965); transform-origin: top center; opacity: 0.55; z-index: 0; }
+  .d4 .dcard.under2 { position: absolute; top: 20px; left: 20px; right: 20px; transform: scale(0.93); transform-origin: top center; opacity: 0.28; z-index: 0; }
+  .d4 .dcard.top { position: relative; z-index: 1; box-shadow: 0 14px 30px rgba(23,36,33,0.14); }
+  .d4 .dcard .row1 { display: flex; align-items: center; justify-content: space-between; }
+  .d4 .dcard .day { font-family: var(--utility); font-size: 10px; font-weight: 700; letter-spacing: 0.12em; color: var(--spinach); }
+  .d4 .dcard .price { font-family: var(--utility); font-size: 12px; font-weight: 600; }
+  .d4 .dcard h3 { margin-top: 6px; font-family: var(--display); font-size: 18px; letter-spacing: -0.025em; }
+  .d4 .dcard .meta { margin-top: 3px; color: var(--ink-soft); font-size: 12px; }
+  .d4 .dcard .flags { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .d4 .flag { padding: 3px 8px; border-radius: 6px; font-size: 10px; font-weight: 700; }
+  .d4 .flag.soon { background: var(--tape); color: #6d5510; }
+  .d4 .flag.pantry { background: var(--cold); color: var(--spinach-dark); }
+  .d4 .swap { margin-top: 12px; width: 100%; padding: 9px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink-soft); font-size: 12px; font-weight: 700; }
+  .d4 .deck-hint { position: absolute; right: 2px; bottom: 2px; color: var(--ink-soft); font-family: var(--utility); font-size: 9px; letter-spacing: 0.1em; }
+  .d4 .composer {
+    display: flex; align-items: center; gap: 8px;
+    margin: 4px 20px 14px;
+    padding: 8px 8px 8px 14px;
+    border: 1.5px solid #bac5bf;
+    border-radius: 14px;
+    background: #fff;
+  }
+  .d4 .composer .fake-input { flex: 1; color: #87908c; font-size: 13px; }
+  .d4 .composer .send { width: 32px; height: 32px; flex: 0 0 auto; display: grid; place-items: center; border: 0; border-radius: 10px; background: var(--spinach); color: #fff; }
+  .d4 .composer .send svg { width: 15px; height: 15px; }
+  .d4 .p-tabs {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    border-top: 1px solid var(--line);
+    background: rgba(255,255,255,0.96);
+  }
+  .d4 .p-tabs button {
+    position: relative;
+    padding: 13px 4px 15px;
+    border: 0; background: transparent;
+    color: #626d68; font-size: 11px; font-weight: 700;
+  }
+  .d4 .p-tabs button.on { color: var(--spinach); }
+  .d4 .p-tabs button.on::before {
+    content: ""; position: absolute; top: 0; left: 30%; width: 40%; height: 3px;
+    border-radius: 0 0 3px 3px; background: var(--spinach);
+  }
+  .d4 .p-tabs button .n {
+    display: inline-grid; place-items: center;
+    min-width: 15px; height: 15px; margin-left: 4px; padding: 0 4px;
+    border-radius: 9px; background: var(--tape); color: var(--ink);
+    font-family: var(--utility); font-size: 8px; font-weight: 700;
+  }
+
+  /* =====================================================
+     DESIGN 5 — DINER BOARD
+     Poster typography: a tape-yellow specials band, a
+     spinach run-sheet panel, price dots. Zero rounding.
+     ===================================================== */
+  .d5 { background: var(--enamel); }
+  .d5 .frame {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr);
+    min-height: 100vh;
+  }
+  .d5 .spine {
+    display: flex; flex-direction: column; align-items: center; justify-content: space-between;
+    padding: 22px 0;
+    background: var(--spinach-dark);
+    color: #fff;
+  }
+  .d5 .spine .mark { width: 26px; height: 31px; display: grid; grid-template-rows: 1fr 1.25fr; gap: 2px; padding: 4px; border: 2px solid #fff; border-radius: 4px; transform: rotate(-2deg); }
+  .d5 .spine .mark span { background: var(--cold-dark); border-radius: 1px; }
+  .d5 .spine .mark span:last-child { background: var(--tape); }
+  .d5 .spine .vtext { writing-mode: vertical-rl; font-family: var(--utility); font-size: 11px; font-weight: 700; letter-spacing: 0.34em; text-transform: uppercase; }
+  .d5 .spine .zip { font-family: var(--utility); font-size: 10px; letter-spacing: 0.1em; opacity: 0.7; }
+  .d5 .board { min-width: 0; }
+  .d5 .specials {
+    padding: clamp(34px, 5vw, 64px) clamp(22px, 5vw, 72px) clamp(26px, 3.5vw, 44px);
+    background: var(--tape);
+    border-bottom: 3px solid var(--ink);
+  }
+  .d5 .specials .kick { font-family: var(--utility); font-size: 11px; font-weight: 700; letter-spacing: 0.22em; }
+  .d5 .specials h1 {
+    margin-top: 10px;
+    font-family: var(--poster);
+    font-weight: 400;
+    font-size: clamp(46px, 8vw, 96px);
+    line-height: 0.94;
+    letter-spacing: 0.01em;
+    text-transform: uppercase;
+  }
+  .d5 .specials h1 .hollow { color: transparent; -webkit-text-stroke: 2.5px var(--ink); }
+  .d5 .specials .sub { margin-top: 14px; font-size: 14px; font-weight: 600; max-width: 52ch; }
+  .d5 .specials .sub b { background: var(--ink); color: var(--tape); padding: 2px 7px; }
+  .d5 .menu {
+    padding: clamp(26px, 3.5vw, 44px) clamp(22px, 5vw, 72px);
+    border-bottom: 3px solid var(--ink);
+  }
+  .d5 .menu .sec { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; margin-bottom: 6px; }
+  .d5 .menu .sec h2 { font-family: var(--poster); font-weight: 400; font-size: 22px; letter-spacing: 0.04em; text-transform: uppercase; }
+  .d5 .menu .sec span { font-family: var(--utility); font-size: 10px; letter-spacing: 0.12em; color: var(--ink-soft); }
+  .d5 .mline { display: grid; grid-template-columns: 64px minmax(0,1fr) auto; gap: 14px; align-items: baseline; padding: 15px 0; border-bottom: 2px dotted #b9c3bd; }
+  .d5 .mline:last-of-type { border-bottom: 0; }
+  .d5 .mline .day { font-family: var(--utility); font-size: 11px; font-weight: 700; letter-spacing: 0.12em; color: var(--spinach); }
+  .d5 .mline h3 { font-family: var(--display); font-weight: 700; font-size: 19px; letter-spacing: -0.02em; }
+  .d5 .mline .meta { display: block; margin-top: 3px; color: var(--ink-soft); font-size: 12px; }
+  .d5 .mline .uses { color: var(--tomato); font-weight: 700; }
+  .d5 .mline .price {
+    justify-self: end;
+    display: grid; place-items: center;
+    width: 52px; height: 52px;
+    border: 2px solid var(--ink);
+    border-radius: 50%;
+    background: #fff;
+    font-family: var(--utility); font-weight: 700; font-size: 12px;
+    transform: rotate(4deg);
+  }
+  .d5 .mline .price.cheapest { background: var(--spinach); border-color: var(--spinach); color: #fff; }
+  .d5 .run {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+    gap: 0;
+  }
+  .d5 .run .list { padding: clamp(26px, 3.5vw, 44px) clamp(22px, 4vw, 56px); }
+  .d5 .run .list h2 { font-family: var(--poster); font-weight: 400; font-size: 22px; letter-spacing: 0.04em; text-transform: uppercase; }
+  .d5 .run .list .note { margin-top: 6px; color: var(--ink-soft); font-size: 13px; }
+  .d5 .rrow { display: flex; align-items: baseline; gap: 8px; padding: 9px 0; border-bottom: 2px dotted #b9c3bd; font-family: var(--utility); font-size: 12px; }
+  .d5 .rrow .dots { flex: 1; border-bottom: 2px dotted #b9c3bd; transform: translateY(-3px); }
+  .d5 .rrow.soon span:first-child::after { content: "USE FIRST"; margin-left: 8px; padding: 1px 5px; background: var(--tape); font-size: 8px; font-weight: 700; letter-spacing: 0.1em; }
+  .d5 .rtotal { display: flex; justify-content: space-between; padding-top: 14px; font-family: var(--utility); font-weight: 700; font-size: 15px; }
+  .d5 .rtotal span:last-child { color: var(--spinach); }
+  .d5 .stores { padding: clamp(26px, 3.5vw, 44px) clamp(22px, 4vw, 56px); background: var(--spinach); color: #fff; }
+  .d5 .stores .kick { font-family: var(--utility); font-size: 10px; letter-spacing: 0.18em; color: var(--cold-dark); }
+  .d5 .stores h2 { margin-top: 8px; font-family: var(--poster); font-weight: 400; font-size: 22px; letter-spacing: 0.04em; text-transform: uppercase; }
+  .d5 .store { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 0; border-bottom: 1.5px solid rgba(255,255,255,0.22); }
+  .d5 .store:last-of-type { border-bottom: 0; }
+  .d5 .store .nm { font-weight: 700; font-size: 14px; }
+  .d5 .store .nm small { display: block; margin-top: 2px; color: rgba(255,255,255,0.66); font-weight: 400; font-size: 11px; }
+  .d5 .store .pr { font-family: var(--utility); font-size: 16px; font-weight: 700; }
+  .d5 .store.best .pr { background: var(--tape); color: var(--ink); padding: 4px 9px; border-radius: 4px; }
+  .d5 .store.best .nm small b { color: var(--tape); font-weight: 700; }
+  .d5 .chatdock {
+    position: fixed;
+    z-index: 5;
+    left: 72px;
+    bottom: 0;
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px clamp(18px, 3vw, 40px);
+    border-top: 3px solid var(--ink);
+    border-right: 3px solid var(--ink);
+    background: #fff;
+  }
+  .d5 .chatdock .say { color: var(--ink-soft); font-size: 13px; }
+  .d5 .chatdock .go { padding: 10px 16px; border: 2px solid var(--ink); background: var(--ink); color: #fff; font-family: var(--utility); font-size: 11px; font-weight: 700; letter-spacing: 0.1em; }
+
+  @media (max-width: 860px) {
+    .d1 .cols { grid-template-columns: 1fr; }
+    .d1 .chat { border-right: 0; border-bottom: 1px solid var(--line); }
+    .d3 .frame { grid-template-columns: 1fr; }
+    .d3 .receipt-wrap { position: static; }
+    .d3 .stores { grid-template-columns: 1fr 1fr; }
+    .d5 .run { grid-template-columns: 1fr; }
+    .d5 .chatdock { position: static; margin: 0 0 0 72px; }
+  }
+  @media (max-width: 560px) {
+    .d2 .msg { max-width: 92%; }
+    .d3 .stores { grid-template-columns: 1fr; }
+    .d5 .mline { grid-template-columns: 44px minmax(0,1fr) auto; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition-duration: 1ms !important; animation-duration: 1ms !important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- cycle chrome -->
+<div class="mock-tag">FRIDGEFUSE MOCKS — <b id="tagName">01 · MAGNET BOARD</b></div>
+<div class="switcher" role="navigation" aria-label="Design switcher">
+  <button class="nav-arrow" id="prevBtn" aria-label="Previous design">
+    <svg width="14" height="14" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>
+  </button>
+  <div class="switcher-label">
+    <small id="tagKick">MOCK 1 OF 5</small>
+    <strong id="tagTitle">Magnet Board</strong>
+  </div>
+  <div class="dots" id="dots" aria-hidden="true"></div>
+  <button class="nav-arrow" id="nextBtn" aria-label="Next design">
+    <svg width="14" height="14" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>
+  </button>
+</div>
+
+<!-- ============ 1 · MAGNET BOARD ============ -->
+<section class="mock d1" id="m1" aria-label="Design 1: Magnet Board">
+  <div class="shell">
+    <header class="topbar">
+      <a class="brand" href="#"><span class="brand-mark"><span></span><span></span></span>FridgeFuse</a>
+      <span class="trip"><i></i>Grocery run planned · Tempe 85281</span>
+      <button class="avatar" type="button">ME</button>
+    </header>
+    <nav class="rail" aria-label="Sections">
+      <button class="on"><svg viewBox="0 0 24 24"><path d="M7 3h10M5 6h14v15H5zM8 10h8M8 14h5"/></svg><span>Plan</span></button>
+      <button><svg viewBox="0 0 24 24"><path d="M4 5h16v12H8l-4 3z"/></svg><span>Chat</span></button>
+      <button><svg viewBox="0 0 24 24"><path d="M3 5h2.2l2.3 10h9.4l2.1-7H6.4"/><circle cx="9" cy="19" r="1.4"/><circle cx="17" cy="19" r="1.4"/></svg><span>Shop</span></button>
+      <button><svg viewBox="0 0 24 24"><path d="M6 3h12v18H6zM6 9h12M15 6h.01M15 13h.01"/></svg><span>Pantry</span></button>
+    </nav>
+    <div class="cols">
+      <section class="chat" aria-label="Conversation">
+        <p class="eyebrow">Your kitchen copilot</p>
+        <h1>What are we working with?</h1>
+        <div class="thread">
+          <div class="msg user"><p>I have eggs, rice and half a bag of spinach. 3 easy dinners under $20, microwave only.</p></div>
+          <div class="msg">
+            <span class="who" aria-hidden="true">F</span>
+            <p>Done — three dinners that use the spinach before it turns. Your full-package total comes to <b>$16.46</b>, under your $20 cap. Everything runs in a microwave.</p>
+          </div>
+        </div>
+        <div class="chips">
+          <button type="button">Swap Thursday</button>
+          <button type="button">Make it vegetarian</button>
+          <button type="button">Add a snack</button>
+        </div>
+        <div class="composer">
+          <span class="fake-input">Tell me what you have, need, or want to change</span>
+          <button class="send" type="button" aria-label="Send"><svg viewBox="0 0 24 24"><path d="m5 12 14-7-5 14-2-6z"/></svg></button>
+        </div>
+      </section>
+      <section class="door" aria-label="Meal plan">
+        <div class="tape-strip">
+          <div>
+            <small>USE FIRST</small>
+            <strong>Spinach · eggs</strong>
+          </div>
+          <button type="button">Mark an item</button>
+        </div>
+        <div class="plan-head">
+          <div>
+            <p class="eyebrow">Your next few nights</p>
+            <h2>Three dinners, one run</h2>
+            <p class="sub">Full packages, priced at Tempe 85281 stores. Leftovers listed below the list.</p>
+          </div>
+          <div class="stamp"><small>CHECKOUT</small><b>$16.46</b><em>of $20 cap</em></div>
+        </div>
+        <div class="magnets">
+          <article class="magnet">
+            <span class="price">$2.10</span>
+            <p class="day">TUESDAY</p>
+            <h3>Spinach &amp; egg fried rice</h3>
+            <p class="meta">12 min · microwave · 2 servings</p>
+            <span class="uses">Uses your spinach</span>
+          </article>
+          <article class="magnet">
+            <span class="price">$3.25</span>
+            <p class="day">WEDNESDAY</p>
+            <h3>Black bean &amp; cheddar quesadilla</h3>
+            <p class="meta">9 min · microwave · 1 serving</p>
+            <span class="uses">Uses your tortillas</span>
+          </article>
+          <article class="magnet">
+            <span class="price">$2.80</span>
+            <p class="day">THURSDAY</p>
+            <h3>Peanut noodles with peas</h3>
+            <p class="meta">15 min · microwave · 2 servings</p>
+          </article>
+        </div>
+        <div class="pinned-receipt">
+          <span class="pin" aria-hidden="true"></span>
+          <h4>ONE TRIP — FRYS, UNIVERSITY DR</h4>
+          <div class="row"><span>EGGS · 1 DOZEN</span><span>$1.89</span></div>
+          <div class="row"><span>RICE · 1 LB</span><span>$1.29</span></div>
+          <div class="row"><span>TORTILLAS · 10 CT</span><span>$2.49</span></div>
+          <div class="row"><span>CHEDDAR · 8 OZ</span><span>$3.49</span></div>
+          <div class="row"><span>BLACK BEANS · CAN</span><span>$0.98</span></div>
+          <div class="row"><span>PEANUT BUTTER</span><span>$2.89</span></div>
+          <div class="row"><span>FROZEN PEAS · 10 OZ</span><span>$1.44</span></div>
+          <div class="row"><span>SOY SAUCE</span><span>$1.99</span></div>
+          <div class="row total"><span>TOTAL</span><span>$16.46</span></div>
+          <p class="tagline">MOCK TEMPE PRICES — NOT LIVE QUOTES</p>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 2 · NIGHT FRIDGE ============ -->
+<section class="mock d2" id="m2" aria-label="Design 2: Night Fridge">
+  <header class="topbar">
+    <a class="brand" href="#"><span class="brand-mark"><span></span><span></span></span>FridgeFuse</a>
+    <nav class="tabs" aria-label="Sections">
+      <button class="on" type="button">Plan</button>
+      <button type="button">Chat</button>
+      <button type="button">Shop <span class="n">8</span></button>
+      <button type="button">Pantry <span class="n">5</span></button>
+    </nav>
+    <span style="font-family:var(--utility); font-size:11px; color:#93a29b;">85281 · $20 cap</span>
+  </header>
+  <div class="wrap">
+    <div class="glow">
+      <div class="hero">
+        <p style="color:var(--cold-dark); font-family:var(--utility); font-size:10px; letter-spacing:0.16em; text-transform:uppercase;">Dorm 412 · Tuesday 9:41pm</p>
+        <h1>The fridge light is on.<br><em>What's for dinner?</em></h1>
+        <p class="sub">Say what you have and what this week looks like — messy is fine. FridgeFuse plans around what spoils first.</p>
+      </div>
+      <div class="thread">
+        <div class="msg user">eggs, rice, half a bag of spinach. 3 dinners under $20, microwave only</div>
+        <div class="msg bot">
+          <span class="k">FRIDGEFUSE</span>
+          Spinach goes first, so Tuesday and Thursday use it. Full-package total is <b style="color:var(--tape)">$16.46</b> at Aldi on Broadway — $3.54 under your cap.
+        </div>
+      </div>
+      <div class="composer">
+        <span class="fake-input">Add something, swap a night, change the budget…</span>
+        <button class="send" type="button" aria-label="Send"><svg viewBox="0 0 24 24"><path d="m5 12 14-7-5 14-2-6z"/></svg></button>
+      </div>
+    </div>
+    <div class="deck-label">
+      <span class="eyebrow">Next three nights</span>
+      <span class="budget"><b>$16.46</b> / $20.00 · Aldi — Broadway Rd</span>
+    </div>
+    <div class="cards">
+      <article class="card first">
+        <span class="day">TUE</span>
+        <div>
+          <h3>Spinach &amp; egg fried rice</h3>
+          <p class="meta">12 min · microwave</p>
+          <span class="soon">USE FIRST — SPINACH</span>
+        </div>
+        <span class="price">$2.10</span>
+      </article>
+      <article class="card">
+        <span class="day">WED</span>
+        <div>
+          <h3>Black bean &amp; cheddar quesadilla</h3>
+          <p class="meta">9 min · microwave</p>
+        </div>
+        <span class="price">$3.25</span>
+      </article>
+      <article class="card">
+        <span class="day">THU</span>
+        <div>
+          <h3>Peanut noodles with peas</h3>
+          <p class="meta">15 min · microwave</p>
+        </div>
+        <span class="price">$2.80</span>
+      </article>
+    </div>
+    <div class="runline">
+      <span class="txt">One trip covers all three nights — <b>8 items</b>, full packages only.</span>
+      <button type="button">Price the basket</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 3 · CHECKOUT RECEIPT ============ -->
+<section class="mock d3" id="m3" aria-label="Design 3: Checkout Receipt">
+  <div class="frame">
+    <div class="notes">
+      <div class="brandline"><span class="mark"><span></span><span></span></span>FRIDGEFUSE — TEMPE 85281</div>
+      <h1>Dinner, priced like a receipt.</h1>
+      <p class="sub">Everything you plan shows up on one register tape: what you already have crossed against what you buy, full packages, one cheapest store.</p>
+      <div class="transcript">
+        <div class="turn you">
+          <span class="no">NO.01</span>
+          <div><span class="who">YOU — 9:38 PM</span><p>I have eggs, rice and half a bag of spinach. 3 easy dinners under $20, microwave only.</p></div>
+        </div>
+        <div class="turn">
+          <span class="no">NO.02</span>
+          <div><span class="who">FRIDGEFUSE</span><p>Three dinners planned. Spinach is used Tuesday and Thursday so none of it turns. Total checkout: $16.46 of your $20.</p></div>
+        </div>
+      </div>
+      <div class="ask">
+        <label for="d3input">ADD TO THE ORDER</label>
+        <div class="bar">
+          <span class="fake-input" id="d3input">e.g. swap Thursday for something with beans</span>
+          <button type="button">SEND</button>
+        </div>
+      </div>
+    </div>
+    <div class="receipt-wrap">
+      <div class="receipt">
+        <div class="rhead">
+          <b>FRIDGEFUSE</b>
+          <small>MEAL RUN · TEMPE 85281 · TUE–THU</small>
+        </div>
+        <div class="rsection">
+          <small>ALREADY IN YOUR PANTRY — USED</small>
+          <div class="rrow"><span>SPINACH 1/2 BAG</span><span class="dots"></span><span class="amt">—</span></div>
+          <div class="rrow"><span>EGGS (HAVE 4)</span><span class="dots"></span><span class="amt">—</span></div>
+          <div class="rrow"><span>RICE (HAVE 2 C)</span><span class="dots"></span><span class="amt">—</span></div>
+        </div>
+        <div class="rsection">
+          <small>ONE TRIP — FULL PACKAGES</small>
+          <div class="rrow soon"><span>EGGS 1 DOZEN</span><span class="dots"></span><span class="amt">$1.89<br><span class="note">covers the 4 you lack</span></span></div>
+          <div class="rrow"><span>RICE 1 LB</span><span class="dots"></span><span class="amt">$1.29</span></div>
+          <div class="rrow"><span>TORTILLAS 10 CT</span><span class="dots"></span><span class="amt">$2.49</span></div>
+          <div class="rrow"><span>CHEDDAR 8 OZ</span><span class="dots"></span><span class="amt">$3.49</span></div>
+          <div class="rrow"><span>BLACK BEANS CAN</span><span class="dots"></span><span class="amt">$0.98</span></div>
+          <div class="rrow"><span>PEANUT BUTTER</span><span class="dots"></span><span class="amt">$2.89</span></div>
+          <div class="rrow"><span>FROZEN PEAS 10 OZ</span><span class="dots"></span><span class="amt">$1.44</span></div>
+          <div class="rrow"><span>SOY SAUCE</span><span class="dots"></span><span class="amt">$1.99</span></div>
+        </div>
+        <div class="rtotal">
+          <span>CHECKOUT</span>
+          <span class="dots"></span>
+          <span class="amt">$16.46</span>
+          <span class="of">of $20</span>
+        </div>
+        <span class="stamp">UNDER BUDGET</span>
+      </div>
+      <div class="stores">
+        <div class="stub best">
+          <span class="rank">CHEAPEST</span>
+          <small>ALDI</small>
+          <b>$15.98</b>
+          <span class="dist">1.9 mi — Broadway Rd</span>
+        </div>
+        <div class="stub">
+          <span class="rank">RUNNER-UP</span>
+          <small>FRY'S</small>
+          <b>$16.46</b>
+          <span class="dist">0.4 mi — University Dr</span>
+        </div>
+        <div class="stub">
+          <span class="rank">3RD</span>
+          <small>TRADER JOE'S</small>
+          <b>$19.87</b>
+          <span class="dist">2.1 mi — McClintock Dr</span>
+          <span class="miss">Missing 2 items</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 4 · DORM DECK ============ -->
+<section class="mock d4" id="m4" aria-label="Design 4: Dorm Deck">
+  <div class="phone">
+    <header class="p-top">
+      <a class="brand" href="#"><span class="mark"><span></span><span></span></span>FridgeFuse</a>
+      <button class="ava" type="button">ME</button>
+    </header>
+    <div class="p-body">
+      <p class="p-eyebrow">This week's plan</p>
+      <p class="p-title">Three nights, one run</p>
+      <div class="ringrow">
+        <div class="ring" role="img" aria-label="Budget: $16.46 of $20 used">
+          <i>$16<span style="font-size:9px">.46</span></i>
+        </div>
+        <div class="ringmeta">
+          <small>Checkout at Aldi — Broadway Rd</small>
+          <b>$3.54 left</b>
+          <span class="left">$20 weekly cap</span>
+        </div>
+      </div>
+      <div class="deck">
+        <article class="dcard under2" aria-hidden="true"></article>
+        <article class="dcard under1" aria-hidden="true"></article>
+        <article class="dcard top">
+          <div class="row1">
+            <span class="day">TUESDAY · DINNER 1 OF 3</span>
+            <span class="price">$2.10</span>
+          </div>
+          <h3>Spinach &amp; egg fried rice</h3>
+          <p class="meta">12 min · microwave · 2 servings</p>
+          <div class="flags">
+            <span class="flag soon">Uses spinach — use first</span>
+            <span class="flag pantry">4 items from pantry</span>
+          </div>
+          <button class="swap" type="button">Swap this dinner</button>
+        </article>
+        <span class="deck-hint">2 MORE UNDERNEATH</span>
+      </div>
+    </div>
+    <div class="composer">
+      <span class="fake-input">Tell FridgeFuse what you have…</span>
+      <button class="send" type="button" aria-label="Send"><svg viewBox="0 0 24 24"><path d="m5 12 14-7-5 14-2-6z"/></svg></button>
+    </div>
+    <nav class="p-tabs" aria-label="Sections">
+      <button class="on" type="button"><span>Plan</span></button>
+      <button type="button"><span>Chat</span></button>
+      <button type="button"><span>Shop</span><span class="n">8</span></button>
+      <button type="button"><span>Pantry</span><span class="n">5</span></button>
+    </nav>
+  </div>
+</section>
+
+<!-- ============ 5 · DINER BOARD ============ -->
+<section class="mock d5" id="m5" aria-label="Design 5: Diner Board">
+  <div class="frame">
+    <aside class="spine">
+      <span class="mark"><span></span><span></span></span>
+      <span class="vtext">Fridge Fuse · Tonight's Specials</span>
+      <span class="zip">85281</span>
+    </aside>
+    <div class="board">
+      <div class="specials">
+        <p class="kick">DORM 412 · WEEK OF SEPT 3 · MICROWAVE ONLY</p>
+        <h1>Tonight's<br><span class="hollow">Specials</span></h1>
+        <p class="sub">Three dinners from what's already in your fridge. <b>$16.46</b> checkout, <b>$3.54</b> under your cap.</p>
+      </div>
+      <div class="menu">
+        <div class="sec">
+          <h2>The Plan</h2>
+          <span>SWAP ANY NIGHT — PANTRY STAYS</span>
+        </div>
+        <div class="mline">
+          <span class="day">TUE</span>
+          <div>
+            <h3>Spinach &amp; egg fried rice</h3>
+            <span class="meta">12 min · 2 servings · <span class="uses">uses your spinach</span></span>
+          </div>
+          <span class="price">$2.10</span>
+        </div>
+        <div class="mline">
+          <span class="day">WED</span>
+          <div>
+            <h3>Black bean &amp; cheddar quesadilla</h3>
+            <span class="meta">9 min · 1 serving · uses your tortillas</span>
+          </div>
+          <span class="price">$3.25</span>
+        </div>
+        <div class="mline">
+          <span class="day">THU</span>
+          <div>
+            <h3>Peanut noodles with peas</h3>
+            <span class="meta">15 min · 2 servings</span>
+          </div>
+          <span class="price">$2.80</span>
+        </div>
+      </div>
+      <div class="run">
+        <div class="list">
+          <h2>The Run</h2>
+          <p class="note">Full packages only — leftovers listed after Thursday.</p>
+          <div class="rrow soon"><span>EGGS · 1 DOZEN</span><span class="dots"></span><span>$1.89</span></div>
+          <div class="rrow"><span>RICE · 1 LB</span><span class="dots"></span><span>$1.29</span></div>
+          <div class="rrow"><span>TORTILLAS · 10 CT</span><span class="dots"></span><span>$2.49</span></div>
+          <div class="rrow"><span>CHEDDAR · 8 OZ</span><span class="dots"></span><span>$3.49</span></div>
+          <div class="rrow"><span>BLACK BEANS · CAN</span><span class="dots"></span><span>$0.98</span></div>
+          <div class="rrow"><span>PEANUT BUTTER</span><span class="dots"></span><span>$2.89</span></div>
+          <div class="rrow"><span>FROZEN PEAS · 10 OZ</span><span class="dots"></span><span>$1.44</span></div>
+          <div class="rrow"><span>SOY SAUCE</span><span class="dots"></span><span>$1.99</span></div>
+          <div class="rtotal"><span>CHECKOUT</span><span>$16.46 / $20</span></div>
+        </div>
+        <div class="stores">
+          <p class="kick">ONE LIST, ONE CHEAPEST RUN</p>
+          <h2>Where to shop</h2>
+          <div class="store best">
+            <div class="nm">Aldi<small>Broadway Rd — 1.9 mi · <b>cheapest basket</b></small></div>
+            <span class="pr">$15.98</span>
+          </div>
+          <div class="store">
+            <div class="nm">Fry's Food Store<small>University Dr — 0.4 mi</small></div>
+            <span class="pr">$16.46</span>
+          </div>
+          <div class="store">
+            <div class="nm">Trader Joe's<small>McClintock Dr — 2.1 mi · missing 2</small></div>
+            <span class="pr">$19.87</span>
+          </div>
+        </div>
+      </div>
+      <div class="chatdock">
+        <span class="say">"Swap Thursday — anything with beans?"</span>
+        <button class="go" type="button">TELL FRIDGEFUSE →</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+  const mocks = Array.from(document.querySelectorAll(".mock"));
+  const names = [
+    ["01 · MAGNET BOARD", "Magnet Board"],
+    ["02 · NIGHT FRIDGE", "Night Fridge"],
+    ["03 · CHECKOUT RECEIPT", "Checkout Receipt"],
+    ["04 · DORM DECK", "Dorm Deck"],
+    ["05 · DINER BOARD", "Diner Board"]
+  ];
+  const dotsWrap = document.getElementById("dots");
+  mocks.forEach((_, i) => {
+    const d = document.createElement("i");
+    dotsWrap.appendChild(d);
+  });
+  const dots = Array.from(dotsWrap.children);
+  let idx = 0;
+
+  function show(i) {
+    idx = (i + mocks.length) % mocks.length;
+    mocks.forEach((m, j) => m.classList.toggle("active", j === idx));
+    dots.forEach((d, j) => d.classList.toggle("on", j === idx));
+    document.getElementById("tagName").textContent = names[idx][0];
+    document.getElementById("tagTitle").textContent = names[idx][1];
+    document.getElementById("tagKick").textContent = "MOCK " + (idx + 1) + " OF " + mocks.length;
+    window.scrollTo({ top: 0 });
+    history.replaceState(null, "", "#design" + (idx + 1));
+  }
+
+  document.getElementById("nextBtn").addEventListener("click", () => show(idx + 1));
+  document.getElementById("prevBtn").addEventListener("click", () => show(idx - 1));
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowRight" || e.key === "n") show(idx + 1);
+    if (e.key === "ArrowLeft" || e.key === "p") show(idx - 1);
+    const n = parseInt(e.key, 10);
+    if (n >= 1 && n <= mocks.length) show(n - 1);
+  });
+
+  const start = parseInt(location.hash.replace("#design", ""), 10);
+  show(Number.isInteger(start) && start >= 1 && start <= mocks.length ? start - 1 : 0);
+</script>
+</body>
+</html>

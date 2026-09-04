@@ -373,6 +373,15 @@ function parseMessage(message) {
   return { ingredients, pantryChanged, removal, urgency };
 }
 
+function isPantryOnlyRequest(message) {
+  const lower = message.toLowerCase().trim();
+  const namesPantry = /\b(?:pantry|fridge|mini[- ]fridge)\b/.test(lower);
+  const changesPantry = /\b(?:add|put|save|store|remove)\b/.test(lower);
+  const startsWithPantryAction = /^(?:(?:can|could|would) you\s+|please\s+)?(?:add|put|save|store|remove)\b/.test(lower);
+  const asksForFoodIdeas = /\b(?:plan|recipe|dinner|meal|cook|make|suggest|idea|breakfast|lunch|tonight)\b/.test(lower);
+  return (startsWithPantryAction || (namesPantry && changesPantry)) && !asksForFoodIdeas;
+}
+
 async function handleMessage(message) {
   const clean = message.trim();
   if (!clean) return;
@@ -386,6 +395,26 @@ async function handleMessage(message) {
     if (meal) addExclusion(meal.title);
   }
   const parsed = parseMessage(clean);
+
+  if (isPantryOnlyRequest(clean) && parsed.ingredients.length) {
+    const orderedIngredients = [...parsed.ingredients]
+      .sort((a, b) => mentionIndex(clean.toLowerCase(), a) - mentionIndex(clean.toLowerCase(), b));
+    const names = new Intl.ListFormat("en-US", { style: "long", type: "conjunction" })
+      .format(orderedIngredients);
+    let confirmation;
+    if (parsed.removal) {
+      confirmation = parsed.pantryChanged
+        ? `Removed ${names} from your pantry.`
+        : `${capitalize(names)} ${orderedIngredients.length === 1 ? "was" : "were"} not in your pantry.`;
+    } else {
+      confirmation = parsed.pantryChanged
+        ? `Added ${names} to your pantry.`
+        : `${capitalize(names)} ${orderedIngredients.length === 1 ? "is" : "are"} already in your pantry.`;
+    }
+    addAssistantMessage(confirmation, "Ask me to build a meal plan when you want one.");
+    setMobileView("chat");
+    return;
+  }
 
   if (!state.pantry.length && !parsed.ingredients.length) {
     addAssistantMessage(

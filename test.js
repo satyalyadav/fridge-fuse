@@ -2,6 +2,7 @@
 // Run: node test.js
 const assert = require("assert");
 const path = require("path");
+const vm = require("vm");
 const {
   cheapestPack, findPrice, extractJson, PRICES,
   DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL,
@@ -80,6 +81,38 @@ ok(html.includes("app.js") && html.includes("api/plan") === false, "index.html l
 const appJs = fs.readFileSync("public/app.js", "utf8");
 const serverSrc = fs.readFileSync("server.js", "utf8");
 const recipeSourcesJson = fs.readFileSync("data/recipe-sources.json", "utf8");
+
+async function exerciseFrontendMessage(message, parsed, pantryAfter) {
+  const normalizedAppJs = appJs.replaceAll("\r\n", "\n");
+  const handlerSource = normalizedAppJs.match(/async function handleMessage\(message\) \{[\s\S]*?\n\}\n\nasync function buildPlan/)?.[0]
+    ?.replace(/\n\nasync function buildPlan$/, "") || "";
+  const intentSource = normalizedAppJs.match(/function isPantryOnlyRequest\(message\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert(handlerSource, "could not extract handleMessage from public/app.js");
+
+  const assistantMessages = [];
+  let buildPlanCalls = 0;
+  const context = {
+    state: { pantry: [], plan: null },
+    addUserMessage() {},
+    addExclusion() {},
+    addAssistantMessage(...args) { assistantMessages.push(args); },
+    buildPlan: async () => { buildPlanCalls++; },
+    capitalize(value) { return value ? value[0].toUpperCase() + value.slice(1) : value; },
+    mentionIndex(lower, ingredient) { return lower.indexOf(ingredient); },
+    parseMessage() {
+      context.state.pantry = pantryAfter;
+      return parsed;
+    },
+    setMobileView() {},
+    $() { return { hidden: false }; }
+  };
+  vm.createContext(context);
+  if (intentSource) vm.runInContext(intentSource, context);
+  else context.isPantryOnlyRequest = () => false;
+  vm.runInContext(handlerSource, context);
+  await vm.runInContext(`handleMessage(${JSON.stringify(message)})`, context);
+  return { assistantMessages, buildPlanCalls };
+}
 ok(appJs.includes("/api/plan"), "app.js calls /api/plan");
 ok(!/catalogOnly\s*:\s*true/.test(appJs), "frontend planning requests do not bypass the text model");
 ok(!/\b(?:localPlan|RECIPES|catalogOnly|FALLBACK_PACK_PRICE|FALLBACK_STORE|estimatedLeftover)\b/.test(serverSrc), "server has no local recipe planner or demo price fallback");
@@ -390,6 +423,38 @@ const validAiPlan = {
 };
 
 async function runRouteChecks() {
+  const pantryOnly = await exerciseFrontendMessage(
+    "can you add rice and potatoes to my pantry",
+    { ingredients: ["potatoes", "rice"], pantryChanged: true, removal: false, urgency: false },
+    [{ name: "potatoes" }, { name: "rice" }]
+  );
+  ok(
+    pantryOnly.buildPlanCalls === 0 &&
+      pantryOnly.assistantMessages[0]?.[0] === "Added rice and potatoes to your pantry.",
+    "a pantry-only chat command confirms the update without requesting a meal plan"
+  );
+
+  const shorthandPantryAdd = await exerciseFrontendMessage(
+    "add milk",
+    { ingredients: ["milk"], pantryChanged: true, removal: false, urgency: false },
+    [{ name: "milk" }]
+  );
+  ok(
+    shorthandPantryAdd.buildPlanCalls === 0 &&
+      shorthandPantryAdd.assistantMessages[0]?.[0] === "Added milk to your pantry.",
+    "a shorthand add command confirms the pantry update without requesting a meal plan"
+  );
+
+  const pantryAndPlan = await exerciseFrontendMessage(
+    "add rice to my pantry and build a dinner plan",
+    { ingredients: ["rice"], pantryChanged: true, removal: false, urgency: false },
+    [{ name: "rice" }]
+  );
+  ok(
+    pantryAndPlan.buildPlanCalls === 1 && pantryAndPlan.assistantMessages.length === 0,
+    "a combined pantry and planning request still requests a meal plan"
+  );
+
   const request = {
     pantry: ["spinach", "rice", "eggs"],
     useSoon: ["spinach"],
