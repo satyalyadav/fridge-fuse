@@ -15,78 +15,6 @@
 <body>
   <a class="skip-link" href="#chatInput">Skip to conversation</a>
 
-  <div class="welcome" id="welcomeScreen" role="dialog" aria-modal="true" aria-labelledby="welcomeTitle" hidden>
-    <div class="welcome-card">
-      <aside class="welcome-hero">
-        <div class="welcome-brand">
-          <img class="welcome-logo" src="/logo-lockup-light.png" alt="FridgeFuse — snap, shop, cook" width="560" height="564">
-        </div>
-
-        <div class="welcome-hero-copy">
-          <p class="eyebrow light" id="welcomeKicker">Let's set up your kitchen</p>
-          <h1 id="welcomeTitle">Dinner that fits your room, your rules, and your budget.</h1>
-          <p id="welcomeSubtitle">Two minutes here means every plan after this already knows what you can cook and what you cannot eat.</p>
-        </div>
-
-        <!-- Live feedback: the whole point of the form, made visible. Describes
-             the cooking style a choice unlocks rather than a recipe count —
-             planning is fully AI-driven, so there is no fixed list to count. -->
-        <div class="kitchen-note" id="welcomeKitchenNote" aria-live="polite">
-          <p>Pick your equipment to see what kind of meals you'll get.</p>
-        </div>
-
-        <p class="welcome-privacy">Saved on this device only. Nothing is uploaded.</p>
-      </aside>
-
-      <div class="welcome-main">
-        <ol class="welcome-progress" id="welcomeProgress" aria-label="Setup progress"></ol>
-
-        <form class="welcome-form" id="welcomeForm">
-          <section class="welcome-step" data-step="identity" hidden>
-            <h2>First, who are we cooking for?</h2>
-            <p class="step-intro">Your name personalises the app. Prices and store distances are Tempe (85281) — FridgeFuse is built for ASU students in the Phoenix metro.</p>
-
-            <label class="field">
-              <span class="field-label">Your name</span>
-              <input id="welcomeName" type="text" maxlength="40" autocomplete="given-name" placeholder="e.g. Uzair">
-            </label>
-          </section>
-
-          <section class="welcome-step" data-step="kitchen" hidden>
-            <h2>What can you actually cook with?</h2>
-            <p class="step-intro">Pick everything you have. Every recipe you are shown will only use these.</p>
-            <div class="option-grid" id="equipmentOptions" role="group" aria-label="Cooking equipment"></div>
-            <p class="step-error" id="equipmentError" hidden>Choose at least one so there is something to cook with.</p>
-          </section>
-
-          <section class="welcome-step" data-step="food" hidden>
-            <h2>Anything you cannot eat?</h2>
-            <p class="step-intro">Skip this if nothing applies. You can change it any time from your profile.</p>
-            <div class="diet-groups" id="dietOptions"></div>
-            <p class="disclaimer" id="dietDisclaimer"></p>
-
-            <!-- How many dinners and how long each takes change on every
-                 request, so those live in the chat, not here — asking again
-                 in the profile would just be a second, staler copy. -->
-            <div class="field-row">
-              <label class="field">
-                <span class="field-label">Budget per plan <output id="welcomeBudgetValue">$20</output></span>
-                <input id="welcomeBudget" type="range" min="5" max="100" step="1" value="20">
-              </label>
-            </div>
-          </section>
-        </form>
-
-        <footer class="welcome-actions">
-          <button type="button" class="ghost-button" id="welcomeBack" hidden>Back</button>
-          <span class="welcome-spacer"></span>
-          <button type="button" class="link-button" id="welcomeSkip">Skip for now</button>
-          <button type="button" class="primary-button" id="welcomeNext">Continue</button>
-        </footer>
-      </div>
-    </div>
-  </div>
-
   <div class="app-shell">
     <header class="topbar">
       <a class="brand" href="./" aria-label="FridgeFuse home">
@@ -112,6 +40,15 @@
 
     <aside class="sidebar" id="sidebar" aria-label="Pantry and shopping">
       <div class="sidebar-scroll">
+        <div class="kitchen-summary">
+          <dl>
+            <div><dt>Cooking with</dt><dd id="summaryEquipment">microwave</dd></div>
+            <div><dt>Avoiding</dt><dd id="summaryDiet">nothing yet</dd></div>
+            <div><dt>Budget</dt><dd id="summaryBudget">$20</dd></div>
+          </dl>
+          <button class="edit-preferences" id="editPreferencesButton" type="button">Edit kitchen &amp; diet</button>
+        </div>
+
         <section class="side-section" id="pantryDrawer" aria-labelledby="pantryTitle">
           <div class="side-header">
             <div>

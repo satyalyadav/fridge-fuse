@@ -484,7 +484,7 @@ ok(tight.widenedSearch && tight.options.length > 0, "an over-tight radius widens
 const near = optimizeCart({ items: ["eggs"], ...campus, maxDistanceMi: 2 });
 ok(near.options.length < BRANCHES.length && near.options.every((o) => o.distanceMi <= 2), "the distance filter excludes far branches");
 
-// ---------- preference catalogs + onboarding ----------
+// ---------- preference catalogs ----------
 const catalogNames = new Set(PRICES.items.map((item) => item.name));
 
 ok(DIET_OPTIONS.length >= 15, `diet catalog offers ${DIET_OPTIONS.length} options`);
@@ -549,20 +549,22 @@ ok(parseDietSelections("").length === 0 && parseDietSelections(null).length === 
 ok(blockedIngredientsForDiet("vegan").has("eggs") && !blockedIngredientsForDiet("vegetarian").has("eggs"), "vegan restricts more than vegetarian");
 ok(blockedIngredientsForDiet("egg allergy").has("eggs"), "an allergy blocks its ingredient");
 
-// Onboarding wiring: a one-time wizard, not a recurring login screen.
-ok(html.includes('id="welcomeScreen"'), "the welcome screen exists");
-ok(html.includes('data-step="identity"') && html.includes('data-step="kitchen"') && html.includes('data-step="food"'), "the wizard has its three steps");
-ok(/onboarded:\s*false/.test(appJs), "onboarding defaults to not-yet-done");
-ok(appJs.includes("if (needsOnboarding()) openWelcome();"), "the wizard only opens once — never on a return visit");
-ok(
-  appJs.includes('welcomeSteps = ["identity", "kitchen", "food"];') &&
-    !/\["kitchen",\s*"food"\]/.test(appJs),
-  "the wizard always has all three steps; there is no shortened returning-visit mode"
-);
+// There is no setup screen: the app opens straight into the working screen and
+// every preference the wizard used to ask for is reachable from the profile.
+ok(!/welcome|onboard/i.test(html), "no welcome or onboarding screen is in the markup");
+ok(!/welcome|onboard/i.test(appJs), "no welcome or onboarding code is left in the client");
+ok(html.includes('id="profileDrawer"') && html.includes('id="profileForm"'), "the profile drawer is the one place preferences live");
+// The wizard was where a student learned these settings existed, so with it gone
+// the current ones are on the working screen with a way to change them.
+ok(/id="summaryEquipment"/.test(html) && /id="summaryDiet"/.test(html) && /id="summaryBudget"/.test(html), "the rail shows the equipment, diet and budget in force");
+ok(/id="editPreferencesButton"/.test(html) && /editPreferencesButton"\)\.addEventListener\("click", openProfile\)/.test(appJs), "that summary opens the profile to change them");
+ok(/summaryEquipment"\)\.textContent/.test(appJs) && /renderProfile/.test(appJs), "the summary is rendered from live state, not hardcoded");
+for (const control of ["profileName", "profileEquipmentOptions", "profileDietOptions", "profileBudget"]) {
+  ok(html.includes(`id="${control}"`), `the profile still collects ${control}`);
+}
 ok(appJs.includes("/api/preferences"), "the form renders from the server catalog");
-// Dinners and minutes-per-meal change per request, so the chat parses them
-// (already true before this feature) and the profile must not duplicate them.
-ok(!html.includes('id="welcomeDinners"') && !html.includes('id="welcomeMaxTime"'), "the wizard does not ask for dinners or minutes per meal");
+// Dinners and minutes-per-meal change per request, so the chat parses them and
+// the profile must not duplicate them.
 ok(!html.includes('id="profileDinners"') && !html.includes('id="profileMaxTime"'), "the profile drawer does not ask for dinners or minutes per meal");
 ok(/if\s*\(dinners\)\s*state\.constraints\.dinners/.test(appJs) && /if\s*\(time\)\s*state\.constraints\.maxTimeMin/.test(appJs), "the chat parser still sets dinners and minutes per meal per request");
 // The live note is qualitative text derived from PREFERENCES, not a fabricated count.
@@ -620,7 +622,7 @@ async function runGeoConsentChecks() {
 // FridgeFuse is for ASU students in the Phoenix metro, so there is no ZIP to
 // ask for: distances run from the catalog origin unless a live fix is shared.
 ok(!/postalCode|welcomeZip|profilePostalCode|useProfileZipButton/.test(appJs), "the client asks for no ZIP code");
-ok(!/ZIP code/i.test(html), "the profile and onboarding forms have no ZIP field");
+ok(!/ZIP code/i.test(html), "the profile form has no ZIP field");
 ok(!/geo\/postal/.test(appJs) && !/geo\/postal/.test(serverSrc), "the postal lookup endpoint is gone with its only caller");
 ok(/allowPlaceLookup:\s*null/.test(appJs), "the client defaults to never sending coordinates");
 ok(html.includes('id="lookupConsent"'), "the consent disclaimer exists in the markup");
@@ -676,7 +678,7 @@ for (const asset of ["logo-source.jpg", "logo-mark.png", "logo-mark-gold.png",
 // The gold mark sits on the maroon bar and the cream lockup on the maroon hero:
 // using either the wrong way round would put maroon on maroon.
 ok(/<img class="brand-mark" src="\/logo-mark-gold\.png"/.test(html), "the top bar carries the gold mark");
-ok(/<img class="welcome-logo" src="\/logo-lockup-light\.png"/.test(html), "the maroon hero carries the cream lockup");
+ok(/<img class="brand-mark" src="\/logo-mark-gold\.png"/.test(html), "the top bar carries the gold mark");
 ok(/rel="icon"[^>]*favicon-32\.png/.test(html) && /apple-touch-icon\.png/.test(html), "the tab and home-screen icons are declared");
 ok(/theme-color" content="#8c1d40"/i.test(html), "the browser chrome matches the maroon bar");
 // Every derived asset comes from one drawing, so they cannot drift apart.
