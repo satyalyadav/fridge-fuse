@@ -43,17 +43,11 @@
         <form class="welcome-form" id="welcomeForm">
           <section class="welcome-step" data-step="identity" hidden>
             <h2>First, who are we cooking for?</h2>
-            <p class="step-intro">Your name personalises the app. The ZIP decides which store prices and distances you see.</p>
+            <p class="step-intro">Your name personalises the app. Prices and store distances are Tempe (85281) — FridgeFuse is built for ASU students in the Phoenix metro.</p>
 
             <label class="field">
               <span class="field-label">Your name</span>
               <input id="welcomeName" type="text" maxlength="40" autocomplete="given-name" placeholder="e.g. Uzair">
-            </label>
-
-            <label class="field">
-              <span class="field-label">ZIP code <span class="field-optional">optional</span></span>
-              <input id="welcomeZip" type="text" inputmode="numeric" autocomplete="postal-code" maxlength="5" pattern="[0-9]{5}" placeholder="85281">
-              <small class="field-help">Prices are grounded in <strong>85281</strong> (Tempe) for now. Other ZIPs still work for distances.</small>
             </label>
           </section>
 
@@ -262,7 +256,6 @@
               <small id="locationDetail" hidden></small>
             </div>
             <div class="location-actions">
-              <button id="useProfileZipButton" type="button" hidden></button>
               <button id="useLocationButton" type="button">Use my location</button>
             </div>
           </div>
@@ -427,21 +420,6 @@
             <p class="disclaimer" id="profileDietDisclaimer"></p>
           </fieldset>
 
-          <label class="profile-field">
-            <span>ZIP code <small>optional</small></span>
-            <input
-              id="profilePostalCode"
-              type="text"
-              inputmode="numeric"
-              autocomplete="postal-code"
-              maxlength="5"
-              pattern="[0-9]{5}"
-              placeholder="85281"
-            >
-            <small>
-              Optional — saved on this device for future nearby-store recommendations.
-            </small>
-          </label>
 
           <div class="profile-actions">
             <button type="button" class="secondary-button" data-close-profile>
