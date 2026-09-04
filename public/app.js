@@ -1744,12 +1744,16 @@ document.querySelectorAll("[data-view]").forEach((button) => {
   });
 });
 
-$("resetDemoButton").addEventListener("click", () => {
-  if (!window.confirm("Clear the saved pantry and current plan?")) return;
-  state = structuredClone(DEFAULT_STATE);
+function resetDemo() {
+  const warning = "Reset the demo? This clears your profile, pantry, meal plan, chat history, Shop list, and saved location.";
+  if (!window.confirm(warning)) return;
+  state = clone(DEFAULT_STATE);
   saveState();
   window.location.reload();
-});
+}
+
+$("resetDemoButton").addEventListener("click", resetDemo);
+$("resetMobileButton").addEventListener("click", resetDemo);
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {

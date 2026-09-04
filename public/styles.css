@@ -135,8 +135,16 @@ a:focus-visible {
 }
 .trip-status.ready .trip-dot { background: var(--spinach); }
 
-.avatar-button {
+.topbar-actions {
   justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+button.mobile-reset-button { display: none; }
+
+.avatar-button {
   width: 36px;
   height: 36px;
   border: 0;
@@ -1526,6 +1534,11 @@ body[data-welcome-open="true"] { overflow: hidden; }
   .trip-status, .desktop-nav { display: none; }
   .brand { font-size: 19px; }
   .brand-mark { width: 25px; height: 31px; }
+  button.mobile-reset-button {
+    width: 36px;
+    height: 36px;
+    display: grid;
+  }
   .workspace { display: block; }
   .conversation-panel, .plan-panel {
     min-height: calc(100vh - 130px);
