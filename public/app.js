@@ -772,6 +772,8 @@ function renderPantry() {
   $("mobilePantryCount").textContent = state.pantry.length;
   const soon = state.pantry.filter((item) => item.soon);
   $("useFirstText").textContent = soon.length ? soon.map((item) => titleCase(item.name)).join(" · ") : "Nothing marked yet";
+  // Gold is for something to act on, not for an empty list.
+  document.querySelector(".use-first-strip")?.classList.toggle("is-empty", soon.length === 0);
   $("markUseSoonButton").textContent = soon.length ? "Edit" : "Mark what to use first";
 
   if (!state.pantry.length) {
@@ -964,9 +966,10 @@ function renderProfile() {
   // The wizard used to be where a student learned they could set these. With it
   // gone, the settings have to be visible on the working screen instead of
   // hidden behind an avatar.
-  $("summaryEquipment").textContent = state.constraints.equipment.join(", ") || "not set";
-  $("summaryDiet").textContent = state.constraints.diet || "nothing yet";
-  $("summaryBudget").textContent = formatMoney(state.constraints.budget);
+  $("summaryEquipment").textContent = state.constraints.equipment.join(", ") || "no equipment set";
+  $("summaryDiet").textContent = state.constraints.diet || "eats anything";
+  const budget = Number(state.constraints.budget) || 0;
+  $("summaryBudget").textContent = Number.isInteger(budget) ? `$${budget}` : formatMoney(budget);
 
   $("profileButton").textContent = profileInitials(name);
   $("profileButton").setAttribute(
