@@ -1352,7 +1352,7 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
   const content = out.data?.choices?.[0]?.message?.content;
   try {
     const plan = groundShoppingPlan(assertPlanRespectsDiet(parseAiPlan(content, expectedDinners), dietRules));
-    return res.json({ ok: true, model: AIR_MODEL, diet: safeDiet, dietRules: dietRules.map((rule) => rule.id), ...plan });
+    return res.json({ ok: true, model: AIR_MODEL, diet: safeDiet, dietRules: dietRules.map((rule) => rule.id), offLimitsPantry, ...plan });
   } catch (initialError) {
     const repaired = await repairAiPlan(chat, content, expectedDinners, initialError, `${planningMessages[1].content}\n\nPrice catalog:\n${priceCtx}${dietCtx ? `\n\nDietary restrictions (absolute):\n${dietCtx}` : ""}`);
     if (!repaired.ok) {
@@ -1365,7 +1365,7 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
     try {
       const repairedContent = repaired.data?.choices?.[0]?.message?.content;
       const plan = groundShoppingPlan(assertPlanRespectsDiet(parseAiPlan(repairedContent, expectedDinners), dietRules));
-      return res.json({ ok: true, model: AIR_MODEL, repaired: true, diet: safeDiet, dietRules: dietRules.map((rule) => rule.id), ...plan });
+      return res.json({ ok: true, model: AIR_MODEL, repaired: true, diet: safeDiet, dietRules: dietRules.map((rule) => rule.id), offLimitsPantry, ...plan });
     } catch (repairError) {
       const failure = reportFailure("asu-air", "plan-repair", {
         status: "parse-error",

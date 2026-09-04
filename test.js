@@ -667,6 +667,9 @@ for (const term of PROFILE_EXTRA_DIET_TERMS_SOURCE) {
   ok(resolveDietRules(term).length > 0, `chat-only diet term "${term}" resolves to an enforceable rule`);
 }
 ok(/Kept \$\{dietSummary\}/.test(appJs), "the plan header names the restrictions it was held to");
+ok(/offLimitsPantry/.test(appJs) && /I left \$\{offLimits\.join/.test(appJs), "the planner tells the student which pantry items it left out");
+ok(/off-limits/.test(appJs) && /does not fit/.test(appJs), "the pantry marks an item the current diet rules out");
+ok(fs.readFileSync("public/styles.css", "utf8").includes(".pantry-item.off-limits"), "an off-limits pantry item is styled as excluded");
 ok(/failure\?\.message/.test(buildPlanSource), "the planner surfaces the server's refusal reason, not just a status code");
 
 function aiEnvelope(plan) {
@@ -975,6 +978,28 @@ async function runRouteChecks() {
   ok(
     celiacBlocked.statusCode === 502 && /gluten/.test(celiacBlocked.payload.failure?.message || ""),
     "wheat pasta in a celiac plan is rejected by the catalog tag, naming gluten"
+  );
+
+  // A celiac who says "I have pasta" must be told their pasta was left out,
+  // not left to wonder whether the planner noticed it at all.
+  const celiacPantry = { ...request, pantry: ["pasta", "eggs", "rice"], useSoon: [], diet: "celiac" };
+  const celiacSafe = await callPlan(celiacPantry, async () => aiEnvelope({
+    ...validAiPlan,
+    dinners: validAiPlan.dinners.map((dinner) => ({
+      ...dinner,
+      usesPantry: ["rice", "eggs"],
+      needs: [{ item: "marinara", amount: 8, unit: "oz" }],
+      steps: ["Microwave the rice and eggs, then warm the marinara over them."]
+    }))
+  }));
+  ok(celiacSafe.statusCode === 200 && celiacSafe.payload.ok, "a celiac plan built around the safe pantry items succeeds");
+  ok(
+    celiacSafe.payload.offLimitsPantry.join(",") === "pasta",
+    `the plan names the pantry item it could not cook with (${JSON.stringify(celiacSafe.payload.offLimitsPantry)})`
+  );
+  ok(
+    !celiacSafe.payload.dinners.some((dinner) => dinner.usesPantry.includes("pasta")),
+    "wheat pasta in a celiac's pantry is never cooked"
   );
 
   const dairyInNeeds = {

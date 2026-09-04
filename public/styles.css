@@ -1647,3 +1647,13 @@ body[data-welcome-open="true"] { overflow: hidden; }
     transition-duration: 1ms !important;
   }
 }
+
+/* A pantry item the current diet rules out: kept, visibly not used. */
+.pantry-item.off-limits {
+  opacity: 0.72;
+  border-left: 3px solid var(--warning, #b45309);
+}
+.pantry-item.off-limits strong {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
