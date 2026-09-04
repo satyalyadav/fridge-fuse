@@ -334,6 +334,52 @@ if (ingredientMentionsSource && ingredientConfigSource) {
   );
 }
 
+const planningFailureCopySource = appJs.replaceAll("\r\n", "\n")
+  .match(/function planningFailureCopy\(context\) \{[\s\S]*?\n\}/)?.[0] || "";
+ok(Boolean(planningFailureCopySource), "the frontend has persistent copy for distinct planning failure types");
+if (planningFailureCopySource) {
+  const failureContext = {};
+  vm.createContext(failureContext);
+  vm.runInContext(`${planningFailureCopySource}\nthis.testPlanningFailureCopy = planningFailureCopy;`, failureContext);
+  const apiFailure = failureContext.testPlanningFailureCopy({
+    responseReceived: true,
+    httpStatus: 502,
+    failure: { provider: "asu-air", operation: "chat", status: "timeout" }
+  });
+  const rejectedResponse = failureContext.testPlanningFailureCopy({
+    responseReceived: true,
+    httpStatus: 502,
+    failure: { provider: "asu-air", operation: "plan-repair", status: "parse-error" }
+  });
+  const connectionFailure = failureContext.testPlanningFailureCopy({ responseReceived: false });
+  const serverFailure = failureContext.testPlanningFailureCopy({ responseReceived: true, httpStatus: 500 });
+  const displayFailure = failureContext.testPlanningFailureCopy({
+    responseReceived: true,
+    responseAccepted: true,
+    httpStatus: 200
+  });
+  ok(
+    apiFailure.title === "ASU AI API failure" && /timed out/i.test(apiFailure.detail),
+    "an upstream timeout is labeled as an ASU AI API failure"
+  );
+  ok(
+    rejectedResponse.title === "AI recipe response rejected" && /mismatched or unsafe recipe/i.test(rejectedResponse.detail),
+    "an invalid model response is distinguished from an API failure"
+  );
+  ok(
+    connectionFailure.title === "FridgeFuse connection failure" && /server/i.test(connectionFailure.detail),
+    "a browser-to-app connection failure is labeled separately"
+  );
+  ok(
+    serverFailure.title === "FridgeFuse server failure" && /HTTP 500/.test(serverFailure.detail),
+    "an app server failure is labeled separately from ASU AI"
+  );
+  ok(
+    displayFailure.title === "FridgeFuse display failure" && /plan arrived/i.test(displayFailure.detail),
+    "a client rendering failure does not blame the API or app server"
+  );
+}
+
 async function exerciseFrontendMessage(message, parsed, pantryAfter) {
   const normalizedAppJs = appJs.replaceAll("\r\n", "\n");
   const handlerSource = normalizedAppJs.match(/async function handleMessage\(message\) \{[\s\S]*?\n\}\n\nasync function buildPlan/)?.[0]
@@ -407,6 +453,20 @@ const groceryRefresh = buildPlanSource.indexOf("renderGroceryList();");
 ok(
   planAssignment !== -1 && groceryRefresh > planAssignment,
   "building a plan refreshes the Shop meal-plan button after assigning the plan"
+);
+ok(
+  /planningFailureCopy\(\{[\s\S]*failure:\s*serverFailure[\s\S]*responseReceived[\s\S]*httpStatus/.test(buildPlanSource),
+  "the plan request passes response evidence into the persistent failure message"
+);
+ok(
+  appJs.includes('addAssistantMessage(copy.title, copy.detail, { tone: "error" })') &&
+    appJs.includes('tone === "error" ? " error-message" : ""') &&
+    appJs.includes('tone: entry.tone'),
+  "planning failures render and remain visibly marked as errors"
+);
+ok(
+  fs.readFileSync("public/styles.css", "utf8").includes(".error-message .message-copy"),
+  "persistent planning failures have a distinct visual treatment"
 );
 const photoInputTag = html.match(/<input[^>]*id="photoInput"[^>]*>/)?.[0] || "";
 ok(
@@ -1018,6 +1078,23 @@ async function runRouteChecks() {
     "dinner cards use the cited recipe's verified equipment"
   );
 
+  const falsePantryOwnership = {
+    ...validAiPlan,
+    dinners: validAiPlan.dinners.map((dinner) => ({
+      ...dinner,
+      usesPantry: [...dinner.usesPantry, "butter"],
+      needs: []
+    }))
+  };
+  const pantryOwnedByUser = await callPlan(request, async () => aiEnvelope(falsePantryOwnership));
+  ok(
+    pantryOwnedByUser.statusCode === 200 && pantryOwnedByUser.payload.ok &&
+      pantryOwnedByUser.payload.dinners[0].usesPantry.join(",") === "spinach,rice,eggs" &&
+      pantryOwnedByUser.payload.dinners[0].needs.map((need) => typeof need === "string" ? need : need.item).join(",") === "butter" &&
+      pantryOwnedByUser.payload.shoppingList.map((need) => need.item).join(",") === "butter",
+    "the server moves a missing ingredient out of usesPantry and into the shopping needs"
+  );
+
   const unrelatedPotatoAdaptation = {
     dinners: [{
       title: "Microwave Scrambled Eggs with Rice",
@@ -1044,6 +1121,70 @@ async function runRouteChecks() {
     "an egg-and-rice dinner cannot retain the Microwave Potato citation"
   );
 
+  const unrelatedPantryQuesadilla = {
+    dinners: [{
+      title: "Everything-in-the-pantry quesadilla",
+      sourceRecipe: "Peanut Butter Banana Quesadillas",
+      source: "Budget Bytes",
+      sourceUrl: "https://www.budgetbytes.com/peanut-butter-banana-quesadillas/",
+      adaptationNote: "Use the available pantry ingredients.",
+      timeMin: 10,
+      servings: 1,
+      usesPantry: ["rice", "black beans", "potatoes", "butter", "cheddar"],
+      needs: [{ item: "tortillas", amount: 1, unit: "each" }],
+      steps: ["Put the pantry ingredients in a tortilla and toast it."],
+    }],
+    notes: ""
+  };
+  let cleanRepairCalls = 0;
+  let cleanRepairPrompt = "";
+  const cleanRepair = await callPlan(request, async (messages) => {
+    cleanRepairCalls++;
+    if (cleanRepairCalls === 2) cleanRepairPrompt = messages.map((message) => String(message.content)).join("\n");
+    return aiEnvelope(cleanRepairCalls === 1 ? unrelatedPantryQuesadilla : validAiPlan);
+  });
+  ok(
+    cleanRepairCalls === 2 && cleanRepair.payload.ok && cleanRepair.payload.repaired === true,
+    "an unrelated pantry mixture cannot retain the peanut-butter-banana quesadilla citation"
+  );
+  ok(
+    !cleanRepairPrompt.includes("Everything-in-the-pantry quesadilla") &&
+      /start (?:a new plan|over)/i.test(cleanRepairPrompt) && /adaptations? (?:are|is) not allowed/i.test(cleanRepairPrompt),
+    "recipe repair starts fresh with an exact recipe instead of anchoring on the rejected meal"
+  );
+
+  const duplicatePantryNeed = {
+    dinners: [{
+      title: "Microwave Potato",
+      sourceRecipe: "Microwave Potato",
+      source: "Food Network",
+      sourceUrl: "https://www.foodnetwork.com/recipes/food-network-kitchen/microwave-potato-10076489",
+      adaptationNote: "",
+      timeMin: 10,
+      servings: 1,
+      usesPantry: ["potatoes"],
+      needs: [
+        { item: "potatoes", amount: 1, unit: "each" },
+        { item: "olive oil", amount: 1, unit: "tbsp" },
+        { item: "butter", amount: 1, unit: "tbsp" }
+      ],
+      steps: ["Pierce and oil the potato, microwave until tender, then split and add butter."]
+    }],
+    notes: ""
+  };
+  let duplicateNeedCalls = 0;
+  const duplicateNeedRepair = await callPlan({ ...request, pantry: ["potatoes", "butter"] }, async () => {
+    duplicateNeedCalls++;
+    return aiEnvelope(duplicatePantryNeed);
+  });
+  ok(
+    duplicateNeedCalls === 2 && duplicateNeedRepair.payload.ok && duplicateNeedRepair.payload.repaired === true &&
+      duplicateNeedRepair.payload.dinners[0].usesPantry.join(",") === "potatoes,butter" &&
+      duplicateNeedRepair.payload.dinners[0].needs.map((need) => typeof need === "string" ? need : need.item).join(",") === "olive oil" &&
+      duplicateNeedRepair.payload.shoppingList.map((need) => need.item).join(",") === "olive oil",
+    "repair reconciles pantry and shopping fields to the cited recipe without duplicates"
+  );
+
   const implausiblyFastPotato = {
     dinners: [{
       title: "Microwave Potato",
@@ -1068,9 +1209,9 @@ async function runRouteChecks() {
     return aiEnvelope(implausiblyFastPotato);
   });
   ok(
-    timeValidationCalls === 2 && timeRejected.statusCode === 502 &&
-      /not credible/.test(timeRejected.payload.failure?.message || ""),
-    "a cited recipe cannot claim an implausibly shorter cooking time"
+    timeValidationCalls === 2 && timeRejected.statusCode === 200 && timeRejected.payload.repaired === true &&
+      timeRejected.payload.dinners[0].timeMin === 10,
+    "a cited recipe's implausible time is repaired to its verified time"
   );
 
   const tooSlowForRequest = {
@@ -1160,17 +1301,23 @@ async function runRouteChecks() {
     return aiEnvelope(unpricedAiPlan);
   });
   ok(
-    unpricedCalls === 2 && unpriced.statusCode === 502 && unpriced.payload.ok === false && /price catalog/.test(unpriced.payload.failure?.message || ""),
-    "AI plans with unpriced ingredients fail instead of using an estimated price"
+    unpricedCalls === 2 && unpriced.statusCode === 200 && unpriced.payload.repaired === true &&
+      !unpriced.payload.shoppingList.some((item) => item.item === "unobtainium"),
+    "repair removes an unpriced ingredient that is not part of the cited recipe"
   );
 
   // The model's own shoppingList/leftovers/totalCost are ignored: the server owns
   // the package arithmetic, so an invented number cannot reach the student.
-  const inventedNumbers = await callPlan({ ...request, dinners: 1 }, async () => aiEnvelope({
+  const inventedNumbers = await callPlan({
+    ...request,
+    dinners: 1,
+    pantry: request.pantry.filter((item) => item !== "eggs")
+  }, async () => aiEnvelope({
     ...validAiPlan,
     dinners: validAiPlan.dinners.map((dinner) => ({
       ...dinner,
       servings: 6,
+      usesPantry: dinner.usesPantry.filter((item) => item !== "eggs"),
       needs: [{ item: "eggs", amount: 18, unit: "each" }]
     })),
     shoppingList: [{ item: "eggs", pack: "free eggs", packPrice: 0.01, store: "nowhere", qty: 1 }],
@@ -1215,9 +1362,16 @@ async function runRouteChecks() {
 
   // A cup of rice is now the catalog's own stated weight; a cup of something
   // that states nothing still buys the package rather than guessing.
-  const cookingUnits = await callPlan(request, async () => aiEnvelope({
+  const cookingUnits = await callPlan({
+    ...request,
+    pantry: request.pantry.filter((item) => item !== "rice")
+  }, async () => aiEnvelope({
     ...validAiPlan,
-    dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "rice", amount: 1, unit: "cup" }] }))
+    dinners: validAiPlan.dinners.map((dinner) => ({
+      ...dinner,
+      usesPantry: dinner.usesPantry.filter((item) => item !== "rice"),
+      needs: [{ item: "rice", amount: 1, unit: "cup" }]
+    }))
   }));
   ok(
     cookingUnits.statusCode === 200 && !cookingUnits.payload.shoppingList[0].assumedWholePackage &&
@@ -1320,18 +1474,27 @@ async function runRouteChecks() {
 
   // End to end: the model's implausible amount gets one correction attempt.
   let bandCalls = 0;
-  const bandFixed = await callPlan(request, async (messages) => {
+  const amountRequest = { ...request, pantry: ["rice", "eggs"] };
+  const bandFixed = await callPlan(amountRequest, async (messages) => {
     bandCalls++;
     if (bandCalls === 1) {
       return aiEnvelope({
         ...validAiPlan,
-        dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "spinach", amount: 40, unit: "oz" }] }))
+        dinners: validAiPlan.dinners.map((dinner) => ({
+          ...dinner,
+          usesPantry: dinner.usesPantry.filter((item) => item !== "spinach"),
+          needs: [{ item: "spinach", amount: 40, unit: "oz" }, { item: "butter", amount: 2, unit: "oz" }]
+        }))
       });
     }
     assert(/above the plausible/.test(messages.map((m) => String(m.content)).join(" ")));
     return aiEnvelope({
       ...validAiPlan,
-      dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "spinach", amount: 3, unit: "oz" }] }))
+      dinners: validAiPlan.dinners.map((dinner) => ({
+        ...dinner,
+        usesPantry: dinner.usesPantry.filter((item) => item !== "spinach"),
+        needs: [{ item: "spinach", amount: 3, unit: "oz" }, { item: "butter", amount: 2, unit: "oz" }]
+      }))
     });
   });
   ok(bandCalls === 2 && bandFixed.statusCode === 200, "an implausible amount is sent back for correction");
@@ -1341,9 +1504,13 @@ async function runRouteChecks() {
   );
 
   // A model that will not correct it still gets the student a usable plan.
-  const bandStubborn = await callPlan(request, async () => aiEnvelope({
+  const bandStubborn = await callPlan(amountRequest, async () => aiEnvelope({
     ...validAiPlan,
-    dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "spinach", amount: 40, unit: "oz" }] }))
+    dinners: validAiPlan.dinners.map((dinner) => ({
+      ...dinner,
+      usesPantry: dinner.usesPantry.filter((item) => item !== "spinach"),
+      needs: [{ item: "spinach", amount: 40, unit: "oz" }, { item: "butter", amount: 2, unit: "oz" }]
+    }))
   }));
   ok(bandStubborn.statusCode === 200 && bandStubborn.payload.ok, "a stubbornly implausible amount does not fail the plan");
   ok(
@@ -1501,7 +1668,7 @@ async function runRouteChecks() {
     assert(messages.some((message) => String(message.content).includes("Use the spinach first")));
     return aiEnvelope(validAiPlan);
   });
-  ok(repairCalls === 2 && repaired.payload.ok && repaired.payload.dinners[0].title === validAiPlan.dinners[0].title, "malformed AI output gets one successful repair attempt");
+  ok(repairCalls === 2 && repaired.payload.ok && repaired.payload.dinners[0].title === validAiPlan.dinners[0].sourceRecipe, "malformed AI output gets one successful grounded repair attempt");
   ok(!repaired.payload.mock && !repaired.payload.fallback, "a repaired AI plan does not silently become a local plan");
 
   const failedRepair = await callPlan(request, async () => ({

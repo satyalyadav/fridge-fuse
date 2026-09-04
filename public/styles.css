@@ -317,6 +317,22 @@ button.mobile-pantry-button { display: none; }
 .message-copy p { margin: 0 0 9px; }
 .message-copy p:last-child { margin-bottom: 0; }
 .message-example { color: var(--ink-soft); font-size: 13px; }
+.error-message .assistant-symbol {
+  border-color: var(--alert);
+  background: #fff1ef;
+  color: var(--alert);
+}
+.error-message .message-copy {
+  padding: 9px 12px;
+  border: 1px solid #e8bbb6;
+  border-left: 4px solid var(--alert);
+  border-radius: 8px;
+  background: #fff8f7;
+}
+.error-message .message-copy > p:first-child {
+  color: #8f2f24;
+  font-weight: 700;
+}
 .user-message { justify-content: flex-end; }
 
 .user-message .message-copy {

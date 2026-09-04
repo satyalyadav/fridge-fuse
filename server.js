@@ -238,22 +238,31 @@ function isApprovedRecipeCitation(source, sourceRecipe, sourceUrl) {
   return !!approvedRecipeForCitation(source, sourceRecipe, sourceUrl);
 }
 
-function assertDinnerMatchesRecipe(dinner, recipe, dinnerNumber) {
-  const rawIngredients = [
-    ...(dinner.usesPantry || []),
-    ...(dinner.needs || []).map((need) => typeof need === "string" ? need : need?.item)
-  ];
-  const dinnerIngredients = new Set(rawIngredients.map((name) => {
+function assertDinnerMatchesRecipe(dinner, recipe, dinnerNumber, { exact = false } = {}) {
+  const normalizeIngredient = (name) => {
     const resolved = resolveCatalogItem(name);
     return resolved?.name || String(name || "").trim().toLowerCase();
-  }).filter(Boolean));
+  };
+  const pantryIngredients = new Set((dinner.usesPantry || []).map(normalizeIngredient).filter(Boolean));
+  const needIngredients = new Set((dinner.needs || [])
+    .map((need) => normalizeIngredient(typeof need === "string" ? need : need?.item))
+    .filter(Boolean));
+  const overlap = [...pantryIngredients].filter((name) => needIngredients.has(name));
+  if (overlap.length) {
+    throw new Error(`Dinner ${dinnerNumber} lists ${overlap.join(", ")} as both pantry food and a shopping need`);
+  }
+  const dinnerIngredients = new Set([...pantryIngredients, ...needIngredients]);
   const recipeIngredients = new Set(recipe.ingredients);
   const matchingIngredients = [...dinnerIngredients].filter((name) => recipeIngredients.has(name));
 
+  if (exact && (dinnerIngredients.size !== recipeIngredients.size || matchingIngredients.length !== recipeIngredients.size)) {
+    const listed = [...dinnerIngredients].join(", ") || "none";
+    throw new Error(`Dinner ${dinnerNumber} repair must use the exact ingredient set for "${recipe.title}": planned ingredients are ${listed}`);
+  }
   // A substitution is an adaptation; once fewer than half of either side still
   // matches, it is a different recipe wearing the old citation.
-  if (!dinnerIngredients.size || matchingIngredients.length * 2 < recipeIngredients.size ||
-      matchingIngredients.length * 2 < dinnerIngredients.size) {
+  if (!exact && (!dinnerIngredients.size || matchingIngredients.length * 2 < recipeIngredients.size ||
+      matchingIngredients.length * 2 < dinnerIngredients.size)) {
     const listed = [...dinnerIngredients].join(", ") || "none";
     throw new Error(`Dinner ${dinnerNumber} does not match its cited recipe "${recipe.title}": planned ingredients are ${listed}`);
   }
@@ -1103,7 +1112,7 @@ function groundShoppingPlan(plan) {
   };
 }
 
-function parseAiPlan(content, expectedDinners, { strictAmounts = true, maxTimeMin = null } = {}) {
+function parseAiPlan(content, expectedDinners, { strictAmounts = true, maxTimeMin = null, deferRecipeGrounding = false } = {}) {
   const plan = extractJson(String(content || ""));
   if (!plan || typeof plan !== "object" || !Array.isArray(plan.dinners)) {
     throw new Error("AI plan must contain a dinners array");
@@ -1132,17 +1141,20 @@ function parseAiPlan(content, expectedDinners, { strictAmounts = true, maxTimeMi
     if (dinner.servings !== undefined && (!Number.isFinite(Number(dinner.servings)) || Number(dinner.servings) < 1 || Number(dinner.servings) > 12)) {
       throw new Error(`Dinner ${index + 1} servings must be a number between 1 and 12`);
     }
-    for (const need of dinner.needs) {
-      try {
-        normalizeRequirement(need, { servings: servingsOf(dinner), strict: strictAmounts });
-      } catch (error) {
-        // Only an unpriceable ingredient reaches here now; a badly phrased
-        // quantity degrades to a whole package instead of failing the plan.
-        throw new Error(`Dinner ${index + 1}: ${error.message}`);
+    if (!deferRecipeGrounding) {
+      for (const need of dinner.needs) {
+        try {
+          normalizeRequirement(need, { servings: servingsOf(dinner), strict: strictAmounts });
+        } catch (error) {
+          // Only an unpriceable ingredient reaches here now; a badly phrased
+          // quantity degrades to a whole package instead of failing the plan.
+          throw new Error(`Dinner ${index + 1}: ${error.message}`);
+        }
       }
+      assertDinnerMatchesRecipe(dinner, approvedRecipe, index + 1);
     }
-    assertDinnerMatchesRecipe(dinner, approvedRecipe, index + 1);
-    if (Number.isFinite(Number(maxTimeMin)) && Number(dinner.timeMin) > Number(maxTimeMin)) {
+    if (Number.isFinite(Number(maxTimeMin)) &&
+        (Number(dinner.timeMin) > Number(maxTimeMin) || Number(approvedRecipe.timeMin) > Number(maxTimeMin))) {
       throw new Error(`Dinner ${index + 1} exceeds the requested ${maxTimeMin}-minute limit: cited recipe "${approvedRecipe.title}" takes ${approvedRecipe.timeMin} minutes`);
     }
   }
@@ -1151,15 +1163,87 @@ function parseAiPlan(content, expectedDinners, { strictAmounts = true, maxTimeMi
   return plan;
 }
 
-async function repairAiPlan(chat, content, expectedDinners, initialError, requirements, maxTimeMin = null) {
+function assertPlanUsesExactRecipes(plan) {
+  for (const [index, dinner] of (plan.dinners || []).entries()) {
+    const recipe = approvedRecipeForCitation(dinner.source, dinner.sourceRecipe, dinner.sourceUrl);
+    assertDinnerMatchesRecipe(dinner, recipe, index + 1, { exact: true });
+  }
+  return plan;
+}
+
+function reconcilePantryOwnership(plan, pantry) {
+  const pantryNames = new Set((pantry || [])
+    .map((name) => resolveCatalogItem(name)?.name || String(name || "").trim().toLowerCase())
+    .filter(Boolean));
+  return {
+    ...plan,
+    dinners: (plan.dinners || []).map((dinner) => {
+      const ingredientOrder = [];
+      const seen = new Set();
+      const suppliedNeeds = new Map();
+      const remember = (rawName) => {
+        const name = resolveCatalogItem(rawName)?.name || String(rawName || "").trim().toLowerCase();
+        if (name && !seen.has(name)) {
+          seen.add(name);
+          ingredientOrder.push(name);
+        }
+        return name;
+      };
+      for (const name of dinner.usesPantry || []) remember(name);
+      for (const need of dinner.needs || []) {
+        const rawName = typeof need === "string" ? need : need?.item;
+        const name = remember(rawName);
+        if (name) suppliedNeeds.set(name, need);
+      }
+      return {
+        ...dinner,
+        usesPantry: ingredientOrder.filter((name) => pantryNames.has(name)),
+        needs: ingredientOrder
+          .filter((name) => !pantryNames.has(name))
+          .map((name) => suppliedNeeds.get(name) || name)
+      };
+    })
+  };
+}
+
+function canonicalizeRepairedPlan(plan, pantry) {
+  const pantryNames = new Set((pantry || []).map((name) => resolveCatalogItem(name)?.name).filter(Boolean));
+  return {
+    ...plan,
+    dinners: (plan.dinners || []).map((dinner) => {
+      const recipe = approvedRecipeForCitation(dinner.source, dinner.sourceRecipe, dinner.sourceUrl);
+      const suppliedNeeds = new Map((dinner.needs || []).map((need) => {
+        const rawName = typeof need === "string" ? need : need?.item;
+        return [resolveCatalogItem(rawName)?.name || String(rawName || "").trim().toLowerCase(), need];
+      }));
+      return {
+        ...dinner,
+        title: recipe.title,
+        adaptationNote: "",
+        timeMin: Number(recipe.timeMin),
+        equip: [...recipe.equipment],
+        usesPantry: recipe.ingredients.filter((name) => pantryNames.has(name)),
+        needs: recipe.ingredients
+          .filter((name) => !pantryNames.has(name))
+          .map((name) => suppliedNeeds.get(name) || name),
+        steps: [recipe.method]
+      };
+    })
+  };
+}
+
+async function repairAiPlan(chat, _content, expectedDinners, initialError, requirements, maxTimeMin = null, requireExactRecipe = true) {
+  const ingredientRule = requireExactRecipe
+    ? "Adaptations are not allowed during repair: copy one record's complete ingredient set with no additions, omissions, or substitutions, and use an empty adaptationNote."
+    : "Make only the dietary substitutions required by the original restrictions, name them in adaptationNote, and keep the result recognizably grounded in one record.";
   return chat([
     {
       role: "system",
-      content: `Repair a malformed FridgeFuse meal-plan response. Reply ONLY with valid JSON containing exactly ${expectedDinners} dinners and notes. Each dinner must have a non-empty title, numeric timeMin, arrays named usesPantry, needs, and steps, and an exact sourceRecipe/source/sourceUrl triple from this curated recipe catalog. The safest repair is to use one record's exact ingredient list: put only ingredients the user owns in usesPantry, put every remaining record ingredient in needs, and add no other ingredients. Do not force unrelated pantry items into a dinner. Choose another curated record when the malformed meal does not fit its citation. Keep timeMin within 25% of the record's verified time, base steps on its method, and state any ingredient change in adaptationNote. If you do change ingredients, at least half of the cited ingredients and at least half of the dinner ingredients must still match. Every selected record's verified time must fit the user's requested maximum; do not lower timeMin to disguise a recipe that takes too long — choose a different curated record instead:\n${recipeSourcesContext(recipesWithinTime(maxTimeMin))} Every entry in needs must be an object {"item","amount","unit"} giving how much the dinner uses, with an ingredient name from the supplied price catalog and a unit from the family that catalog lists for it. Do not return shoppingList, leftovers, or totalCost — the server computes them. Do not add commentary or Markdown fences.`
+      content: `Start a new FridgeFuse meal plan from the original requirements. The earlier response was rejected, so do not preserve or imitate it. Reply ONLY with valid JSON containing exactly ${expectedDinners} dinners and notes. Each dinner must have a non-empty title, numeric timeMin, arrays named usesPantry, needs, and steps, and an exact sourceRecipe/source/sourceUrl triple from this curated recipe catalog. ${ingredientRule} usesPantry is the intersection of that record's ingredients and the user's pantry, not a copy of the pantry. Put every remaining record ingredient in needs. An ingredient must never appear in both arrays. Keep timeMin equal to the record's verified time and base the steps on its method. Every selected record's verified time must fit the user's requested maximum; choose a different curated record when one takes too long:\n${recipeSourcesContext(recipesWithinTime(maxTimeMin))} Every entry in needs must be an object {"item","amount","unit"} giving how much the dinner uses, with an ingredient name from the supplied price catalog and a unit from the family that catalog lists for it. Do not return shoppingList, leftovers, or totalCost — the server computes them. Do not add commentary or Markdown fences.`
     },
     {
       role: "user",
-      content: `Original requirements:\n${requirements}\n\nValidation problem: ${initialError.message}\n\nMalformed response:\n${String(content || "").slice(0, 12000)}`
+      content: `Original requirements:\n${requirements}\n\nWhy the earlier response was rejected:\n${initialError.message}\n\nStart over from the original requirements and return a new plan.`
     }
   ], { maxTokens: 1800 });
 }
@@ -1478,12 +1562,13 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
   const expectedDinners = asDinners(dinners, 3);
   const content = out.data?.choices?.[0]?.message?.content;
   try {
-    const plan = groundShoppingPlan(assertPlanRespectsDiet(parseAiPlan(content, expectedDinners, { maxTimeMin }), dietRules));
+    const parsed = parseAiPlan(content, expectedDinners, { maxTimeMin });
+    const plan = groundShoppingPlan(assertPlanRespectsDiet(reconcilePantryOwnership(parsed, cookablePantry), dietRules));
     const repeated = findRepeatedExclusion(plan, safeExclude);
     if (repeated) throw new Error(repeated);
     return res.json({ ok: true, model: AIR_MODEL, diet: safeDiet, dietRules: dietRules.map((rule) => rule.id), offLimitsPantry, ...plan });
   } catch (initialError) {
-    const repaired = await repairAiPlan(chat, content, expectedDinners, initialError, `${planningMessages[1].content}\n\nPrice catalog:\n${priceCtx}${dietCtx ? `\n\nDietary restrictions (absolute):\n${dietCtx}` : ""}`, maxTimeMin);
+    const repaired = await repairAiPlan(chat, content, expectedDinners, initialError, `${planningMessages[1].content}\n\nPrice catalog:\n${priceCtx}${dietCtx ? `\n\nDietary restrictions (absolute):\n${dietCtx}` : ""}`, maxTimeMin, dietRules.length === 0);
     if (!repaired.ok) {
       const failure = repaired.failure || reportFailure("asu-air", "plan-repair", {
         status: "repair-failed",
@@ -1493,7 +1578,14 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
     }
     try {
       const repairedContent = repaired.data?.choices?.[0]?.message?.content;
-      const plan = groundShoppingPlan(assertPlanRespectsDiet(parseAiPlan(repairedContent, expectedDinners, { strictAmounts: false, maxTimeMin }), dietRules));
+      const parsed = parseAiPlan(repairedContent, expectedDinners, {
+        strictAmounts: false,
+        maxTimeMin,
+        deferRecipeGrounding: dietRules.length === 0
+      });
+      const dietSafe = assertPlanRespectsDiet(reconcilePantryOwnership(parsed, cookablePantry), dietRules);
+      const repairedPlan = dietRules.length ? dietSafe : canonicalizeRepairedPlan(dietSafe, cookablePantry);
+      const plan = groundShoppingPlan(dietRules.length ? repairedPlan : assertPlanUsesExactRecipes(repairedPlan));
       // The curated catalog is small, and equipment and budget narrow it
       // further. When nothing else fits, saying so beats a silent no-op.
       const stillRepeated = findRepeatedExclusion(plan, safeExclude);
@@ -1657,7 +1749,7 @@ app.get("/api/prices/live", async (req, res) => {
     if (!r.ok || blocked) {
       return res.json({ ok: false, live: false, url, failure: reportFailure("agent-browser", "live-price", {
         status: r.status, store, item: q, url, blocked,
-        message: `Live fetch ${blocked ? "looks bot-blocked" : `HTTP ${r.status}`} — this is why v0 prices are mock/harvested.`,
+        message: `Live fetch ${blocked ? "looks blocked as automated traffic" : `HTTP ${r.status}`} — this is why v0 prices are mock/harvested.`,
         hint: "Reliable live prices need Playwright+stealth+residential IP+location cookies (see slides).",
       })});
     }

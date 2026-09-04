@@ -251,9 +251,9 @@ function addUserMessage(text, { record = true } = {}) {
 }
 
 function addAssistantMessage(text, supportingText = "", options = {}) {
-  const { record = true } = typeof options === "boolean" ? { record: options } : options;
+  const { record = true, tone = "" } = typeof options === "boolean" ? { record: options } : options;
   const article = document.createElement("article");
-  article.className = "message assistant-message";
+  article.className = `message assistant-message${tone === "error" ? " error-message" : ""}`;
   article.innerHTML = `
     <div class="assistant-symbol" aria-hidden="true">F</div>
     <div class="message-copy">
@@ -262,7 +262,7 @@ function addAssistantMessage(text, supportingText = "", options = {}) {
     </div>`;
   $("messages").append(article);
   scrollMessages();
-  if (record) recordMessage({ role: "assistant", text, supportingText });
+  if (record) recordMessage({ role: "assistant", text, supportingText, tone });
 }
 
 function showThinking() {
@@ -472,6 +472,67 @@ function isPantryOnlyRequest(message) {
   return (startsWithPantryAction || (namesPantry && changesPantry)) && !asksForFoodIdeas;
 }
 
+function planningFailureCopy(context) {
+  const failure = context?.failure || null;
+  const status = failure?.status;
+
+  if (failure?.provider === "asu-air" && failure?.operation === "plan-repair") {
+    return {
+      title: "AI recipe response rejected",
+      detail: "FridgeFuse rejected a mismatched or unsafe recipe instead of showing it. Try the request again."
+    };
+  }
+
+  if (failure?.provider === "asu-air" && failure?.operation === "chat") {
+    if (status === "no-key") {
+      return {
+        title: "ASU AI is not configured",
+        detail: "The server is missing its Voyager API key."
+      };
+    }
+    if (status === "bad-json-envelope") {
+      return {
+        title: "ASU AI response unreadable",
+        detail: "The recipe API answered, but its response could not be read. Try again."
+      };
+    }
+    if (status === "timeout") {
+      return {
+        title: "ASU AI API failure",
+        detail: "The recipe API timed out before sending a response. Try again."
+      };
+    }
+    const providerStatus = Number(status);
+    return {
+      title: "ASU AI API failure",
+      detail: Number.isInteger(providerStatus)
+        ? `The recipe API returned HTTP ${providerStatus}. Try again.`
+        : "FridgeFuse could not reach the recipe API. Try again."
+    };
+  }
+
+  if (!context?.responseReceived) {
+    return {
+      title: "FridgeFuse connection failure",
+      detail: "Your browser could not reach the FridgeFuse server. Check your connection and try again."
+    };
+  }
+
+  if (context?.responseAccepted) {
+    return {
+      title: "FridgeFuse display failure",
+      detail: "A plan arrived, but the app could not display it. Try again."
+    };
+  }
+
+  return {
+    title: "FridgeFuse server failure",
+    detail: Number.isInteger(context?.httpStatus)
+      ? `The FridgeFuse server returned HTTP ${context.httpStatus}. Try again.`
+      : "The FridgeFuse server returned an unreadable response. Try again."
+  };
+}
+
 async function handleMessage(message) {
   const clean = message.trim();
   if (!clean) return;
@@ -522,6 +583,10 @@ async function handleMessage(message) {
 async function buildPlan(request = "") {
   showThinking();
   const soon = state.pantry.filter((item) => item.soon).map((item) => item.name);
+  let responseReceived = false;
+  let responseAccepted = false;
+  let httpStatus = null;
+  let serverFailure = null;
 
   try {
     const response = await fetch("/api/plan", {
@@ -539,15 +604,19 @@ async function buildPlan(request = "") {
         exclude: state.excludedTitles
       })
     });
+    responseReceived = true;
+    httpStatus = response.status;
     // Read the body even on an error status: the server explains WHY it refused
     // (an unpriced ingredient, an unapproved recipe, a dietary violation), and
     // that reason is more useful to the student than the status code.
     const result = await response.json().catch(() => null);
+    serverFailure = result?.failure || null;
     if (!response.ok) {
       throw new Error(result?.failure?.message || `Planning returned HTTP ${response.status}`);
     }
     if (!result) throw new Error("The planner did not return a plan");
     if (!result.ok && !result.dinners) throw new Error(result.failure?.message || "The planner did not return a plan");
+    responseAccepted = true;
 
     // Leaving food out silently is what makes a diet feature untrustworthy: the
     // student can see the item sitting in their pantry and cannot tell whether
@@ -593,10 +662,13 @@ async function buildPlan(request = "") {
     setMobileView("plan");
   } catch (error) {
     hideThinking();
-    addAssistantMessage(
-      "I could not make a plan.",
-      "Send that again in a moment."
-    );
+    const copy = planningFailureCopy({
+      failure: serverFailure,
+      responseReceived,
+      responseAccepted,
+      httpStatus
+    });
+    addAssistantMessage(copy.title, copy.detail, { tone: "error" });
     toast(error.message, "error");
   }
 }
@@ -1881,7 +1953,7 @@ if (state.messages?.length) {
   $("messages").innerHTML = "";
   for (const entry of state.messages) {
     if (entry.role === "user") addUserMessage(entry.text, { record: false });
-    else addAssistantMessage(entry.text, entry.supportingText || "", { record: false });
+    else addAssistantMessage(entry.text, entry.supportingText || "", { record: false, tone: entry.tone });
   }
 } else if (state.plan) {
   $("starterPrompts").hidden = true;
