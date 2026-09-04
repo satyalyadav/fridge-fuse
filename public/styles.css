@@ -1386,6 +1386,35 @@ body[data-welcome-open="true"] { overflow: hidden; }
 .photo-wide-button:hover { background: var(--enamel); }
 .photo-wide-button svg { width: 18px; }
 
+/* Saved meals sit under the pantry list in the same drawer, so the section
+   needs its own rule off the top of the list rather than a heading that
+   competes with the drawer's own title. */
+.side-section {
+  margin-top: 26px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.side-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 13px;
+}
+.side-header h2 { font-size: 17px; letter-spacing: -0.03em; }
+.side-count {
+  flex: 0 0 auto;
+  min-width: 20px;
+  padding: 2px 7px;
+  border-radius: 20px;
+  background: var(--gold);
+  color: var(--ink);
+  font-family: var(--utility);
+  font-size: 10px;
+  font-weight: 600;
+  text-align: center;
+}
+
 .saved-recipe-list { display: grid; gap: 8px; }
 .saved-empty { margin: 0; color: var(--ink-soft); font-size: 12.5px; line-height: 1.5; }
 .saved-recipe {
