@@ -546,7 +546,7 @@ function renderPlan() {
     <div class="receipt-row">
       <span class="receipt-item">
         <strong>${escapeHtml(item.item)}</strong>
-        <small>${escapeHtml(item.pack || "1 package")} · ${escapeHtml(titleCase(item.store || "mock store"))}${(item.sharedBy || []).length > 1 ? ` · covers ${item.sharedBy.length} dinners` : ""}</small>
+        <small>${Number(item.qty || 1) > 1 ? `${item.qty} × ` : ""}${escapeHtml(item.pack || "1 package")} · ${escapeHtml(titleCase(item.store || "mock store"))}${item.requiredLabel ? ` · uses ${escapeHtml(item.requiredLabel)}` : ""}${(item.sharedBy || []).length > 1 ? ` · covers ${item.sharedBy.length} dinners` : ""}</small>
       </span>
       <span class="receipt-price">${formatMoney(Number(item.packPrice || 0) * Number(item.qty || 1))}</span>
     </div>

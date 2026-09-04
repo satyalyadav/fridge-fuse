@@ -359,7 +359,7 @@ function findDietViolations(plan, rules) {
     const where = `dinner ${index + 1} "${dinner?.title || "untitled"}"`;
     fields.push([`${where} title`, dinner?.title, false]);
     for (const item of dinner?.usesPantry || []) fields.push([`${where} pantry use`, item, true]);
-    for (const item of dinner?.needs || []) fields.push([`${where} shopping need`, item, true]);
+    for (const need of dinner?.needs || []) fields.push([`${where} shopping need`, typeof need === "object" && need ? need.item : need, true]);
     for (const step of dinner?.steps || []) fields.push([`${where} cooking steps`, step, false]);
   }
   for (const entry of plan.shoppingList || []) fields.push(["the shopping list", entry?.item, true]);
@@ -733,33 +733,155 @@ function optimizeCart({ items = [], lat, lng, maxDistanceMi } = {}) {
   };
 }
 
-function groundShoppingPlan(plan) {
-  const neededItems = [...new Set((plan.dinners || [])
-    .flatMap((dinner) => dinner.needs || [])
-    .map((item) => String(item).trim().toLowerCase())
-    .filter(Boolean))];
-  const unpricedItems = neededItems.filter((item) => !cheapestPack(item));
-  if (unpricedItems.length) {
-    throw new Error(`AI plan includes ingredients outside the price catalog: ${unpricedItems.join(", ")}`);
-  }
+// ---------- units: a recipe requirement is a quantity of an ingredient ----------
+// Three families, converted only within a family. Turning cups of rice into
+// ounces needs a density per ingredient, and a guessed density is a wrong
+// shopping list, so a cross-family requirement is refused instead.
+const UNIT_FAMILIES = {
+  each: { family: "count", per: 1 },
+  ct: { family: "count", per: 1 },
+  count: { family: "count", per: 1 },
+  piece: { family: "count", per: 1 },
+  pieces: { family: "count", per: 1 },
+  slice: { family: "count", per: 1 },
+  slices: { family: "count", per: 1 },
+  clove: { family: "count", per: 1 },
+  cloves: { family: "count", per: 1 },
+  dozen: { family: "count", per: 12 },
+  oz: { family: "mass", per: 1 },
+  ounce: { family: "mass", per: 1 },
+  ounces: { family: "mass", per: 1 },
+  lb: { family: "mass", per: 16 },
+  lbs: { family: "mass", per: 16 },
+  pound: { family: "mass", per: 16 },
+  pounds: { family: "mass", per: 16 },
+  g: { family: "mass", per: 0.035274 },
+  gram: { family: "mass", per: 0.035274 },
+  grams: { family: "mass", per: 0.035274 },
+  "fl oz": { family: "volume", per: 1 },
+  "fluid ounce": { family: "volume", per: 1 },
+  "fluid ounces": { family: "volume", per: 1 },
+  tsp: { family: "volume", per: 1 / 6 },
+  teaspoon: { family: "volume", per: 1 / 6 },
+  teaspoons: { family: "volume", per: 1 / 6 },
+  tbsp: { family: "volume", per: 0.5 },
+  tablespoon: { family: "volume", per: 0.5 },
+  tablespoons: { family: "volume", per: 0.5 },
+  cup: { family: "volume", per: 8 },
+  cups: { family: "volume", per: 8 },
+  pint: { family: "volume", per: 16 },
+  quart: { family: "volume", per: 32 },
+  gallon: { family: "volume", per: 128 },
+};
 
-  const listMap = {};
+function normalizeUnit(unit) {
+  return String(unit || "").toLowerCase().replace(/[^a-z ]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function unitInfo(unit) {
+  return UNIT_FAMILIES[normalizeUnit(unit)] || null;
+}
+
+// Everything is measured in each family's base unit: count, ounces, fluid ounces.
+function toBaseAmount(amount, unit) {
+  const info = unitInfo(unit);
+  if (!info) return null;
+  return { family: info.family, base: Number(amount) * info.per };
+}
+
+const FAMILY_BASE_UNIT = { count: "", mass: "oz", volume: "fl oz" };
+
+function formatAmount(base, family) {
+  const rounded = Math.round(base * 100) / 100;
+  const unit = FAMILY_BASE_UNIT[family];
+  return unit ? `${rounded} ${unit}` : `${rounded}`;
+}
+
+// The pack a store sells, as a quantity rather than a label.
+function packSizeOf(item) {
+  const size = item?.size;
+  if (!size) return null;
+  const converted = toBaseAmount(size.amount, size.unit);
+  return converted && converted.base > 0 ? converted : null;
+}
+
+// One dinner's demand for one ingredient: { item, amount, unit }.
+function normalizeRequirement(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`each need must be an object like {"item":"eggs","amount":2,"unit":"each"}, got ${JSON.stringify(raw)}`);
+  }
+  const name = String(raw.item ?? "").trim().toLowerCase();
+  if (!name) throw new Error("a need is missing its item name");
+  const amount = Number(raw.amount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error(`need "${name}" must have a positive numeric amount`);
+  }
+  const info = unitInfo(raw.unit);
+  if (!info) {
+    throw new Error(`need "${name}" uses unit "${raw.unit}", which is not a unit the catalog understands`);
+  }
+  const catalogItem = findPrice(name);
+  if (!catalogItem) {
+    throw new Error(`AI plan includes ingredients outside the price catalog: ${name}`);
+  }
+  const pack = packSizeOf(catalogItem);
+  if (!pack) throw new Error(`catalog item ${catalogItem.name} has no usable pack size`);
+  const required = toBaseAmount(amount, raw.unit);
+  if (required.family !== pack.family) {
+    throw new Error(
+      `need "${name}" is measured in ${required.family} but ${catalogItem.name} is sold by ${pack.family}; ` +
+      `use a ${pack.family} unit (the pack is ${catalogItem.size.amount} ${catalogItem.size.unit})`
+    );
+  }
+  return { name: catalogItem.name, base: required.base, family: required.family, amount, unit: normalizeUnit(raw.unit) };
+}
+
+// A dinner requires quantities of ingredients; a store sells packages. This is
+// where the two meet: demand is summed across the plan, packages are bought in
+// whole units, and what the packages exceed the demand by is the leftover.
+// Nothing here is estimated — the model supplies amounts, the arithmetic is ours.
+function groundShoppingPlan(plan) {
+  const demand = new Map();
   for (const dinner of plan.dinners || []) {
-    for (const item of dinner.needs || []) {
-      const name = String(item).trim().toLowerCase();
-      if (!name) continue;
-      if (!listMap[name]) {
-        const pack = cheapestPack(name);
-        listMap[name] = { ...pack, qty: 1, sharedBy: [] };
-      }
-      if (!listMap[name].sharedBy.includes(dinner.title)) listMap[name].sharedBy.push(dinner.title);
+    for (const raw of dinner.needs || []) {
+      const need = normalizeRequirement(raw);
+      const entry = demand.get(need.name) || { base: 0, family: need.family, sharedBy: [] };
+      entry.base += need.base;
+      if (dinner.title && !entry.sharedBy.includes(dinner.title)) entry.sharedBy.push(dinner.title);
+      demand.set(need.name, entry);
     }
   }
-  const shoppingList = Object.values(listMap);
+
+  const shoppingList = [];
+  const leftovers = [];
+  for (const [name, entry] of demand) {
+    const catalogItem = findPrice(name);
+    const pack = packSizeOf(catalogItem);
+    const cheapest = cheapestPack(name);
+    // Packages are indivisible: needing 18 eggs means buying two dozen.
+    const qty = Math.max(1, Math.ceil(entry.base / pack.base - 1e-9));
+    const remaining = qty * pack.base - entry.base;
+    shoppingList.push({
+      ...cheapest,
+      qty,
+      required: +entry.base.toFixed(2),
+      requiredLabel: formatAmount(entry.base, entry.family),
+      sharedBy: entry.sharedBy
+    });
+    if (remaining > 1e-9) {
+      leftovers.push({
+        item: name,
+        amount: `${formatAmount(remaining, entry.family)} left over`,
+        remaining: +remaining.toFixed(2),
+        unit: FAMILY_BASE_UNIT[entry.family] || "each"
+      });
+    }
+  }
+
   return {
     ...plan,
     shoppingList,
-    leftovers: plan.leftovers,
+    leftovers,
     totalCost: +shoppingList.reduce((total, item) => total + item.packPrice * item.qty, 0).toFixed(2)
   };
 }
@@ -786,13 +908,16 @@ function parseAiPlan(content, expectedDinners) {
       if (!Array.isArray(dinner[field])) throw new Error(`Dinner ${index + 1} needs a ${field} array`);
     }
     if (dinner.steps.length === 0) throw new Error(`Dinner ${index + 1} needs at least one cooking step`);
-  }
-  if (!Array.isArray(plan.leftovers)) throw new Error("AI plan must contain a leftovers array");
-  for (const [index, leftover] of plan.leftovers.entries()) {
-    if (!leftover || typeof leftover !== "object" || typeof leftover.item !== "string" || !leftover.item.trim() || typeof leftover.amount !== "string" || !leftover.amount.trim()) {
-      throw new Error(`Leftover ${index + 1} needs an item and amount`);
+    for (const need of dinner.needs) {
+      try {
+        normalizeRequirement(need);
+      } catch (error) {
+        throw new Error(`Dinner ${index + 1}: ${error.message}`);
+      }
     }
   }
+  // Leftovers are computed from the requirements in groundShoppingPlan, so
+  // whatever the model guessed for them is ignored rather than validated.
   return plan;
 }
 
@@ -800,7 +925,7 @@ async function repairAiPlan(chat, content, expectedDinners, initialError, requir
   return chat([
     {
       role: "system",
-      content: `Repair a malformed FridgeFuse meal-plan response. Reply ONLY with valid JSON containing exactly ${expectedDinners} dinners, a shoppingList, a leftovers array, totalCost, and notes. Each dinner must have a non-empty title, numeric timeMin, arrays named usesPantry, needs, and steps, and a source/sourceUrl pair matching one of these approved sources:\n${recipeSourcesContext()} Each leftover must have a non-empty item and amount. Use only ingredient names from the supplied price catalog. Preserve the original meal ideas when possible. Do not add commentary or Markdown fences.`
+      content: `Repair a malformed FridgeFuse meal-plan response. Reply ONLY with valid JSON containing exactly ${expectedDinners} dinners and notes. Each dinner must have a non-empty title, numeric timeMin, arrays named usesPantry, needs, and steps, and a source/sourceUrl pair matching one of these approved sources:\n${recipeSourcesContext()} Every entry in needs must be an object {"item","amount","unit"} giving how much the dinner uses, with an ingredient name from the supplied price catalog and a unit from the family that catalog lists for it. Do not return shoppingList, leftovers, or totalCost. Preserve the original meal ideas when possible. Do not add commentary or Markdown fences.`
     },
     {
       role: "user",
@@ -1052,10 +1177,10 @@ function buildPlanSystemPrompt(priceCtx, dietCtx = "") {
 ${dietCtx}`
     : "";
   return `You are FridgeFuse, a student meal planner for Tempe AZ 85281. Reply ONLY with JSON:
-{"dinners":[{"title":"...","source":"...","sourceUrl":"...","adaptationNote":"","timeMin":20,"protein":25,"carbs":50,"fiber":6,"usesPantry":["..."],"needs":["..."],"steps":["..."]}],
-"shoppingList":[{"item":"...","pack":"...","packPrice":0.0,"store":"...","qty":1,"sharedBy":["..."]}],
-"leftovers":[{"item":"...","amount":"..."}],"totalCost":0.0,"notes":"..."}
-Rules: plan EXACTLY the requested number of dinners. The user is a freshman cook, so give concrete beginner-safe steps and only use the listed equipment. First use food marked use-soon, then minimize unique purchases, stay within budget, and keep cooking easy. Prefer purchases shared across dinners. Put only missing ingredients in needs; pantry items cost $0. Return a concise leftover estimate for each purchased package. Use only ingredient names from the price context so the server can price every need. The server will replace shopping prices with its catalog. Respect time, equipment, and dietary restrictions. Price context: ${priceCtx}.
+{"dinners":[{"title":"...","source":"...","sourceUrl":"...","adaptationNote":"","timeMin":20,"protein":25,"carbs":50,"fiber":6,"usesPantry":["..."],"needs":[{"item":"...","amount":2,"unit":"..."}],"steps":["..."]}],
+"notes":"..."}
+Rules: plan EXACTLY the requested number of dinners. The user is a freshman cook, so give concrete beginner-safe steps and only use the listed equipment. First use food marked use-soon, then minimize unique purchases, stay within budget, and keep cooking easy. Prefer purchases shared across dinners. Put only missing ingredients in needs; pantry items cost $0. Respect time, equipment, and dietary restrictions.
+Quantities (REQUIRED): every need is how much that dinner actually uses — {"item","amount","unit"} — not a package. Three eggs is {"item":"eggs","amount":3,"unit":"each"}, even though eggs are sold by the dozen. Use only ingredient names from the price context, and give each amount in the unit family the price context shows for that item: count items in each, weight items in oz or lb, liquids in fl oz, cups, or tbsp. Never answer a weight item in cups or a count item in ounces. Do NOT return shoppingList, leftovers, or totalCost — the server buys whole packages from its own catalog, sums the cost, and works out what is left over. Price context: ${priceCtx}.
 Recipe grounding (STRICT):
 - Pull, adapt, or cite recipes ONLY from the approved sources listed below. NEVER invent a new recipe from scratch and NEVER use a recipe from an unlisted source, even if the user asks for one.
 - Ground every dinner in a real recipe from one of these sources: base its ingredients and steps on that recipe, adjusting only for the user's pantry, budget, equipment, time, and diet.
@@ -1097,7 +1222,8 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
   const cookableUseSoon = safeUseSoon.filter((item) => !offLimitsPantry.includes(item));
   const priceCtx = PRICES.items.map((i) => {
     const c = cheapestPack(i.name);
-    return `${i.name} (~${c.pack} @ ${c.store} $${c.packPrice})`;
+    const family = packSizeOf(i)?.family || "count";
+    return `${i.name} [sold by ${family}, ${i.size.amount} ${i.size.unit} per pack] (~${c.pack} @ ${c.store} $${c.packPrice})`;
   }).join("; ");
   const offLimitsCtx = offLimitsPantry.length
     ? ` Pantry items you must NOT cook with or mention (they break the diet): ${offLimitsPantry.join(", ")}.`
@@ -1328,7 +1454,8 @@ Object.assign(module.exports, {
   STORE_DATA, BRANCHES, DEFAULT_ORIGIN, ITEM_ALIASES,
   DIET_RULES, resolveDietRules, findForbiddenTerm, findDietViolations,
   assertPlanRespectsDiet, pantryDietConflicts, dietRulesContext,
-  catalogTagsFor, findCatalogTagConflict, findIngredientConflict
+  catalogTagsFor, findCatalogTagConflict, findIngredientConflict,
+  unitInfo, toBaseAmount, packSizeOf, normalizeRequirement, groundShoppingPlan
 });
 
 if (require.main === module) {

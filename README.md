@@ -172,6 +172,33 @@ stands and the failure is logged like any other external call.
   start, by design. The app does not fetch recipe pages; the model supplies the
   recipe adaptation and the server enforces the citation allowlist.
 
+## Recipes as typed requirements
+
+A dinner requires *quantities of ingredients*; a store sells *packages*. The plan
+keeps those separate, because conflating them is what made the old numbers guesses:
+
+```json
+"needs": [{ "item": "eggs", "amount": 3, "unit": "each" },
+          { "item": "gluten free pasta", "amount": 8, "unit": "oz" }]
+```
+
+The model supplies the amounts; the server does the arithmetic. Demand is summed
+across every dinner, packages are bought whole (`qty = ceil(total / packSize)`), the
+total is the sum of what was actually bought, and the leftover is what the packages
+exceed the demand by. Three dinners needing fourteen eggs buy two dozen and report
+ten eggs left — the plan used to buy one package of everything and let the model
+write "most of the carton" in the leftovers.
+
+Units come in three families — count, mass, volume — converted only within a family.
+`data/prices.json` gives each item its canonical pack `size`, and a requirement in
+the wrong family is refused, not converted: turning a cup of rice into ounces needs a
+per-ingredient density, and a guessed density is a wrong shopping list. The model is
+told which family each item uses in the price context.
+
+`shoppingList`, `leftovers`, and `totalCost` are no longer accepted from the model at
+all. It is asked for dinners and requirements; everything with a number in it is
+computed here.
+
 ## Dietary restrictions
 
 A student's restrictions are treated as a safety constraint, not a preference the

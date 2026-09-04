@@ -11,7 +11,8 @@ const {
   describeLocation, handleGeoDescribe,
   STORE_DATA, BRANCHES, DEFAULT_ORIGIN, ITEM_ALIASES,
   DIET_RULES, resolveDietRules, findForbiddenTerm, findDietViolations,
-  pantryDietConflicts, dietRulesContext, catalogTagsFor, findIngredientConflict
+  pantryDietConflicts, dietRulesContext, catalogTagsFor, findIngredientConflict,
+  unitInfo, toBaseAmount, packSizeOf, normalizeRequirement, groundShoppingPlan
 } = require("./server.js");
 
 // Normalize OS-native path separators to forward slashes so assertions are
@@ -49,7 +50,10 @@ ok(RECIPE_SOURCES.sources.every((s) => s.name && /^https?:\/\//.test(s.url)), "e
 const planPrompt = buildPlanSystemPrompt("(price context)");
 ok(planPrompt.includes("ONLY") && planPrompt.includes("approved sources"), "plan prompt restricts recipes to approved sources");
 ok(planPrompt.includes('"source"') && planPrompt.includes('"sourceUrl"'), "plan prompt requires source name/URL in dinner data");
-ok(planPrompt.includes('"leftovers"') && planPrompt.includes("leftover estimate"), "plan prompt asks AI for leftover estimates");
+ok(!planPrompt.includes('"leftovers"'), "plan prompt no longer asks the model to estimate leftovers");
+ok(/Do NOT return shoppingList, leftovers, or totalCost/.test(planPrompt), "plan prompt tells the model the server does the package arithmetic");
+ok(planPrompt.includes('{"item","amount","unit"}') && /how much that dinner actually uses/.test(planPrompt), "plan prompt asks for a quantity per ingredient, not a package");
+ok(/Never answer a weight item in cups/.test(planPrompt), "plan prompt pins each amount to the catalog's unit family");
 ok(planPrompt.includes("adaptationNote") && planPrompt.includes("CLOSEST matching approved recipe"), "plan prompt chooses the closest approved recipe with an adaptation note");
 ok(planPrompt.includes("NEVER invent a new recipe from scratch"), "plan prompt forbids inventing recipes");
 for (const s of RECIPE_SOURCES.sources) {
@@ -60,6 +64,47 @@ ok(
     toSlashes(resolveDataPath("/var/task/netlify/functions", "/var/task", (candidate) => toSlashes(candidate) === "/var/task/data/recipe-sources.json", "recipe-sources.json")) === "/var/task/data/recipe-sources.json",
   "recipe sources resolve from the Netlify task root"
 );
+
+// ---------- recipes as typed requirements: quantities, packages, leftovers ----------
+const unsized = PRICES.items.filter((item) => !packSizeOf(item)).map((item) => item.name);
+ok(unsized.length === 0, `every catalog item has a usable pack size${unsized.length ? ` (missing: ${unsized.join(", ")})` : ""}`);
+ok(toBaseAmount(1, "lb").base === 16 && toBaseAmount(1, "dozen").base === 12 && toBaseAmount(1, "cup").base === 8, "units convert to their family base");
+ok(toBaseAmount(2, "tbsp").family === "volume" && toBaseAmount(2, "oz").family === "mass" && toBaseAmount(2, "each").family === "count", "units are grouped into count, mass, and volume");
+ok(unitInfo("nonsense") === null, "an unknown unit is rejected rather than assumed");
+
+// Cross-family conversion needs a density per ingredient, so it is refused.
+assert.throws(
+  () => normalizeRequirement({ item: "rice", amount: 1, unit: "cup" }),
+  /measured in volume but rice is sold by mass/,
+  "a volume amount for a weight item should be refused"
+);
+n++; console.log(`ok ${n} - a volume amount for an item sold by weight is refused, not guessed`);
+assert.throws(() => normalizeRequirement({ item: "eggs", amount: 0, unit: "each" }), /positive numeric amount/);
+n++; console.log(`ok ${n} - a need with no positive amount is rejected`);
+assert.throws(() => normalizeRequirement("eggs"), /must be an object/);
+n++; console.log(`ok ${n} - a bare ingredient name is no longer a valid need`);
+ok(normalizeRequirement({ item: "EGGS", amount: 2, unit: "Each" }).base === 2, "requirements are case-insensitive in both name and unit");
+ok(normalizeRequirement({ item: "chicken breast", amount: 8, unit: "oz" }).base === 8, "a weight amount stays in ounces");
+
+// Packages are indivisible: this is the arithmetic the model used to guess.
+const twoDinners = groundShoppingPlan({
+  dinners: [
+    { title: "A", needs: [{ item: "eggs", amount: 3, unit: "each" }, { item: "spinach", amount: 2, unit: "oz" }] },
+    { title: "B", needs: [{ item: "eggs", amount: 11, unit: "each" }] }
+  ]
+});
+const eggLine = twoDinners.shoppingList.find((entry) => entry.item === "eggs");
+ok(eggLine.qty === 2, `14 eggs buys 2 dozen, not 1 (qty=${eggLine.qty})`);
+ok(eggLine.sharedBy.length === 2, "demand is summed across every dinner that uses the ingredient");
+ok(twoDinners.totalCost === +(eggLine.packPrice * 2 + cheapestPack("spinach").packPrice).toFixed(2), "the total pays for every package bought, not one of each");
+const eggLeftover = twoDinners.leftovers.find((entry) => entry.item === "eggs");
+ok(eggLeftover.remaining === 10, `leftovers are computed: 2 dozen minus 14 leaves ${eggLeftover.remaining}`);
+ok(twoDinners.leftovers.find((entry) => entry.item === "spinach").remaining === 3, "a partly used package reports the remainder in its own unit");
+
+const exact = groundShoppingPlan({ dinners: [{ title: "A", needs: [{ item: "eggs", amount: 12, unit: "each" }] }] });
+ok(exact.shoppingList[0].qty === 1 && exact.leftovers.length === 0, "a plan that uses a package exactly reports no leftovers");
+const lbs = groundShoppingPlan({ dinners: [{ title: "A", needs: [{ item: "chicken breast", amount: 20, unit: "oz" }] }] });
+ok(lbs.shoppingList[0].qty === 2, "a weight requirement crossing a pack boundary buys two packs");
 
 // ---------- gluten-free catalog + diet tags ----------
 const untagged = PRICES.items.filter((item) => !Array.isArray(item.tags)).map((item) => item.name);
@@ -142,7 +187,7 @@ ok(findIngredientConflict("unobtainium chicken", veganRule) === "chicken", "an i
 ok(DIET_RULES.every((rule) => rule.excludesTags.length > 0), "every diet rule excludes at least one catalog tag");
 
 const violatingPlanShape = {
-  dinners: [{ title: "Cheesy rice", usesPantry: ["rice"], needs: ["cheddar"], steps: ["Melt the cheddar."] }],
+  dinners: [{ title: "Cheesy rice", usesPantry: ["rice"], needs: [{ item: "cheddar", amount: 4, unit: "oz" }], steps: ["Melt the cheddar."] }],
   shoppingList: [{ item: "cheddar" }],
   leftovers: [{ item: "cheddar", amount: "half" }]
 };
@@ -489,15 +534,13 @@ const validAiPlan = {
     fiber: 5,
     equip: ["microwave"],
     usesPantry: ["spinach", "rice", "eggs"],
-    needs: ["soy sauce"],
+    needs: [{ item: "soy sauce", amount: 2, unit: "tbsp" }],
     steps: ["Microwave the spinach, rice, and eggs until the eggs are fully set."],
     source: "Budget Bytes",
     sourceUrl: "https://www.budgetbytes.com",
     adaptationNote: ""
   }],
   shoppingList: [],
-  leftovers: [{ item: "soy sauce", amount: "most of the bottle" }],
-  totalCost: 0,
   notes: ""
 };
 
@@ -560,8 +603,7 @@ async function runRouteChecks() {
 
   const unpricedAiPlan = {
     ...validAiPlan,
-    dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: ["unobtainium"] })),
-    leftovers: [{ item: "unobtainium", amount: "unknown" }]
+    dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "unobtainium", amount: 1, unit: "each" }] }))
   };
   let unpricedCalls = 0;
   const unpriced = await callPlan(request, async () => {
@@ -571,6 +613,55 @@ async function runRouteChecks() {
   ok(
     unpricedCalls === 2 && unpriced.statusCode === 502 && unpriced.payload.ok === false && /price catalog/.test(unpriced.payload.failure?.message || ""),
     "AI plans with unpriced ingredients fail instead of using an estimated price"
+  );
+
+  // The model's own shoppingList/leftovers/totalCost are ignored: the server owns
+  // the package arithmetic, so an invented number cannot reach the student.
+  const inventedNumbers = await callPlan({ ...request, dinners: 1 }, async () => aiEnvelope({
+    ...validAiPlan,
+    dinners: validAiPlan.dinners.map((dinner) => ({
+      ...dinner,
+      needs: [{ item: "eggs", amount: 18, unit: "each" }]
+    })),
+    shoppingList: [{ item: "eggs", pack: "free eggs", packPrice: 0.01, store: "nowhere", qty: 1 }],
+    leftovers: [{ item: "eggs", amount: "a whole lot, trust me" }],
+    totalCost: 0.01
+  }));
+  ok(inventedNumbers.statusCode === 200 && inventedNumbers.payload.ok, "a plan with typed quantities is accepted");
+  ok(
+    inventedNumbers.payload.shoppingList[0].qty === 2 && inventedNumbers.payload.shoppingList[0].store !== "nowhere",
+    "the server prices from its own catalog and buys the packages the amounts require"
+  );
+  ok(
+    inventedNumbers.payload.totalCost === +(cheapestPack("eggs").packPrice * 2).toFixed(2),
+    "the total is computed, not taken from the model"
+  );
+  ok(
+    inventedNumbers.payload.leftovers[0].remaining === 6 && !/trust me/.test(JSON.stringify(inventedNumbers.payload.leftovers)),
+    "leftovers are computed from the requirements, replacing the model's estimate"
+  );
+
+  // A legacy string need is malformed now, so it takes the repair path.
+  let legacyCalls = 0;
+  const legacyNeeds = await callPlan(request, async () => {
+    legacyCalls++;
+    return aiEnvelope({
+      ...validAiPlan,
+      dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: ["soy sauce"] }))
+    });
+  });
+  ok(
+    legacyCalls === 2 && legacyNeeds.statusCode === 502 && /must be an object/.test(legacyNeeds.payload.failure?.message || ""),
+    "a bare ingredient name is repaired once and then rejected"
+  );
+
+  const wrongFamily = await callPlan(request, async () => aiEnvelope({
+    ...validAiPlan,
+    dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "rice", amount: 1, unit: "cup" }] }))
+  }));
+  ok(
+    wrongFamily.statusCode === 502 && /sold by mass/.test(wrongFamily.payload.failure?.message || ""),
+    "a cup of a weight item is rejected instead of converted through a guessed density"
   );
 
   // ---------- dietary restrictions on the live plan route ----------
@@ -584,10 +675,9 @@ async function runRouteChecks() {
         ...dinner,
         title: "Spinach rice bowl",
         usesPantry: ["spinach", "rice"],
-        needs: ["black beans"],
+        needs: [{ item: "black beans", amount: 15, unit: "oz" }],
         steps: ["Microwave the spinach and rice, then stir in the black beans."]
-      })),
-      leftovers: [{ item: "black beans", amount: "half a can" }]
+      }))
     });
   });
   ok(/Dietary restrictions \(STRICT/.test(dietPromptText), "a restricted plan request sends the strict diet section");
@@ -610,10 +700,9 @@ async function runRouteChecks() {
       ...dinner,
       title: "Gluten-free pasta bowl",
       usesPantry: ["spinach"],
-      needs: ["gluten free pasta", "marinara"],
+      needs: [{ item: "gluten free pasta", amount: 8, unit: "oz" }, { item: "marinara", amount: 12, unit: "oz" }],
       steps: ["Boil the gluten free pasta, then stir in the marinara and spinach."]
-    })),
-    leftovers: [{ item: "gluten free pasta", amount: "half the box" }]
+    }))
   };
   const celiac = await callPlan(celiacRequest, async () => aiEnvelope(glutenFreePlan));
   ok(
@@ -630,10 +719,9 @@ async function runRouteChecks() {
     dinners: validAiPlan.dinners.map((dinner) => ({
       ...dinner,
       usesPantry: ["spinach"],
-      needs: ["pasta"],
+      needs: [{ item: "pasta", amount: 8, unit: "oz" }],
       steps: ["Boil the pasta."]
-    })),
-    leftovers: [{ item: "pasta", amount: "half the box" }]
+    }))
   };
   const celiacBlocked = await callPlan(celiacRequest, async () => aiEnvelope(wheatForCeliac));
   ok(
@@ -643,8 +731,7 @@ async function runRouteChecks() {
 
   const dairyInNeeds = {
     ...validAiPlan,
-    dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: ["cheddar"] })),
-    leftovers: [{ item: "cheddar", amount: "half the block" }]
+    dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "cheddar", amount: 4, unit: "oz" }] }))
   };
   let dairyCalls = 0;
   const dairy = await callPlan(veganRequest, async () => {
@@ -665,8 +752,7 @@ async function runRouteChecks() {
       usesPantry: ["spinach", "rice"],
       needs: [],
       steps: ["Microwave the rice.", "Brush the pan with butter before serving."]
-    })),
-    leftovers: []
+    }))
   };
   const hiddenStep = await callPlan(veganRequest, async () => aiEnvelope(butterInSteps));
   ok(
@@ -679,8 +765,7 @@ async function runRouteChecks() {
     peanutCalls++;
     return aiEnvelope({
       ...validAiPlan,
-      dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: ["peanut butter"] })),
-      leftovers: [{ item: "peanut butter", amount: "most of the jar" }]
+      dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "peanut butter", amount: 4, unit: "oz" }] }))
     });
   });
   ok(
@@ -699,10 +784,9 @@ async function runRouteChecks() {
       dinners: validAiPlan.dinners.map((dinner) => ({
         ...dinner,
         usesPantry: ["spinach", "rice"],
-        needs: ["black beans"],
+        needs: [{ item: "black beans", amount: 15, unit: "oz" }],
         steps: ["Microwave the spinach and rice, then stir in the black beans."]
-      })),
-      leftovers: [{ item: "black beans", amount: "half a can" }]
+      }))
     });
   });
   ok(

@@ -81,6 +81,14 @@ two, so a new catalog item needs correct tags or the build fails. An allergy is 
 longest loose match. It used to take any substring hit, which meant "gluten free
 pasta" resolved to wheat `pasta` — do not reintroduce a first-match-wins lookup.
 
+**Recipes are typed requirements, not ingredient names.** `dinner.needs` is
+`[{item, amount, unit}]`. `normalizeRequirement()` validates each one against the
+catalog and its unit family; `groundShoppingPlan()` sums demand, buys whole packages,
+and computes leftovers and `totalCost`. The model's own `shoppingList`, `leftovers`,
+and `totalCost` are ignored — do not start trusting them again. Units convert only
+within a family (count/mass/volume); a cross-family requirement is refused rather
+than converted through a guessed density.
+
 **Prices are always re-grounded server-side.** The model may propose a shopping list,
 but `groundShoppingPlan()` replaces its prices with real packs from `data/prices.json`.
 Never let model-supplied prices reach the client.
