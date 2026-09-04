@@ -135,8 +135,16 @@ a:focus-visible {
 }
 .trip-status.ready .trip-dot { background: var(--spinach); }
 
-.avatar-button {
+.topbar-actions {
   justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+button.mobile-reset-button { display: none; }
+
+.avatar-button {
   width: 36px;
   height: 36px;
   border: 0;
@@ -906,6 +914,269 @@ body[data-view="grocery"] .grocery-panel { display: block; }
 .store-breakdown td:last-child, .store-breakdown th:last-child { text-align: right; }
 .store-breakdown .pack-note { color: var(--ink-soft); font-family: var(--body); font-size: 11px; }
 
+/* ---------- welcome / onboarding ---------- */
+.welcome {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: clamp(12px, 3vw, 40px);
+  overflow-y: auto;
+  background: linear-gradient(140deg, #1d4b3c, #0f2a22 60%);
+}
+body[data-welcome-open="true"] { overflow: hidden; }
+
+.welcome-card {
+  width: min(1040px, 100%);
+  max-height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+  overflow: hidden;
+  border-radius: 22px;
+  background: var(--paper);
+  box-shadow: 0 40px 90px rgba(6, 20, 16, 0.45);
+}
+
+.welcome-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: clamp(24px, 3vw, 38px);
+  background: linear-gradient(165deg, var(--spinach), var(--spinach-dark));
+  color: #eaf3ee;
+}
+.welcome-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--display);
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+.welcome-brand .brand-mark { border-color: #eaf3ee; }
+.welcome-brand .brand-mark span { background: rgba(234, 243, 238, 0.85); }
+.eyebrow.light { color: #9fd9c0; }
+.welcome-hero-copy h1 {
+  max-width: 15ch;
+  font-size: clamp(26px, 2.6vw, 36px);
+  line-height: 1.02;
+}
+.welcome-hero-copy p {
+  max-width: 34ch;
+  margin: 12px 0 0;
+  color: #c8ded4;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+/* Describes the cooking style a selection unlocks — deliberately not a count.
+   Planning is fully AI-driven, so there is no fixed list to count against
+   without making a real request. */
+.kitchen-note p { margin: 0 0 6px; }
+.kitchen-note p:last-child { margin-bottom: 0; }
+.welcome-hero .kitchen-note {
+  margin-top: auto;
+  padding: 14px 16px;
+  border: 1px solid rgba(234, 243, 238, 0.22);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.07);
+  color: #c8ded4;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+#profileKitchenNote:not(:empty) {
+  margin: -4px 0 4px;
+  padding: 11px 13px;
+  border-left: 3px solid var(--cold-blue-dark);
+  background: var(--enamel);
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.welcome-privacy {
+  margin: 0;
+  color: #8fbca8;
+  font-family: var(--utility);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.welcome-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: clamp(22px, 2.6vw, 32px);
+}
+
+.welcome-progress {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 20px;
+  padding: 0;
+  list-style: none;
+}
+.welcome-progress li {
+  flex: 1;
+  padding-top: 8px;
+  border-top: 3px solid var(--line);
+  color: #97a29d;
+  font-family: var(--utility);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  transition: color 160ms ease, border-color 160ms ease;
+}
+.welcome-progress li.done { border-top-color: var(--cold-blue-dark); color: var(--ink-soft); }
+.welcome-progress li.current { border-top-color: var(--spinach); color: var(--spinach); }
+
+.welcome-form { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.welcome-step h2 { font-size: clamp(21px, 2vw, 27px); }
+.step-intro {
+  max-width: 48ch;
+  margin: 9px 0 18px;
+  color: var(--ink-soft);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.step-error { margin: 12px 0 0; color: var(--tomato); font-size: 12.5px; font-weight: 600; }
+
+.field { display: block; margin-bottom: 16px; }
+.field-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.field-optional { color: #98a29e; font-size: 11px; font-weight: 500; }
+.field-label output { font-family: var(--utility); color: var(--spinach); }
+.field input[type="text"],
+.field input[type="number"] {
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid #bfc9c3;
+  border-radius: 10px;
+  background: white;
+  outline: 0;
+}
+.field input[type="text"]:focus,
+.field input[type="number"]:focus { border-color: var(--spinach); }
+.field input[type="range"] { width: 100%; margin-inline: 0; accent-color: var(--spinach); }
+.field-help { display: block; margin-top: 6px; color: var(--ink-soft); font-size: 11.5px; line-height: 1.4; }
+.field-row { margin-bottom: 4px; }
+.field-row.two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+/* Big tap targets: equipment is the highest-impact choice in the form. */
+.option-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(154px, 1fr));
+  gap: 9px;
+}
+.option-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 13px 14px;
+  border: 1.5px solid var(--line);
+  border-radius: 12px;
+  background: white;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+.option-card:hover { border-color: var(--cold-blue-dark); transform: translateY(-1px); }
+.option-card input { position: absolute; opacity: 0; pointer-events: none; }
+.option-card strong { font-size: 13.5px; }
+.option-card small { color: var(--ink-soft); font-size: 11px; }
+.option-card.is-checked,
+.option-card:has(input:checked) {
+  border-color: var(--spinach);
+  background: #e8f1ec;
+}
+.option-card.is-focus,
+.option-card:has(input:focus-visible) { outline: 3px solid var(--tomato); outline-offset: 2px; }
+
+.diet-groups { display: grid; gap: 16px; }
+.diet-group h3 {
+  margin-bottom: 9px;
+  color: var(--ink-soft);
+  font-family: var(--utility);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.chip-row { display: flex; flex-wrap: wrap; gap: 7px; }
+.chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 13px;
+  border: 1.5px solid var(--line);
+  border-radius: 100px;
+  background: white;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+.chip input { position: absolute; opacity: 0; pointer-events: none; }
+.chip:hover { border-color: var(--cold-blue-dark); }
+.chip.is-checked,
+.chip:has(input:checked) { border-color: var(--spinach); background: var(--spinach); color: white; }
+.chip.is-focus,
+.chip:has(input:focus-visible) { outline: 3px solid var(--tomato); outline-offset: 2px; }
+.disclaimer {
+  margin: 16px 0 18px;
+  padding: 10px 13px;
+  border-left: 3px solid var(--tape);
+  background: #fffaea;
+  color: #6b5615;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.welcome-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.welcome-spacer { flex: 1; }
+.link-button {
+  border: 0;
+  background: none;
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.link-button:hover { color: var(--ink); }
+
+@media (max-width: 860px) {
+  .welcome { padding: 0; align-items: stretch; }
+  .welcome-card {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 100%;
+    border-radius: 0;
+  }
+  .welcome-hero { gap: 16px; padding: 22px 18px; }
+  .welcome-hero-copy h1 { max-width: none; font-size: 25px; }
+  .welcome-hero-copy p { max-width: none; }
+  .welcome-hero .kitchen-note { margin-top: 4px; }
+  .welcome-privacy { display: none; }
+  .welcome-main { padding: 20px 18px 26px; }
+  .option-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+}
+
 .pantry-drawer {
   position: fixed;
   z-index: 30;
@@ -1159,14 +1430,9 @@ body[data-view="grocery"] .grocery-panel { display: block; }
   outline: 0;
 }
 
-.profile-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
 .profile-field input[type="range"] {
   width: 100%;
+  margin-inline: 0;
   accent-color: var(--spinach);
 }
 
@@ -1268,6 +1534,11 @@ body[data-view="grocery"] .grocery-panel { display: block; }
   .trip-status, .desktop-nav { display: none; }
   .brand { font-size: 19px; }
   .brand-mark { width: 25px; height: 31px; }
+  button.mobile-reset-button {
+    width: 36px;
+    height: 36px;
+    display: grid;
+  }
   .workspace { display: block; }
   .conversation-panel, .plan-panel {
     min-height: calc(100vh - 130px);

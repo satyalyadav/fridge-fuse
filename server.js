@@ -733,6 +733,124 @@ function optimizeCart({ items = [], lat, lng, maxDistanceMi } = {}) {
   };
 }
 
+// ---------- preference catalogs ----------
+// One source of truth for what the profile can offer. GET /api/preferences
+// serves this to both the welcome wizard and the profile drawer, and
+// handlePlanRequest turns a selection into a concrete exclusion list for the
+// AI prompt, so an option can never appear in the form without being enforced.
+// `blocks` lists catalog ingredients the option rules out. An empty list is
+// honest: nothing in the Tempe catalog currently contains it, so the option
+// carries a `note` explaining why instead of silently doing nothing.
+const DIET_OPTIONS = [
+  { id: "vegetarian", label: "Vegetarian", group: "Diet",
+    blocks: ["chicken breast", "ground beef"] },
+  { id: "vegan", label: "Vegan", group: "Diet",
+    blocks: ["chicken breast", "ground beef", "eggs", "milk", "cheddar", "butter", "yogurt"] },
+  { id: "pescatarian", label: "Pescatarian", group: "Diet",
+    blocks: ["chicken breast", "ground beef"], note: "Fish is allowed; the catalog has none yet." },
+  { id: "halal", label: "Halal", group: "Diet", aliases: ["halaal"],
+    blocks: [], note: "No pork or alcohol is in the catalog. Choose certified meat in store." },
+  { id: "kosher", label: "Kosher", group: "Diet",
+    blocks: [], note: "No pork or shellfish is in the catalog. Certification is not tracked." },
+
+  { id: "peanut allergy", label: "Peanuts", group: "Allergy",
+    aliases: ["no peanuts", "peanut"], blocks: ["peanut butter"] },
+  { id: "tree nut allergy", label: "Tree nuts", group: "Allergy",
+    aliases: ["nut allergy"], blocks: ["peanut butter"],
+    note: "Peanut products are excluded as a precaution." },
+  { id: "dairy-free", label: "Dairy or lactose", group: "Allergy",
+    aliases: ["dairy free", "lactose intolerant"], blocks: ["milk", "cheddar", "butter", "yogurt"] },
+  { id: "gluten-free", label: "Gluten", group: "Allergy",
+    aliases: ["gluten free", "celiac", "coeliac"], blocks: ["bread", "pasta", "tortillas"] },
+  { id: "egg allergy", label: "Eggs", group: "Allergy", blocks: ["eggs"] },
+  { id: "soy allergy", label: "Soy", group: "Allergy", blocks: ["soy sauce"] },
+  { id: "shellfish allergy", label: "Shellfish", group: "Allergy",
+    blocks: [], note: "No shellfish is in the catalog." },
+  { id: "fish allergy", label: "Fish", group: "Allergy",
+    blocks: [], note: "No fish is in the catalog." },
+  { id: "sesame allergy", label: "Sesame", group: "Allergy",
+    blocks: [], note: "No sesame is in the catalog." },
+
+  { id: "no pork", label: "No pork", group: "Avoid",
+    blocks: [], note: "No pork is in the catalog." },
+  { id: "no beef", label: "No beef", group: "Avoid", blocks: ["ground beef"] },
+  { id: "low sodium", label: "Low sodium", group: "Avoid", blocks: ["soy sauce"] },
+];
+
+// `vibe` is a short, human phrase used client-side to describe what a kitchen
+// setup is good for, without claiming a precise recipe count the AI-only
+// planner can't guarantee ahead of a real request.
+const EQUIPMENT_OPTIONS = [
+  { id: "microwave", label: "Microwave", hint: "Most dorm rooms", vibe: "quick bowls and melts" },
+  { id: "stove", label: "Stovetop or hot plate", aliases: ["stovetop", "hot plate", "burner"], hint: "Burner of any kind", vibe: "sautes, stir-fries, and sauces" },
+  { id: "oven", label: "Oven", hint: "Full-size oven", vibe: "roasts, bakes, and sheet-pan dinners" },
+  { id: "toaster oven", label: "Toaster oven", hint: "Counter-top oven", vibe: "small-batch toasting and melts" },
+  { id: "air fryer", label: "Air fryer", hint: "Crisps without a stove", vibe: "crispy sides with little oil" },
+  { id: "rice cooker", label: "Rice cooker", hint: "Also steams and simmers", vibe: "hands-off rice and grains" },
+  { id: "kettle", label: "Electric kettle", aliases: ["electric kettle"], hint: "Boiling water only", vibe: "instant, no-cook meals" },
+  { id: "slow cooker", label: "Slow cooker", aliases: ["crock pot", "crockpot"], hint: "Long, unattended cooking", vibe: "low-effort, cook-while-away meals" },
+  { id: "pressure cooker", label: "Pressure cooker", aliases: ["instant pot"], hint: "Instant Pot and similar", vibe: "fast one-pot meals" },
+  { id: "blender", label: "Blender", hint: "Smoothies and sauces", vibe: "smoothies and blended sauces" },
+  { id: "sandwich press", label: "Sandwich press", aliases: ["panini press", "grill press"], hint: "Panini or grill press", vibe: "pressed sandwiches and paninis" },
+];
+
+const DIET_BY_KEY = (() => {
+  const map = new Map();
+  for (const option of DIET_OPTIONS) {
+    for (const key of [option.id, option.label, ...(option.aliases || [])]) {
+      map.set(String(key).toLowerCase(), option);
+    }
+  }
+  return map;
+})();
+
+// Accepts the comma-joined string the profile saves, in any historic spelling,
+// and returns the matched options.
+function parseDietSelections(diet) {
+  const text = typeof diet === "string" ? diet : "";
+  const selected = new Map();
+  for (const rawToken of text.split(",")) {
+    const token = rawToken.trim().toLowerCase();
+    if (!token) continue;
+    const exact = DIET_BY_KEY.get(token);
+    if (exact) {
+      selected.set(exact.id, exact);
+      continue;
+    }
+    // Free-text from the chat parser ("no peanuts please") still has to match.
+    for (const [key, option] of DIET_BY_KEY) {
+      if (token.includes(key)) selected.set(option.id, option);
+    }
+  }
+  return [...selected.values()];
+}
+
+function blockedIngredientsForDiet(diet) {
+  const blocked = new Set();
+  for (const option of parseDietSelections(diet)) {
+    for (const ingredient of option.blocks) blocked.add(ingredient);
+  }
+  return blocked;
+}
+
+function validatePlanDiet(plan, diet) {
+  const blocked = blockedIngredientsForDiet(diet);
+  if (!blocked.size) return plan;
+
+  const violations = [];
+  for (const [index, dinner] of (plan.dinners || []).entries()) {
+    for (const rawIngredient of [...(dinner.usesPantry || []), ...(dinner.needs || [])]) {
+      const ingredient = String(rawIngredient).trim().toLowerCase();
+      const canonical = resolveCatalogItem(ingredient)?.name || ingredient;
+      if (blocked.has(canonical)) violations.push(`${canonical} in dinner ${index + 1}`);
+    }
+  }
+  if (violations.length) {
+    throw new Error(`AI plan violates diet restrictions: ${[...new Set(violations)].join(", ")}`);
+  }
+  return plan;
+}
+
 // ---------- units: a recipe requirement is a quantity of an ingredient ----------
 // Three families, converted only within a family. Turning cups of rice into
 // ounces needs a density per ingredient, and a guessed density is a wrong
@@ -1267,6 +1385,23 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
 
 app.post("/api/plan", handlePlanRequest);
 
+// The profile form renders itself from this, so a new option never has to be
+// added in two places. Dinners and minutes-per-meal are deliberately absent:
+// those change per request and belong to the chat, which already parses them
+// ("3 easy dinners", "15 minutes") — asking for them here would just be a
+// second, staler place for the same value to live.
+app.get("/api/preferences", (req, res) => {
+  res.json({
+    ok: true,
+    diets: DIET_OPTIONS.map(({ id, label, group, note, blocks, aliases }) => ({
+      id, label, group, note, aliases, restricts: blocks.length,
+    })),
+    equipment: EQUIPMENT_OPTIONS,
+    limits: { budget: { min: 5, max: 100 } },
+    disclaimer: "Preferences filter suggestions from a small mock catalog. They are not an allergy-safety guarantee — always check labels.",
+  });
+});
+
 app.get("/api/prices", (req, res) => {
   const q = (req.query.item || "").toLowerCase();
   if (!q) return res.json({ ok: true, stores: PRICES.stores, items: PRICES.items, aliases: ITEM_ALIASES, zip: PRICES.zip, note: PRICES.note });
@@ -1455,6 +1590,7 @@ Object.assign(module.exports, {
   DIET_RULES, resolveDietRules, findForbiddenTerm, findDietViolations,
   assertPlanRespectsDiet, pantryDietConflicts, dietRulesContext,
   catalogTagsFor, findCatalogTagConflict, findIngredientConflict,
+  DIET_OPTIONS, EQUIPMENT_OPTIONS, parseDietSelections, blockedIngredientsForDiet, validatePlanDiet,
   unitInfo, toBaseAmount, packSizeOf, normalizeRequirement, groundShoppingPlan
 });
 

@@ -63,12 +63,51 @@ curl http://localhost:3000/api/health
 `{"ok":true,...}` with `airConfigured: false` when the key is missing and
 `true` when `VOYAGER_KEY` is set.
 
+## Setting up a profile
+
+The profile is the landing screen, because everything downstream depends on it:
+a plan is only useful if it respects the equipment in the room and the food the
+student cannot eat.
+
+The welcome wizard runs **once, ever** — three steps the first time the app is
+opened: who you are (name, optional ZIP), what you can cook with, and what you
+cannot eat. It never reappears on later visits; after that, preferences are
+changed only by deliberately opening the profile from the avatar button. Either
+the wizard or a later edit can be dismissed in one click — nothing is mandatory.
+
+Dinners and minutes-per-meal are deliberately **not** in the profile. Those
+change on every request, and the chat already parses them from a normal
+sentence ("3 easy dinners", "15 minutes") — a profile field for them would just
+be a second, staler place for the same value to live.
+
+As equipment and diet are chosen, the hero panel updates with a short line
+describing the kind of cooking that combination supports (*"Microwave + air
+fryer — quick bowls and crispy sides, no stove needed."*) and any advisory
+notes a selection carries. It is deliberately not a recipe count: planning is
+fully AI-driven now (see below), so there is no static list to count against
+without making a real request, and a live number the app can't back up would
+be worse than no number.
+
+`DIET_OPTIONS` and `EQUIPMENT_OPTIONS` in `server.js` are the single source of
+truth — `GET /api/preferences` serves them to both the welcome wizard and the
+profile drawer, so an option can't appear in the form without also existing on
+the server. There are 17 dietary options across three groups (diets including
+halal, kosher and pescatarian; nine allergens; things to skip) and 11 pieces of
+equipment. A restriction is enforced by turning it into a concrete "hard
+exclusions" ingredient list appended to the AI planning prompt — not by hoping
+the model infers "vegan" correctly from a word — and an option that blocks
+nothing in the current catalog must carry a note saying so, which is enforced
+by a test.
+
+Dietary options filter a small mock catalog. The form says plainly that this is
+not an allergy-safety guarantee.
+
 ## Demo flow
 
-The home screen is a conversation, not a constraint form. A student can describe
-their food, budget, time, and equipment in one message or add a fridge photo.
-FridgeFuse keeps a rough pantry in local browser storage and renders the evolving
-plan beside the chat.
+Behind the profile, the home screen is a conversation, not a constraint form. A
+student can describe their food, budget, time, and equipment in one message or
+add a fridge photo. FridgeFuse keeps a rough pantry in local browser storage and
+renders the evolving plan beside the chat.
 
 With `VOYAGER_KEY` configured, the planning flow sends the pantry, constraints,
 and latest request to ASU AIR. Voyager creates the dinners and cooking steps.
@@ -268,6 +307,7 @@ catalog's shape leaves room for a per-chain adapter to fill later.
 - `POST /api/plan` builds and prices the dinner plan; dinners include
   `source`, `sourceUrl`, and (when adapted) `adaptationNote`. The response echoes
   the `dietRules` that were enforced; a plan that breaks them is rejected, not returned.
+- `GET /api/preferences` serves the dietary and equipment catalogs the profile renders.
 - `GET /api/prices?item=` reads the Tempe 85281 mock catalog.
 - `GET /api/stores?lat=&lng=&maxDistanceMi=` lists nearby branches with distances.
 - `POST /api/grocery/optimize {items,lat,lng}` ranks stores by what the basket costs.
