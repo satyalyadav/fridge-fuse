@@ -11,7 +11,7 @@ const {
   describeLocation, handleGeoDescribe,
   STORE_DATA, BRANCHES, DEFAULT_ORIGIN, ITEM_ALIASES,
   DIET_RULES, resolveDietRules, findForbiddenTerm, findDietViolations,
-  pantryDietConflicts, dietRulesContext
+  pantryDietConflicts, dietRulesContext, catalogTagsFor, findIngredientConflict
 } = require("./server.js");
 
 // Normalize OS-native path separators to forward slashes so assertions are
@@ -61,6 +61,25 @@ ok(
   "recipe sources resolve from the Netlify task root"
 );
 
+// ---------- gluten-free catalog + diet tags ----------
+const untagged = PRICES.items.filter((item) => !Array.isArray(item.tags)).map((item) => item.name);
+ok(untagged.length === 0, `every catalog item declares a tags array${untagged.length ? ` (missing: ${untagged.join(", ")})` : ""}`);
+for (const glutenFree of ["gluten free bread", "gluten free pasta", "corn tortillas", "tamari"]) {
+  const pack = cheapestPack(glutenFree);
+  ok(pack && pack.item === glutenFree && pack.packPrice > 0, `catalog prices ${glutenFree} (${pack ? `$${pack.packPrice} @ ${pack.store}` : "missing"})`);
+}
+// The reason the lookup had to change: "gluten free pasta" contains "pasta", and
+// pricing a celiac's dinner as wheat pasta is the one outcome to rule out.
+ok(findPrice("gluten free pasta").name === "gluten free pasta", "a gluten-free item never resolves to its wheat namesake");
+ok(findPrice("corn tortillas").name === "corn tortillas" && findPrice("tortillas").name === "tortillas", "corn and flour tortillas stay distinct");
+ok(findPrice("pasta").name === "pasta" && findPrice("bread").name === "bread", "the plain catalog names still resolve to themselves");
+ok(findPrice("gf pasta").name === "gluten free pasta" && findPrice("gluten-free soy sauce").name === "tamari", "gluten-free aliases resolve to the substitute, not the original");
+ok(cheapestPack("tamari").store === "traderjoes", "a chain that does not stock an item is skipped rather than guessed at");
+
+ok(catalogTagsFor("pasta").includes("gluten") && catalogTagsFor("gluten free pasta").length === 0, "catalog tags separate wheat pasta from its substitute");
+ok(catalogTagsFor("cheese").includes("dairy"), "an alias inherits the catalog item's tags");
+ok(catalogTagsFor("a splash of almond milk") === null, "prose does not resolve to a catalog item");
+
 // ---------- dietary restrictions (enforced server-side, not just prompted) ----------
 ok(Array.isArray(DIET_RULES) && DIET_RULES.length >= 5, `diet rules DB has ${DIET_RULES.length} rules`);
 ok(
@@ -102,6 +121,25 @@ ok(dietPrompt.includes("Dietary restrictions (STRICT"), "the plan prompt states 
 ok(dietPrompt.includes("peanut") && dietPrompt.includes("honey"), "the plan prompt lists the forbidden ingredients");
 ok(/pantry/i.test(dietPrompt) && dietPrompt.includes("stays forbidden"), "the plan prompt forbids cooking a restricted pantry item");
 ok(!buildPlanSystemPrompt("(price context)").includes("Dietary restrictions"), "an unrestricted plan prompt carries no diet section");
+
+// The catalog's tags and the word net must agree about every item the catalog
+// knows — a disagreement means a mis-tagged item or a missing allows phrase.
+const tagDisagreements = [];
+for (const item of PRICES.items) {
+  for (const rule of DIET_RULES) {
+    const byTag = (item.tags || []).some((tag) => rule.excludesTags.includes(tag));
+    const byWord = findForbiddenTerm(item.name, rule) !== null;
+    if (byTag !== byWord) tagDisagreements.push(`${item.name}/${rule.label} (tag:${byTag} word:${byWord})`);
+  }
+}
+ok(
+  tagDisagreements.length === 0,
+  `catalog tags and word matching agree on all ${PRICES.items.length} items${tagDisagreements.length ? ` — ${tagDisagreements.join(", ")}` : ""}`
+);
+ok(findIngredientConflict("gf pasta", glutenRule) === null, "a known-safe alias is not failed for containing a forbidden word");
+ok(/gluten/.test(findIngredientConflict("pasta", glutenRule) || ""), "a known ingredient is rejected by its tag, naming the tag");
+ok(findIngredientConflict("unobtainium chicken", veganRule) === "chicken", "an ingredient the catalog does not know still falls to the word net");
+ok(DIET_RULES.every((rule) => rule.excludesTags.length > 0), "every diet rule excludes at least one catalog tag");
 
 const violatingPlanShape = {
   dinners: [{ title: "Cheesy rice", usesPantry: ["rice"], needs: ["cheddar"], steps: ["Melt the cheddar."] }],
@@ -562,6 +600,45 @@ async function runRouteChecks() {
   ok(
     dietAware.statusCode === 200 && dietAware.payload.ok && dietAware.payload.dietRules.join(",") === "vegan,no peanuts",
     "a compliant plan is returned and reports which restrictions were enforced"
+  );
+
+  // A celiac must be able to get a plan at all: the substitutes have to price.
+  const celiacRequest = { ...request, pantry: ["rice", "spinach"], useSoon: [], diet: "celiac" };
+  const glutenFreePlan = {
+    ...validAiPlan,
+    dinners: validAiPlan.dinners.map((dinner) => ({
+      ...dinner,
+      title: "Gluten-free pasta bowl",
+      usesPantry: ["spinach"],
+      needs: ["gluten free pasta", "marinara"],
+      steps: ["Boil the gluten free pasta, then stir in the marinara and spinach."]
+    })),
+    leftovers: [{ item: "gluten free pasta", amount: "half the box" }]
+  };
+  const celiac = await callPlan(celiacRequest, async () => aiEnvelope(glutenFreePlan));
+  ok(
+    celiac.statusCode === 200 && celiac.payload.ok && celiac.payload.shoppingList.length === 2,
+    "a celiac plan built from gluten-free substitutes is accepted and priced"
+  );
+  ok(
+    celiac.payload.shoppingList.some((entry) => entry.item === "gluten free pasta" && entry.packPrice > 0),
+    "the gluten-free substitute is priced as itself, not as wheat pasta"
+  );
+
+  const wheatForCeliac = {
+    ...validAiPlan,
+    dinners: validAiPlan.dinners.map((dinner) => ({
+      ...dinner,
+      usesPantry: ["spinach"],
+      needs: ["pasta"],
+      steps: ["Boil the pasta."]
+    })),
+    leftovers: [{ item: "pasta", amount: "half the box" }]
+  };
+  const celiacBlocked = await callPlan(celiacRequest, async () => aiEnvelope(wheatForCeliac));
+  ok(
+    celiacBlocked.statusCode === 502 && /gluten/.test(celiacBlocked.payload.failure?.message || ""),
+    "wheat pasta in a celiac plan is rejected by the catalog tag, naming gluten"
   );
 
   const dairyInNeeds = {

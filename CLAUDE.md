@@ -35,8 +35,10 @@ a failing test blocks the deploy.
   `stores`. Prices are development estimates, labeled as such in the UI.
 - `data/stores.json` — approximate neighborhood-level branch coordinates + `origin`.
 - `data/recipe-sources.json` — the recipe citation allowlist (versioned).
-- `data/diet-rules.json` — dietary restrictions: student phrasings → forbidden
-  ingredients, with per-rule `allows` exceptions.
+- `data/diet-rules.json` — dietary restrictions: student phrasings → excluded
+  catalog tags plus a word-level net, with per-rule `allows` exceptions.
+- `scripts/propose-food-codes.js` — maintenance only, never runtime. Proposes
+  FoodOn/FDC codes for review; `npm run codes:propose`.
 - `test.js` — one flat script of `ok(...)` assertions, run in-process.
 - `netlify/functions/api.js` — 4-line `serverless-http` wrapper around `server.js`.
 
@@ -71,7 +73,13 @@ titles, pantry uses, needs, steps, the shopping list, and leftovers. A violating
 gets one repair attempt and is then rejected. Each rule's `allows` list is stripped
 before its `forbids` are matched — that is what keeps "peanut butter" from tripping
 dairy-free's "butter", so add a substitute there rather than loosening a `forbids`
-entry. An allergy is a safety constraint: do not add a path that serves a violation.
+entry. An ingredient the catalog knows is judged by its `tags` alone (exact); only
+unknown ingredients and free-text steps reach the word net. A test cross-checks the
+two, so a new catalog item needs correct tags or the build fails. An allergy is a safety constraint: do not add a path that serves a violation.
+
+**`findPrice()` resolves most-specific-first.** Exact name, then alias, then the
+longest loose match. It used to take any substring hit, which meant "gluten free
+pasta" resolved to wheat `pasta` — do not reintroduce a first-match-wins lookup.
 
 **Prices are always re-grounded server-side.** The model may propose a shopping list,
 but `groundShoppingPlan()` replaces its prices with real packs from `data/prices.json`.

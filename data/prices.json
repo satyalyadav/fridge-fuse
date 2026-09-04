@@ -1,1 +1,822 @@
-{"aliases":{"beans":"black beans","black bean":"black beans","cheese":"cheddar","cheddar cheese":"cheddar","chicken":"chicken breast","chicken breasts":"chicken breast","egg":"eggs","green peas":"frozen peas","ground turkey":"ground beef","hamburger meat":"ground beef","mince":"ground beef","noodles":"pasta","oatmeal":"oats","peas":"frozen peas","pb":"peanut butter","potato":"potatoes","spaghetti":"pasta","spaghetti sauce":"marinara","tomato sauce":"marinara","tortilla":"tortillas","wraps":"tortillas","yoghurt":"yogurt"},"items":[{"name":"banana","prices":{"aldi":{"pack":"1 bunch (~6)","price":0.69},"frys":{"pack":"1 bunch (~6)","price":0.79},"traderjoes":{"pack":"1 bunch (~6)","price":0.75},"walmart":{"pack":"1 bunch (~6)","price":0.72}},"unit":"each"},{"name":"black beans","prices":{"aldi":{"pack":"15 oz can","price":0.89},"frys":{"pack":"15 oz can","price":1.09},"traderjoes":{"pack":"15 oz can","price":0.99},"walmart":{"pack":"15 oz can","price":0.98}},"unit":"can"},{"name":"bread","prices":{"aldi":{"pack":"20 oz loaf","price":1.49},"frys":{"pack":"20 oz loaf","price":2.29},"traderjoes":{"pack":"20 oz loaf","price":2.49},"walmart":{"pack":"20 oz loaf","price":1.98}},"unit":"loaf"},{"name":"butter","prices":{"aldi":{"pack":"8 oz","price":2.99},"frys":{"pack":"8 oz","price":3.99},"traderjoes":{"pack":"8 oz","price":3.49},"walmart":{"pack":"8 oz","price":3.48}},"unit":"pack"},{"name":"carrots","prices":{"aldi":{"pack":"2 lb bag","price":1.29},"frys":{"pack":"2 lb bag","price":1.79},"traderjoes":{"pack":"2 lb bag","price":1.49},"walmart":{"pack":"2 lb bag","price":1.48}},"unit":"bag"},{"name":"cheddar","prices":{"aldi":{"pack":"8 oz block","price":2.29},"frys":{"pack":"8 oz block","price":2.99},"traderjoes":{"pack":"8 oz block","price":2.99},"walmart":{"pack":"8 oz block","price":2.48}},"unit":"block"},{"name":"chicken breast","prices":{"aldi":{"pack":"1 lb","price":3.49},"frys":{"pack":"1 lb","price":3.99},"traderjoes":{"pack":"1 lb","price":4.49},"walmart":{"pack":"1 lb","price":3.68}},"unit":"lb"},{"name":"eggs","prices":{"aldi":{"pack":"1 dozen large","price":2.99},"frys":{"pack":"1 dozen large","price":3.49},"traderjoes":{"pack":"1 dozen large","price":3.49},"walmart":{"pack":"1 dozen large","price":3.28}},"unit":"dozen"},{"name":"frozen peas","prices":{"aldi":{"pack":"12 oz bag","price":1.09},"frys":{"pack":"12 oz bag","price":1.49},"traderjoes":{"pack":"12 oz bag","price":1.29},"walmart":{"pack":"12 oz bag","price":1.24}},"unit":"bag"},{"name":"garlic","prices":{"aldi":{"pack":"3-head bag","price":0.99},"frys":{"pack":"3-head bag","price":1.29},"traderjoes":{"pack":"3-head bag","price":1.19},"walmart":{"pack":"3-head bag","price":1.12}},"unit":"bag"},{"name":"ground beef","prices":{"aldi":{"pack":"1 lb 80/20","price":4.49},"frys":{"pack":"1 lb 80/20","price":5.29},"traderjoes":{"pack":"1 lb 80/20","price":5.49},"walmart":{"pack":"1 lb 80/20","price":4.98}},"unit":"lb"},{"name":"marinara","prices":{"aldi":{"pack":"24 oz jar","price":1.89},"frys":{"pack":"24 oz jar","price":2.79},"traderjoes":{"pack":"24 oz jar","price":1.99},"walmart":{"pack":"24 oz jar","price":2.24}},"unit":"jar"},{"name":"milk","prices":{"aldi":{"pack":"1 gallon whole","price":3.49},"frys":{"pack":"1 gallon whole","price":3.79},"traderjoes":{"pack":"1 gallon whole","price":3.99},"walmart":{"pack":"1 gallon whole","price":3.68}},"unit":"gallon"},{"name":"oats","prices":{"aldi":{"pack":"42 oz canister","price":3.49},"frys":{"pack":"42 oz canister","price":4.29},"traderjoes":{"pack":"42 oz canister","price":3.99},"walmart":{"pack":"42 oz canister","price":3.98}},"unit":"canister"},{"name":"olive oil","prices":{"aldi":{"pack":"17 oz bottle","price":5.49},"frys":{"pack":"17 oz bottle","price":7.49},"traderjoes":{"pack":"17 oz bottle","price":5.99},"walmart":{"pack":"17 oz bottle","price":6.48}},"unit":"bottle"},{"name":"onion","prices":{"aldi":{"pack":"3 lb bag yellow","price":1.99},"frys":{"pack":"3 lb bag yellow","price":2.49},"traderjoes":{"pack":"3 lb bag yellow","price":2.29},"walmart":{"pack":"3 lb bag yellow","price":2.24}},"unit":"bag"},{"name":"pasta","prices":{"aldi":{"pack":"16 oz box","price":0.99},"frys":{"pack":"16 oz box","price":1.49},"traderjoes":{"pack":"16 oz box","price":1.29},"walmart":{"pack":"16 oz box","price":1.18}},"unit":"box"},{"name":"peanut butter","prices":{"aldi":{"pack":"16 oz jar","price":1.99},"frys":{"pack":"16 oz jar","price":2.79},"traderjoes":{"pack":"16 oz jar","price":2.49},"walmart":{"pack":"16 oz jar","price":2.34}},"unit":"jar"},{"name":"potatoes","prices":{"aldi":{"pack":"5 lb bag russet","price":2.99},"frys":{"pack":"5 lb bag russet","price":3.99},"traderjoes":{"pack":"5 lb bag russet","price":3.49},"walmart":{"pack":"5 lb bag russet","price":3.48}},"unit":"bag"},{"name":"rice","prices":{"aldi":{"pack":"2 lb long grain","price":1.99},"frys":{"pack":"2 lb long grain","price":2.49},"traderjoes":{"pack":"2 lb long grain","price":2.29},"walmart":{"pack":"2 lb long grain","price":2.18}},"unit":"bag"},{"name":"salsa","prices":{"aldi":{"pack":"16 oz jar","price":1.99},"frys":{"pack":"16 oz jar","price":2.99},"traderjoes":{"pack":"16 oz jar","price":2.49},"walmart":{"pack":"16 oz jar","price":2.48}},"unit":"jar"},{"name":"soy sauce","prices":{"aldi":{"pack":"15 oz bottle","price":1.79},"frys":{"pack":"15 oz bottle","price":2.49},"traderjoes":{"pack":"15 oz bottle","price":1.99},"walmart":{"pack":"15 oz bottle","price":2.18}},"unit":"bottle"},{"name":"spinach","unit":"bag","prices":{"aldi":{"pack":"5 oz bag","price":2.49},"frys":{"pack":"5 oz bag","price":2.99},"traderjoes":{"pack":"5 oz bag","price":2.99},"walmart":{"pack":"5 oz bag","price":2.78}}},{"name":"tortillas","prices":{"aldi":{"pack":"10-ct flour","price":1.79},"frys":{"pack":"10-ct flour","price":2.49},"traderjoes":{"pack":"10-ct flour","price":1.99},"walmart":{"pack":"10-ct flour","price":2.14}},"unit":"pack"},{"name":"yogurt","prices":{"aldi":{"pack":"32 oz plain","price":2.49},"frys":{"pack":"32 oz plain","price":3.29},"traderjoes":{"pack":"32 oz plain","price":2.99},"walmart":{"pack":"32 oz plain","price":2.94}},"unit":"tub"}],"note":"DEV-HARVESTED MOCK for Tempe 85281 — verify in store. Full packages (pack + price), no pro-rata.","stores":{"aldi":"Aldi (budget/bulk)","frys":"Fry's (Kroger AZ chain)","traderjoes":"Trader Joe's (campus-adjacent)","walmart":"Walmart (baseline)"},"zip":"85281"}
+{
+  "aliases": {
+    "beans": "black beans",
+    "black bean": "black beans",
+    "cheddar cheese": "cheddar",
+    "cheese": "cheddar",
+    "chicken": "chicken breast",
+    "chicken breasts": "chicken breast",
+    "corn tortilla": "corn tortillas",
+    "egg": "eggs",
+    "gf bread": "gluten free bread",
+    "gf pasta": "gluten free pasta",
+    "gluten free soy sauce": "tamari",
+    "gluten free tortillas": "corn tortillas",
+    "gluten-free bread": "gluten free bread",
+    "gluten-free pasta": "gluten free pasta",
+    "gluten-free soy sauce": "tamari",
+    "gluten-free tortillas": "corn tortillas",
+    "green peas": "frozen peas",
+    "ground turkey": "ground beef",
+    "hamburger meat": "ground beef",
+    "mince": "ground beef",
+    "noodles": "pasta",
+    "oatmeal": "oats",
+    "pb": "peanut butter",
+    "peas": "frozen peas",
+    "potato": "potatoes",
+    "rice pasta": "gluten free pasta",
+    "spaghetti": "pasta",
+    "spaghetti sauce": "marinara",
+    "tomato sauce": "marinara",
+    "tortilla": "tortillas",
+    "wraps": "tortillas",
+    "yoghurt": "yogurt"
+  },
+  "items": [
+    {
+      "name": "banana",
+      "prices": {
+        "aldi": {
+          "pack": "1 bunch (~6)",
+          "price": 0.69
+        },
+        "frys": {
+          "pack": "1 bunch (~6)",
+          "price": 0.79
+        },
+        "traderjoes": {
+          "pack": "1 bunch (~6)",
+          "price": 0.75
+        },
+        "walmart": {
+          "pack": "1 bunch (~6)",
+          "price": 0.72
+        }
+      },
+      "unit": "each",
+      "tags": [],
+      "codes": {
+        "foodon": "FOODON:00004183"
+      }
+    },
+    {
+      "name": "black beans",
+      "prices": {
+        "aldi": {
+          "pack": "15 oz can",
+          "price": 0.89
+        },
+        "frys": {
+          "pack": "15 oz can",
+          "price": 1.09
+        },
+        "traderjoes": {
+          "pack": "15 oz can",
+          "price": 0.99
+        },
+        "walmart": {
+          "pack": "15 oz can",
+          "price": 0.98
+        }
+      },
+      "unit": "can",
+      "tags": [],
+      "codes": {
+        "foodon": null
+      }
+    },
+    {
+      "name": "bread",
+      "prices": {
+        "aldi": {
+          "pack": "20 oz loaf",
+          "price": 1.49
+        },
+        "frys": {
+          "pack": "20 oz loaf",
+          "price": 2.29
+        },
+        "traderjoes": {
+          "pack": "20 oz loaf",
+          "price": 2.49
+        },
+        "walmart": {
+          "pack": "20 oz loaf",
+          "price": 1.98
+        }
+      },
+      "unit": "loaf",
+      "tags": [
+        "gluten"
+      ],
+      "codes": {
+        "foodon": "FOODON:03000288"
+      }
+    },
+    {
+      "name": "butter",
+      "prices": {
+        "aldi": {
+          "pack": "8 oz",
+          "price": 2.99
+        },
+        "frys": {
+          "pack": "8 oz",
+          "price": 3.99
+        },
+        "traderjoes": {
+          "pack": "8 oz",
+          "price": 3.49
+        },
+        "walmart": {
+          "pack": "8 oz",
+          "price": 3.48
+        }
+      },
+      "unit": "pack",
+      "tags": [
+        "dairy"
+      ],
+      "codes": {
+        "foodon": "FOODON:03310351"
+      }
+    },
+    {
+      "name": "carrots",
+      "prices": {
+        "aldi": {
+          "pack": "2 lb bag",
+          "price": 1.29
+        },
+        "frys": {
+          "pack": "2 lb bag",
+          "price": 1.79
+        },
+        "traderjoes": {
+          "pack": "2 lb bag",
+          "price": 1.49
+        },
+        "walmart": {
+          "pack": "2 lb bag",
+          "price": 1.48
+        }
+      },
+      "unit": "bag",
+      "tags": [],
+      "codes": {
+        "foodon": null
+      }
+    },
+    {
+      "name": "cheddar",
+      "prices": {
+        "aldi": {
+          "pack": "8 oz block",
+          "price": 2.29
+        },
+        "frys": {
+          "pack": "8 oz block",
+          "price": 2.99
+        },
+        "traderjoes": {
+          "pack": "8 oz block",
+          "price": 2.99
+        },
+        "walmart": {
+          "pack": "8 oz block",
+          "price": 2.48
+        }
+      },
+      "unit": "block",
+      "tags": [
+        "dairy"
+      ],
+      "codes": {
+        "foodon": null
+      }
+    },
+    {
+      "name": "chicken breast",
+      "prices": {
+        "aldi": {
+          "pack": "1 lb",
+          "price": 3.49
+        },
+        "frys": {
+          "pack": "1 lb",
+          "price": 3.99
+        },
+        "traderjoes": {
+          "pack": "1 lb",
+          "price": 4.49
+        },
+        "walmart": {
+          "pack": "1 lb",
+          "price": 3.68
+        }
+      },
+      "unit": "lb",
+      "tags": [
+        "meat",
+        "poultry"
+      ],
+      "codes": {
+        "foodon": "FOODON:00002703"
+      }
+    },
+    {
+      "name": "corn tortillas",
+      "unit": "pack",
+      "tags": [],
+      "codes": {
+        "foodon": null
+      },
+      "prices": {
+        "aldi": {
+          "pack": "18-ct corn",
+          "price": 1.29
+        },
+        "frys": {
+          "pack": "18-ct corn",
+          "price": 1.99
+        },
+        "traderjoes": {
+          "pack": "18-ct corn",
+          "price": 1.49
+        },
+        "walmart": {
+          "pack": "18-ct corn",
+          "price": 1.44
+        }
+      }
+    },
+    {
+      "name": "eggs",
+      "prices": {
+        "aldi": {
+          "pack": "1 dozen large",
+          "price": 2.99
+        },
+        "frys": {
+          "pack": "1 dozen large",
+          "price": 3.49
+        },
+        "traderjoes": {
+          "pack": "1 dozen large",
+          "price": 3.49
+        },
+        "walmart": {
+          "pack": "1 dozen large",
+          "price": 3.28
+        }
+      },
+      "unit": "dozen",
+      "tags": [
+        "egg"
+      ],
+      "codes": {
+        "foodon": null
+      }
+    },
+    {
+      "name": "frozen peas",
+      "prices": {
+        "aldi": {
+          "pack": "12 oz bag",
+          "price": 1.09
+        },
+        "frys": {
+          "pack": "12 oz bag",
+          "price": 1.49
+        },
+        "traderjoes": {
+          "pack": "12 oz bag",
+          "price": 1.29
+        },
+        "walmart": {
+          "pack": "12 oz bag",
+          "price": 1.24
+        }
+      },
+      "unit": "bag",
+      "tags": [],
+      "codes": {
+        "foodon": null
+      }
+    },
+    {
+      "name": "garlic",
+      "prices": {
+        "aldi": {
+          "pack": "3-head bag",
+          "price": 0.99
+        },
+        "frys": {
+          "pack": "3-head bag",
+          "price": 1.29
+        },
+        "traderjoes": {
+          "pack": "3-head bag",
+          "price": 1.19
+        },
+        "walmart": {
+          "pack": "3-head bag",
+          "price": 1.12
+        }
+      },
+      "unit": "bag",
+      "tags": [],
+      "codes": {
+        "foodon": null
+      }
+    },
+    {
+      "name": "gluten free bread",
+      "unit": "loaf",
+      "tags": [],
+      "codes": {
+        "foodon": null
+      },
+      "prices": {
+        "aldi": {
+          "pack": "18 oz loaf",
+          "price": 4.29
+        },
+        "frys": {
+          "pack": "18 oz loaf",
+          "price": 5.99
+        },
+        "traderjoes": {
+          "pack": "18 oz loaf",
+          "price": 4.99
+        },
+        "walmart": {
+          "pack": "18 oz loaf",
+          "price": 4.98
+        }
+      }
+    },
+    {
+      "name": "gluten free pasta",
+      "unit": "box",
+      "tags": [],
+      "codes": {
+        "foodon": "FOODON:00005437"
+      },
+      "prices": {
+        "aldi": {
+          "pack": "12 oz box",
+          "price": 1.85
+        },
+        "frys": {
+          "pack": "12 oz box",
+          "price": 2.49
+        },
+        "traderjoes": {
+          "pack": "12 oz box",
+          "price": 1.99
+        },
+        "walmart": {
+          "pack": "12 oz box",
+          "price": 2.12
+        }
+      }
+    },
+    {
+      "name": "ground beef",
+      "prices": {
+        "aldi": {
+          "pack": "1 lb 80/20",
+          "price": 4.49
+        },
+        "frys": {
+          "pack": "1 lb 80/20",
+          "price": 5.29
+        },
+        "traderjoes": {
+          "pack": "1 lb 80/20",
+          "price": 5.49
+        },
+        "walmart": {
+          "pack": "1 lb 80/20",
+          "price": 4.98
+        }
+      },
+      "unit": "lb",
+      "tags": [
+        "meat"
+      ],
+      "codes": {
+        "foodon": null
+      }
+    },
+    {
+      "name": "marinara",
+      "prices": {
+        "aldi": {
+          "pack": "24 oz jar",
+          "price": 1.89
+        },
+        "frys": {
+          "pack": "24 oz jar",
+          "price": 2.79
+        },
+        "traderjoes": {
+          "pack": "24 oz jar",
+          "price": 1.99
+        },
+        "walmart": {
+          "pack": "24 oz jar",
+          "price": 2.24
+        }
+      },
+      "unit": "jar",
+      "tags": [],
+      "codes": {
+        "foodon": null
+      }
+    },
+    {
+      "name": "milk",
+      "prices": {
+        "aldi": {
+          "pack": "1 gallon whole",
+          "price": 3.49
+        },
+        "frys": {
+          "pack": "1 gallon whole",
+          "price": 3.79
+        },
+        "traderjoes": {
+          "pack": "1 gallon whole",
+          "price": 3.99
+        },
+        "walmart": {
+          "pack": "1 gallon whole",
+          "price": 3.68
+        }
+      },
+      "unit": "gallon",
+      "tags": [
+        "dairy"
+      ],
+      "codes": {
+        "foodon": null
+      }
+    },
+    {
+      "name": "oats",
+      "prices": {
+        "aldi": {
+          "pack": "42 oz canister",
+          "price": 3.49
+        },
+        "frys": {
+          "pack": "42 oz canister",
+          "price": 4.29
+        },
+        "traderjoes": {
+          "pack": "42 oz canister",
+          "price": 3.99
+        },
+        "walmart": {
+          "pack": "42 oz canister",
+          "price": 3.98
+        }
+      },
+      "unit": "canister",
+      "tags": [],
+      "codes": {
+        "foodon": null
+      }
+    },
+    {
+      "name": "olive oil",
+      "prices": {
+        "aldi": {
+          "pack": "17 oz bottle",
+          "price": 5.49
+        },
+        "frys": {
+          "pack": "17 oz bottle",
+          "price": 7.49
+        },
+        "traderjoes": {
+          "pack": "17 oz bottle",
+          "price": 5.99
+        },
+        "walmart": {
+          "pack": "17 oz bottle",
+          "price": 6.48
+        }
+      },
+      "unit": "bottle",
+      "tags": [],
+      "codes": {
+        "foodon": "FOODON:03301826"
+      }
+    },
+    {
+      "name": "onion",
+      "prices": {
+        "aldi": {
+          "pack": "3 lb bag yellow",
+          "price": 1.99
+        },
+        "frys": {
+          "pack": "3 lb bag yellow",
+          "price": 2.49
+        },
+        "traderjoes": {
+          "pack": "3 lb bag yellow",
+          "price": 2.29
+        },
+        "walmart": {
+          "pack": "3 lb bag yellow",
+          "price": 2.24
+        }
+      },
+      "unit": "bag",
+      "tags": [],
+      "codes": {
+        "foodon": "FOODON:03316347"
+      }
+    },
+    {
+      "name": "pasta",
+      "prices": {
+        "aldi": {
+          "pack": "16 oz box",
+          "price": 0.99
+        },
+        "frys": {
+          "pack": "16 oz box",
+          "price": 1.49
+        },
+        "traderjoes": {
+          "pack": "16 oz box",
+          "price": 1.29
+        },
+        "walmart": {
+          "pack": "16 oz box",
+          "price": 1.18
+        }
+      },
+      "unit": "box",
+      "tags": [
+        "gluten"
+      ],
+      "codes": {
+        "foodon": "FOODON:03306347"
+      }
+    },
+    {
+      "name": "peanut butter",
+      "prices": {
+        "aldi": {
+          "pack": "16 oz jar",
+          "price": 1.99
+        },
+        "frys": {
+          "pack": "16 oz jar",
+          "price": 2.79
+        },
+        "traderjoes": {
+          "pack": "16 oz jar",
+          "price": 2.49
+        },
+        "walmart": {
+          "pack": "16 oz jar",
+          "price": 2.34
+        }
+      },
+      "unit": "jar",
+      "tags": [
+        "peanut"
+      ],
+      "codes": {
+        "foodon": "FOODON:03306867"
+      }
+    },
+    {
+      "name": "potatoes",
+      "prices": {
+        "aldi": {
+          "pack": "5 lb bag russet",
+          "price": 2.99
+        },
+        "frys": {
+          "pack": "5 lb bag russet",
+          "price": 3.99
+        },
+        "traderjoes": {
+          "pack": "5 lb bag russet",
+          "price": 3.49
+        },
+        "walmart": {
+          "pack": "5 lb bag russet",
+          "price": 3.48
+        }
+      },
+      "unit": "bag",
+      "tags": [],
+      "codes": {
+        "foodon": null
+      }
+    },
+    {
+      "name": "rice",
+      "prices": {
+        "aldi": {
+          "pack": "2 lb long grain",
+          "price": 1.99
+        },
+        "frys": {
+          "pack": "2 lb long grain",
+          "price": 2.49
+        },
+        "traderjoes": {
+          "pack": "2 lb long grain",
+          "price": 2.29
+        },
+        "walmart": {
+          "pack": "2 lb long grain",
+          "price": 2.18
+        }
+      },
+      "unit": "bag",
+      "tags": [],
+      "codes": {
+        "foodon": "FOODON:00004327"
+      }
+    },
+    {
+      "name": "salsa",
+      "prices": {
+        "aldi": {
+          "pack": "16 oz jar",
+          "price": 1.99
+        },
+        "frys": {
+          "pack": "16 oz jar",
+          "price": 2.99
+        },
+        "traderjoes": {
+          "pack": "16 oz jar",
+          "price": 2.49
+        },
+        "walmart": {
+          "pack": "16 oz jar",
+          "price": 2.48
+        }
+      },
+      "unit": "jar",
+      "tags": [],
+      "codes": {
+        "foodon": "FOODON:03310086"
+      }
+    },
+    {
+      "name": "soy sauce",
+      "prices": {
+        "aldi": {
+          "pack": "15 oz bottle",
+          "price": 1.79
+        },
+        "frys": {
+          "pack": "15 oz bottle",
+          "price": 2.49
+        },
+        "traderjoes": {
+          "pack": "15 oz bottle",
+          "price": 1.99
+        },
+        "walmart": {
+          "pack": "15 oz bottle",
+          "price": 2.18
+        }
+      },
+      "unit": "bottle",
+      "tags": [
+        "gluten"
+      ],
+      "codes": {
+        "foodon": null
+      }
+    },
+    {
+      "name": "spinach",
+      "unit": "bag",
+      "prices": {
+        "aldi": {
+          "pack": "5 oz bag",
+          "price": 2.49
+        },
+        "frys": {
+          "pack": "5 oz bag",
+          "price": 2.99
+        },
+        "traderjoes": {
+          "pack": "5 oz bag",
+          "price": 2.99
+        },
+        "walmart": {
+          "pack": "5 oz bag",
+          "price": 2.78
+        }
+      },
+      "tags": [],
+      "codes": {
+        "foodon": null
+      }
+    },
+    {
+      "name": "tamari",
+      "unit": "bottle",
+      "tags": [],
+      "codes": {
+        "foodon": null
+      },
+      "prices": {
+        "frys": {
+          "pack": "10 oz bottle",
+          "price": 4.49
+        },
+        "traderjoes": {
+          "pack": "10 oz bottle",
+          "price": 3.29
+        },
+        "walmart": {
+          "pack": "10 oz bottle",
+          "price": 3.98
+        }
+      }
+    },
+    {
+      "name": "tortillas",
+      "prices": {
+        "aldi": {
+          "pack": "10-ct flour",
+          "price": 1.79
+        },
+        "frys": {
+          "pack": "10-ct flour",
+          "price": 2.49
+        },
+        "traderjoes": {
+          "pack": "10-ct flour",
+          "price": 1.99
+        },
+        "walmart": {
+          "pack": "10-ct flour",
+          "price": 2.14
+        }
+      },
+      "unit": "pack",
+      "tags": [
+        "gluten"
+      ],
+      "codes": {
+        "foodon": null
+      }
+    },
+    {
+      "name": "yogurt",
+      "prices": {
+        "aldi": {
+          "pack": "32 oz plain",
+          "price": 2.49
+        },
+        "frys": {
+          "pack": "32 oz plain",
+          "price": 3.29
+        },
+        "traderjoes": {
+          "pack": "32 oz plain",
+          "price": 2.99
+        },
+        "walmart": {
+          "pack": "32 oz plain",
+          "price": 2.94
+        }
+      },
+      "unit": "tub",
+      "tags": [
+        "dairy"
+      ],
+      "codes": {
+        "foodon": null
+      }
+    }
+  ],
+  "note": "DEV-HARVESTED MOCK for Tempe 85281 — verify in store. Full packages (pack + price), no pro-rata.",
+  "stores": {
+    "aldi": "Aldi (budget/bulk)",
+    "frys": "Fry's (Kroger AZ chain)",
+    "traderjoes": "Trader Joe's (campus-adjacent)",
+    "walmart": "Walmart (baseline)"
+  },
+  "zip": "85281",
+  "tagNote": "tags mark what an item CONTAINS for diet enforcement (data/diet-rules.json excludesTags). Plain oats are a gluten-free grain, so they carry no gluten tag; a celiac who needs certified oats should say so. codes.foodon is an EBI FoodOn ontology id, verified by exact label match — null where the ontology had no unambiguous match."
+}

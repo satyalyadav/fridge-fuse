@@ -203,6 +203,10 @@ function isApprovedRecipeCitation(source, sourceUrl) {
   return RECIPE_SOURCES.sources.some((approved) => approved.name === source && approved.url === sourceUrl);
 }
 
+// Typed words a student uses -> catalog item ("cheese" -> "cheddar"). Lives in
+// the data file so the UI can fetch it instead of keeping a second copy.
+const ITEM_ALIASES = PRICES.aliases || {};
+
 // ---------- dietary restrictions (enforced, not just requested) ----------
 // The plan prompt is built from this file AND every generated plan is checked
 // against it. A model that ignores "no peanuts" must not reach the student, so
@@ -223,8 +227,25 @@ for (const rule of DIET_RULES_DATA.rules) {
   if (rule.allows !== undefined && !isNonEmptyStringArray(rule.allows)) {
     throw new Error(`diet rule ${rule.id} allows must be a non-empty string array when present`);
   }
+  if (!isNonEmptyStringArray(rule.excludesTags)) {
+    throw new Error(`diet rule ${rule.id} needs a non-empty excludesTags array`);
+  }
 }
 const DIET_RULES = DIET_RULES_DATA.rules;
+
+// A tag typo would silently stop excluding an ingredient, so the catalog and the
+// rules are checked against each other at startup rather than at dinner time.
+const DIET_TAGS = new Set(DIET_RULES.flatMap((rule) => rule.excludesTags));
+for (const item of PRICES.items) {
+  if (!Array.isArray(item.tags)) {
+    throw new Error(`price catalog item ${item.name} must declare a tags array (use [] when it contains none)`);
+  }
+  for (const tag of item.tags) {
+    if (!DIET_TAGS.has(tag)) {
+      throw new Error(`price catalog item ${item.name} carries tag "${tag}", which no diet rule excludes`);
+    }
+  }
+}
 
 // Ingredient text arrives from three directions (the student, the model, the
 // catalog) with different punctuation, so everything is flattened the same way
@@ -277,12 +298,43 @@ function findForbiddenTerm(text, rule) {
   return null;
 }
 
+// What the catalog says a named ingredient contains. Resolution is strict on
+// purpose: "eggs" and the alias "egg" resolve, a whole cooking step does not.
+// Loose matching here would read "a splash of almond milk" as milk.
+function catalogTagsFor(name) {
+  const q = normalizeDietText(name);
+  if (!q) return null;
+  const direct = PRICES.items.find((item) => normalizeDietText(item.name) === q);
+  if (direct) return direct.tags || [];
+  const aliasTarget = Object.entries(ITEM_ALIASES).find(([alias]) => normalizeDietText(alias) === q)?.[1];
+  if (!aliasTarget) return null;
+  const aliased = PRICES.items.find((item) => normalizeDietText(item.name) === normalizeDietText(aliasTarget));
+  return aliased ? aliased.tags || [] : null;
+}
+
+// The catalog's own answer for an ingredient it knows, which is exact where word
+// matching can only be careful: "gluten free pasta" is not pasta.
+function findCatalogTagConflict(name, rule) {
+  const tags = catalogTagsFor(name);
+  if (!tags) return null;
+  const hit = tags.find((tag) => rule.excludesTags.includes(tag));
+  return hit ? `${String(name).trim()} (${hit})` : null;
+}
+
+// An ingredient the catalog knows is judged by its tags alone — they are exact,
+// and the word net would fail an alias like "gf pasta" for containing "pasta".
+// Anything the catalog has never heard of falls back to the word net.
+function findIngredientConflict(name, rule) {
+  if (catalogTagsFor(name)) return findCatalogTagConflict(name, rule);
+  return findForbiddenTerm(name, rule);
+}
+
 // Pantry items the student already owns but must not be cooked with. They are
 // reported, never silently dropped — the pantry is theirs, the plan is ours.
 function pantryDietConflicts(pantry, rules) {
   if (!rules.length) return [];
   return (pantry || []).filter((item) =>
-    rules.some((rule) => findForbiddenTerm(item, rule))
+    rules.some((rule) => findIngredientConflict(item, rule))
   );
 }
 
@@ -300,21 +352,23 @@ function dietRulesContext(rules) {
 // (a vegan plan can pass its shopping list and still say "brush with butter").
 function findDietViolations(plan, rules) {
   if (!rules.length) return [];
+  // [where, text, isNamedIngredient] — only a named ingredient can be looked up
+  // in the catalog; prose gets the word net alone.
   const fields = [];
   for (const [index, dinner] of (plan.dinners || []).entries()) {
     const where = `dinner ${index + 1} "${dinner?.title || "untitled"}"`;
-    fields.push([`${where} title`, dinner?.title]);
-    for (const item of dinner?.usesPantry || []) fields.push([`${where} pantry use`, item]);
-    for (const item of dinner?.needs || []) fields.push([`${where} shopping need`, item]);
-    for (const step of dinner?.steps || []) fields.push([`${where} cooking steps`, step]);
+    fields.push([`${where} title`, dinner?.title, false]);
+    for (const item of dinner?.usesPantry || []) fields.push([`${where} pantry use`, item, true]);
+    for (const item of dinner?.needs || []) fields.push([`${where} shopping need`, item, true]);
+    for (const step of dinner?.steps || []) fields.push([`${where} cooking steps`, step, false]);
   }
-  for (const entry of plan.shoppingList || []) fields.push(["the shopping list", entry?.item]);
-  for (const leftover of plan.leftovers || []) fields.push(["the leftovers", leftover?.item]);
+  for (const entry of plan.shoppingList || []) fields.push(["the shopping list", entry?.item, true]);
+  for (const leftover of plan.leftovers || []) fields.push(["the leftovers", leftover?.item, true]);
 
   const violations = [];
-  for (const [where, text] of fields) {
+  for (const [where, text, isIngredient] of fields) {
     for (const rule of rules) {
-      const term = findForbiddenTerm(text, rule);
+      const term = isIngredient ? findIngredientConflict(text, rule) : findForbiddenTerm(text, rule);
       if (term) violations.push({ rule: rule.label, term, where });
     }
   }
@@ -332,9 +386,6 @@ function assertPlanRespectsDiet(plan, rules) {
 }
 
 const STORES = Object.keys(PRICES.stores);
-// Typed words a student uses -> catalog item ("cheese" -> "cheddar"). Lives in
-// the data file so the UI can fetch it instead of keeping a second copy.
-const ITEM_ALIASES = PRICES.aliases || {};
 
 // ---------- store branch locations (approximate dev mock, Tempe 85281) ----------
 const STORE_DATA = JSON.parse(
@@ -364,11 +415,25 @@ const DEFAULT_ORIGIN = (() => {
 })();
 
 function findPrice(itemName) {
-  const q = itemName.toLowerCase();
-  const hit = PRICES.items.find(
-    (it) => it.name.toLowerCase() === q || it.name.toLowerCase().includes(q) || q.includes(it.name.toLowerCase())
-  );
-  return hit || null;
+  const q = String(itemName || "").toLowerCase().trim();
+  if (!q) return null;
+  const exact = PRICES.items.find((it) => it.name.toLowerCase() === q);
+  if (exact) return exact;
+  const aliased = ITEM_ALIASES[q];
+  if (aliased) {
+    const hit = PRICES.items.find((it) => it.name.toLowerCase() === String(aliased).toLowerCase());
+    if (hit) return hit;
+  }
+  // Fall back to a loose match, longest catalog name first: "gluten free pasta"
+  // contains "pasta", and pricing a celiac's dinner as wheat pasta is the one
+  // outcome this lookup must never produce.
+  const loose = PRICES.items
+    .filter((it) => {
+      const name = it.name.toLowerCase();
+      return name.includes(q) || q.includes(name);
+    })
+    .sort((a, b) => b.name.length - a.name.length);
+  return loose[0] || null;
 }
 function cheapestPack(itemName) {
   const hit = findPrice(itemName);
@@ -1262,7 +1327,8 @@ Object.assign(module.exports, {
   describeLocation, reverseGeocode, handleGeoDescribe, geocodePostalCode, handleGeoPostal,
   STORE_DATA, BRANCHES, DEFAULT_ORIGIN, ITEM_ALIASES,
   DIET_RULES, resolveDietRules, findForbiddenTerm, findDietViolations,
-  assertPlanRespectsDiet, pantryDietConflicts, dietRulesContext
+  assertPlanRespectsDiet, pantryDietConflicts, dietRulesContext,
+  catalogTagsFor, findCatalogTagConflict, findIngredientConflict
 });
 
 if (require.main === module) {

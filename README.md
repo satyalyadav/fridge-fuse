@@ -194,10 +194,44 @@ Matching is word-boundary and plural-tolerant, so `egg` catches `eggs` but not
 are matched, so `peanut butter` does not trip the dairy-free rule's `butter`, and
 `corn tortillas` does not trip gluten-free's `tortillas`.
 
+How an ingredient is judged depends on whether the catalog knows it. A catalog item
+is judged by its own `tags` in `data/prices.json` (`pasta` carries `gluten`, `gluten
+free pasta` carries nothing), which is exact — the word net would fail an alias like
+`gf pasta` for containing "pasta". Anything the catalog has never heard of, and every
+cooking step, falls back to word matching. The two are cross-checked against each
+other by `npm test`, so a mis-tagged item fails the build.
+
 Edit the JSON to change the rules — the prompt and the check are both rebuilt from it
 at startup, and a bad or empty file makes the server refuse to start, by design. The
 five rules shipped (vegetarian, vegan, dairy-free, gluten-free, no peanuts) match the
 checkboxes in the profile drawer; the chat also understands "peanut allergy".
+
+Gluten-free substitutes are stocked in the catalog (`gluten free bread`, `gluten free
+pasta`, `corn tortillas`, `tamari`) so a celiac's plan can actually be priced. Vegan
+and dairy-free do not have their substitutes yet — plant milks and a cheese
+alternative would need adding before those restrictions are equally usable.
+
+## Food codes
+
+Catalog items carry a `codes.foodon` id — an [EBI FoodOn](https://foodon.org)
+ontology term, the closest thing food has to SNOMED/LOINC. `npm run codes:propose`
+queries FoodOn (and USDA FoodData Central, if `FDC_API_KEY` is set) and prints
+candidates for review. It never writes the catalog, because unreviewed name lookup
+gets it wrong in ways that matter here: the best hit for `eggs` is a fish egg, for
+`yogurt` it is "soy yogurt", for `tamari` it is a tamarind plant, and `milk` resolves
+to an anatomy term. Only the 11 items whose ontology label matches exactly carry an
+id; the rest are `null` pending a human decision.
+
+The allergen tags stay hand-curated for the same reason. No food API returns a
+classification dependable enough for an allergy: FoodData Central has no structured
+allergen field, only a free-text ingredient string, and Open Food Facts' tags are
+patchy — its record for a product named "Gluten Free Spaghetti" has an empty
+`allergens_tags` and no gluten-free label.
+
+Prices are mock for the same practical reason: there is no open grocery-price API.
+Kroger (Fry's parent) publishes a location-aware product API behind OAuth partner
+credentials; Aldi, Trader Joe's, and Walmart offer nothing comparable publicly. The
+catalog's shape leaves room for a per-chain adapter to fill later.
 
 ## API
 
