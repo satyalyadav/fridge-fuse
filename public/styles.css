@@ -257,6 +257,22 @@ button.mobile-reset-button { display: none; }
 }
 .sidebar-foot svg { fill: none; stroke: currentColor; stroke-width: 1.8; }
 
+/* The shop panel was built for a full-width workspace. In a 336px rail the same
+   markup has to stack instead of sitting side by side, and the store comparison
+   — a table of stores against prices — scrolls rather than squeezing. */
+.sidebar .plan-header { flex-direction: column; gap: 12px; }
+.sidebar .plan-header > div:first-child { max-width: none; }
+.sidebar .plan-header h2 { font-size: 19px; }
+.sidebar .location-bar { flex-direction: column; align-items: stretch; gap: 10px; }
+.sidebar .location-actions { display: flex; gap: 8px; }
+.sidebar .location-actions button { flex: 1 1 auto; }
+.sidebar .grocery-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.sidebar .grocery-actions button { flex: 1 1 100%; }
+.sidebar .store-breakdown { overflow-x: auto; }
+.sidebar .store-card { grid-template-columns: minmax(0, 1fr) auto; padding: 13px; }
+.sidebar .grocery-add { flex-wrap: wrap; }
+.sidebar img, .sidebar table { max-width: 100%; }
+
 /* Hidden state: the column collapses, the toggle stays in the top bar. */
 .app-shell.sidebar-hidden { --sidebar-w: 0px; }
 .app-shell.sidebar-hidden .sidebar { border-right: 0; }
@@ -1079,6 +1095,44 @@ button.mobile-pantry-button { display: none; }
 @media (max-width: 860px) {
   .option-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
 }
+
+/* The profile is the one thing still shown over the workspace: it is a form you
+   finish and dismiss, not a panel you work alongside. These rules used to be
+   shared with the pantry drawer, which is now part of the sidebar. */
+.profile-drawer {
+  position: fixed;
+  z-index: 30;
+  inset: 0;
+  visibility: hidden;
+}
+.profile-drawer.open { visibility: visible; }
+.drawer-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(35, 8, 17, 0.38);
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+.profile-drawer.open .drawer-scrim { opacity: 1; }
+.drawer-sheet {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(430px, 100%);
+  overflow-y: auto;
+  padding: 32px 28px;
+  transform: translateX(100%);
+  background: var(--paper);
+  box-shadow: var(--shadow);
+  transition: transform 240ms cubic-bezier(.2,.7,.2,1);
+}
+.profile-drawer.open .drawer-sheet { transform: translateX(0); }
+
+/* Describes the cooking style a selection unlocks — deliberately not a count. */
+.kitchen-note p { margin: 0 0 6px; font-size: 12.5px; color: var(--ink-soft); }
+.kitchen-note p:last-child { margin-bottom: 0; }
+.kitchen-note:empty { display: none; }
 
 .drawer-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .drawer-intro { margin: 13px 0 22px; color: var(--ink-soft); font-size: 14px; line-height: 1.45; }
