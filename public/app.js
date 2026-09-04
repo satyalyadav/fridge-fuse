@@ -22,9 +22,7 @@ const ALIASES = {
 
 const DEFAULT_STATE = {
   profile: {
-    displayName: "",
-    // false until the first-run wizard is completed once.
-    onboarded: false
+    displayName: ""
   },
   pantry: [],
   constraints: {
@@ -99,7 +97,7 @@ function loadState() {
       profile: {
         ...DEFAULT_STATE.profile,
         ...(stored.profile || {}),
-        onboarded: stored.profile?.onboarded === true
+        displayName: String(stored.profile?.displayName || "").slice(0, 40)
       },
       constraints: { ...DEFAULT_STATE.constraints, ...(stored.constraints || {}) },
       plan: sanitizeStoredPlan(stored.plan || null),
@@ -672,7 +670,7 @@ function renderPantry() {
   `).join("");
 }
 
-/* ---------------- preference catalogs + onboarding ---------------- */
+/* ---------------- preference catalogs ---------------- */
 
 // Option lists come from the server so the form and the planner's filter can
 // never disagree. Falls back to the minimum viable set if the fetch fails.
@@ -710,7 +708,7 @@ function selectedDietSet() {
 }
 
 // Renders equipment cards and diet chips into a given pair of containers, so
-// the welcome wizard and the profile drawer share one implementation.
+// the profile drawer renders its controls from the server catalogs.
 function renderPreferenceControls({ equipmentHost, dietHost, namePrefix }) {
   const chosenEquipment = new Set((state.constraints.equipment || []).map((item) => String(item).toLowerCase()));
   if (equipmentHost) {
@@ -759,10 +757,6 @@ function bindOptionToggles(root, notePrefix) {
     if (!input) return;
     const holder = input.closest(".option-card, .chip");
     if (holder) holder.classList.toggle("is-checked", input.checked);
-    // Clear the "pick something" warning the moment it stops being true.
-    if (input.name === `${notePrefix}-equipment` && readCheckedValues(`${notePrefix}-equipment`).length) {
-      $("equipmentError").hidden = true;
-    }
     updateKitchenNote(notePrefix);
   });
   root.addEventListener("focusin", (event) => {
@@ -800,85 +794,14 @@ function dietVibeText(ids) {
 }
 
 function updateKitchenNote(prefix) {
-  const host = $(prefix === "welcome" ? "welcomeKitchenNote" : "profileKitchenNote");
+  const host = $("profileKitchenNote");
   if (!host) return;
   const equipmentText = equipmentVibeText(readCheckedValues(`${prefix}-equipment`));
   const dietText = dietVibeText(readCheckedValues(`${prefix}-diet`));
-  const parts = [equipmentText, dietText].filter(Boolean);
-
-  if (prefix === "welcome") {
-    // The hero panel always shows something, even before a choice is made.
-    host.innerHTML = parts.length
-      ? parts.map((text) => `<p>${escapeHtml(text)}</p>`).join("")
-      : "<p>Pick your equipment to see what kind of meals you'll get.</p>";
-  } else {
-    // The profile drawer stays silent until there is something to say
-    // (:empty hides it in CSS), since it sits above an already-labelled form.
-    host.innerHTML = parts.map((text) => `<p>${escapeHtml(text)}</p>`).join("");
-  }
-}
-
-/* ----- the welcome wizard ----- */
-
-let welcomeSteps = [];
-let welcomeIndex = 0;
-
-function needsOnboarding() {
-  return state.profile?.onboarded !== true;
-}
-
-function stepLabels() {
-  return { identity: "About you", kitchen: "Your kitchen", food: "Your food" };
-}
-
-function renderWelcomeStep() {
-  const current = welcomeSteps[welcomeIndex];
-  document.querySelectorAll(".welcome-step").forEach((section) => {
-    section.hidden = section.dataset.step !== current;
-  });
-
-  const labels = stepLabels();
-  $("welcomeProgress").innerHTML = welcomeSteps.map((step, index) => `
-    <li class="${index === welcomeIndex ? "current" : index < welcomeIndex ? "done" : ""}">${escapeHtml(labels[step] || step)}</li>
-  `).join("");
-
-  $("welcomeBack").hidden = welcomeIndex === 0;
-  const isLast = welcomeIndex === welcomeSteps.length - 1;
-  $("welcomeNext").textContent = isLast ? "Start cooking" : "Continue";
-  updateKitchenNote("welcome");
-}
-
-// Runs once, ever — the first time the app opens with no saved profile. Later
-// visits go straight to the app; preferences after that are only ever changed
-// by deliberately opening the profile drawer, never re-asked on login.
-async function openWelcome() {
-  await loadPreferences();
-
-  welcomeSteps = ["identity", "kitchen", "food"];
-  welcomeIndex = 0;
-
-  $("welcomeName").value = state.profile?.displayName || "";
-
-  const budget = clampNumber(state.constraints.budget, PREFERENCES.limits.budget, 20);
-  $("welcomeBudget").value = budget;
-  $("welcomeBudgetValue").textContent = `$${budget}`;
-
-  renderPreferenceControls({
-    equipmentHost: $("equipmentOptions"),
-    dietHost: $("dietOptions"),
-    namePrefix: "welcome",
-  });
-  $("dietDisclaimer").textContent = PREFERENCES.disclaimer;
-
-  $("welcomeScreen").hidden = false;
-  document.body.dataset.welcomeOpen = "true";
-  renderWelcomeStep();
-  requestAnimationFrame(() => $("welcomeName").focus());
-}
-
-function closeWelcome() {
-  $("welcomeScreen").hidden = true;
-  delete document.body.dataset.welcomeOpen;
+  // Stays silent until there is something to say (:empty hides it in CSS),
+  // since it sits above an already-labelled form.
+  host.innerHTML = [equipmentText, dietText].filter(Boolean)
+    .map((text) => `<p>${escapeHtml(text)}</p>`).join("");
 }
 
 function clampNumber(value, limit, fallback) {
@@ -889,52 +812,6 @@ function clampNumber(value, limit, fallback) {
 
 // Saves whatever the wizard currently holds. Called on finish and on skip so a
 // partly-filled form is never silently discarded.
-function commitWelcome({ markOnboarded }) {
-  const equipment = readCheckedValues("welcome-equipment");
-  const diets = readCheckedValues("welcome-diet");
-
-  if (state.plan && !state.plan.constraints) {
-    state.plan.constraints = clone(state.constraints);
-  }
-
-  state.profile = {
-    ...state.profile,
-    displayName: $("welcomeName").value.trim().slice(0, 40),
-    onboarded: markOnboarded ? true : state.profile?.onboarded === true,
-  };
-
-  if (equipment.length) state.constraints.equipment = equipment;
-  state.constraints.diet = diets.join(", ");
-  state.constraints.budget = clampNumber($("welcomeBudget").value, PREFERENCES.limits.budget, 20);
-
-  saveState();
-  renderProfile();
-  renderLocation();
-}
-
-function advanceWelcome() {
-  const current = welcomeSteps[welcomeIndex];
-
-  if (current === "kitchen" && !readCheckedValues("welcome-equipment").length) {
-    $("equipmentError").hidden = false;
-    return;
-  }
-  $("equipmentError").hidden = true;
-
-  if (welcomeIndex < welcomeSteps.length - 1) {
-    welcomeIndex += 1;
-    renderWelcomeStep();
-    // A long step can leave the next one scrolled halfway down.
-    $("welcomeForm").scrollTop = 0;
-    return;
-  }
-
-  commitWelcome({ markOnboarded: true });
-  closeWelcome();
-  const name = state.profile.displayName;
-  toast(name ? `You're set, ${name}. Plans will use these preferences.` : "You're set. Plans will use these preferences.");
-}
-
 function profileInitials(name) {
   const parts = String(name || "")
     .trim()
@@ -951,6 +828,13 @@ function profileInitials(name) {
 
 function renderProfile() {
   const name = state.profile?.displayName?.trim() || "";
+
+  // The wizard used to be where a student learned they could set these. With it
+  // gone, the settings have to be visible on the working screen instead of
+  // hidden behind an avatar.
+  $("summaryEquipment").textContent = state.constraints.equipment.join(", ") || "not set";
+  $("summaryDiet").textContent = state.constraints.diet || "nothing yet";
+  $("summaryBudget").textContent = formatMoney(state.constraints.budget);
 
   $("profileButton").textContent = profileInitials(name);
   $("profileButton").setAttribute(
@@ -969,7 +853,6 @@ async function openProfile() {
   $("profileBudget").value = budget;
   $("profileBudgetValue").textContent = `$${budget}`;
 
-  // Same renderer as the welcome wizard, so both stay in step automatically.
   renderPreferenceControls({
     equipmentHost: $("profileEquipmentOptions"),
     dietHost: $("profileDietOptions"),
@@ -1169,6 +1052,7 @@ async function handlePhoto(file) {
 }
 
 $("profileButton").addEventListener("click", openProfile);
+$("editPreferencesButton").addEventListener("click", openProfile);
 
 document
   .querySelectorAll("[data-close-profile]")
@@ -1560,28 +1444,6 @@ $("fromPlanButton").addEventListener("click", () => {
   toast(added ? `${added} item${added === 1 ? "" : "s"} added from your meal plan` : "Those items are already on the list");
 });
 
-/* ----- welcome wizard wiring ----- */
-$("welcomeNext").addEventListener("click", advanceWelcome);
-$("welcomeBack").addEventListener("click", () => {
-  if (welcomeIndex === 0) return;
-  welcomeIndex -= 1;
-  $("equipmentError").hidden = true;
-  renderWelcomeStep();
-});
-$("welcomeSkip").addEventListener("click", () => {
-  // Skipping still keeps whatever was entered, and still counts as onboarded
-  // so the identity step is not asked for again.
-  commitWelcome({ markOnboarded: true });
-  closeWelcome();
-});
-$("welcomeBudget").addEventListener("input", () => {
-  $("welcomeBudgetValue").textContent = `$${$("welcomeBudget").value}`;
-});
-$("welcomeForm").addEventListener("submit", (event) => {
-  event.preventDefault();
-  advanceWelcome();
-});
-bindOptionToggles($("welcomeForm"), "welcome");
 bindOptionToggles($("profileForm"), "profile");
 
 $("useLocationButton").addEventListener("click", requestLocation);
@@ -1751,7 +1613,3 @@ renderLocation();
 setSidebar(state.sidebarOpen !== false && !window.matchMedia("(max-width: 980px)").matches, { remember: false });
 setMobileView(activeMobileView);
 
-// The welcome wizard is a one-time landing experience: it runs once, ever,
-// on the very first visit. After that, preferences are only ever changed by
-// deliberately opening the profile drawer — never re-asked on login.
-if (needsOnboarding()) openWelcome();

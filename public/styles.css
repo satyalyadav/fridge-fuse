@@ -123,12 +123,6 @@ a:focus-visible {
   transform: rotate(-2deg);
 }
 
-.welcome-logo {
-  width: 168px;
-  height: auto;
-  display: block;
-}
-
 .trip-status {
   display: inline-flex;
   align-items: center;
@@ -188,6 +182,37 @@ button.mobile-reset-button { display: none; }
   scrollbar-width: thin;
   scrollbar-color: #d5cdc9 transparent;
 }
+
+.kitchen-summary {
+  margin-bottom: 22px;
+  padding: 14px 15px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--paper);
+}
+.kitchen-summary dl { margin: 0; display: grid; gap: 7px; }
+.kitchen-summary div { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; }
+.kitchen-summary dt {
+  color: var(--ink-soft);
+  font-family: var(--utility);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.kitchen-summary dd { margin: 0; text-align: right; font-size: 12.5px; font-weight: 600; }
+.kitchen-summary .edit-preferences {
+  width: 100%;
+  margin-top: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--maroon);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--maroon);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.kitchen-summary .edit-preferences:hover { background: var(--maroon-wash); }
 
 .side-section + .side-section {
   margin-top: 26px;
@@ -931,77 +956,7 @@ button.mobile-pantry-button { display: none; }
 .store-breakdown td { padding: 7px 0; border-top: 1px dashed #e0dad6; }
 .store-breakdown td:last-child, .store-breakdown th:last-child { text-align: right; }
 .store-breakdown .pack-note { color: var(--ink-soft); font-family: var(--body); font-size: 11px; }
-
-/* ---------- welcome / onboarding ---------- */
-.welcome {
-  position: fixed;
-  z-index: 80;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: clamp(12px, 3vw, 40px);
-  overflow-y: auto;
-  background: linear-gradient(140deg, #8c1d40, #4a0e21 60%);
-}
-body[data-welcome-open="true"] { overflow: hidden; }
-
-.welcome-card {
-  width: min(1040px, 100%);
-  max-height: 100%;
-  display: grid;
-  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
-  overflow: hidden;
-  border-radius: 22px;
-  background: var(--paper);
-  box-shadow: 0 40px 90px rgba(6, 20, 16, 0.45);
-}
-
-.welcome-hero {
-  display: flex;
-  flex-direction: column;
-  gap: 22px;
-  padding: clamp(24px, 3vw, 38px);
-  background: linear-gradient(165deg, var(--maroon), var(--maroon-deep));
-  color: var(--maroon-wash);
-}
-.welcome-brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  font-family: var(--display);
-  font-size: 19px;
-  font-weight: 700;
-  letter-spacing: -0.04em;
-}
 .eyebrow.light { color: var(--gold); }
-.welcome-hero-copy h1 {
-  max-width: 15ch;
-  font-size: clamp(26px, 2.6vw, 36px);
-  line-height: 1.02;
-}
-.welcome-hero-copy p {
-  max-width: 34ch;
-  margin: 12px 0 0;
-  color: #edd6de;
-  font-size: 13.5px;
-  line-height: 1.5;
-}
-
-/* Describes the cooking style a selection unlocks — deliberately not a count.
-   Planning is fully AI-driven, so there is no fixed list to count against
-   without making a real request. */
-.kitchen-note p { margin: 0 0 6px; }
-.kitchen-note p:last-child { margin-bottom: 0; }
-.welcome-hero .kitchen-note {
-  margin-top: auto;
-  padding: 14px 16px;
-  border: 1px solid rgba(234, 243, 238, 0.22);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.07);
-  color: #edd6de;
-  font-size: 12.5px;
-  line-height: 1.5;
-}
 #profileKitchenNote:not(:empty) {
   margin: -4px 0 4px;
   padding: 11px 13px;
@@ -1011,52 +966,6 @@ body[data-welcome-open="true"] { overflow: hidden; }
   font-size: 12.5px;
   line-height: 1.5;
 }
-.welcome-privacy {
-  margin: 0;
-  color: #e9c8d3;
-  font-family: var(--utility);
-  font-size: 10px;
-  letter-spacing: 0.04em;
-}
-
-.welcome-main {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  padding: clamp(22px, 2.6vw, 32px);
-}
-
-.welcome-progress {
-  display: flex;
-  gap: 8px;
-  margin: 0 0 20px;
-  padding: 0;
-  list-style: none;
-}
-.welcome-progress li {
-  flex: 1;
-  padding-top: 8px;
-  border-top: 3px solid var(--line);
-  color: #9a908c;
-  font-family: var(--utility);
-  font-size: 9.5px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  transition: color 160ms ease, border-color 160ms ease;
-}
-.welcome-progress li.done { border-top-color: var(--gold-edge); color: var(--ink-soft); }
-.welcome-progress li.current { border-top-color: var(--maroon); color: var(--maroon); }
-
-.welcome-form { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
-.welcome-step h2 { font-size: clamp(21px, 2vw, 27px); }
-.step-intro {
-  max-width: 48ch;
-  margin: 9px 0 18px;
-  color: var(--ink-soft);
-  font-size: 13.5px;
-  line-height: 1.5;
-}
-.step-error { margin: 12px 0 0; color: var(--alert); font-size: 12.5px; font-weight: 600; }
 
 .field { display: block; margin-bottom: 16px; }
 .field-label {
@@ -1156,16 +1065,6 @@ body[data-welcome-open="true"] { overflow: hidden; }
   font-size: 12px;
   line-height: 1.45;
 }
-
-.welcome-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 18px;
-  padding-top: 16px;
-  border-top: 1px solid var(--line);
-}
-.welcome-spacer { flex: 1; }
 .link-button {
   border: 0;
   background: none;
@@ -1178,18 +1077,6 @@ body[data-welcome-open="true"] { overflow: hidden; }
 .link-button:hover { color: var(--ink); }
 
 @media (max-width: 860px) {
-  .welcome { padding: 0; align-items: stretch; }
-  .welcome-card {
-    grid-template-columns: minmax(0, 1fr);
-    min-height: 100%;
-    border-radius: 0;
-  }
-  .welcome-hero { gap: 16px; padding: 22px 18px; }
-  .welcome-hero-copy h1 { max-width: none; font-size: 25px; }
-  .welcome-hero-copy p { max-width: none; }
-  .welcome-hero .kitchen-note { margin-top: 4px; }
-  .welcome-privacy { display: none; }
-  .welcome-main { padding: 20px 18px 26px; }
   .option-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
 }
 
