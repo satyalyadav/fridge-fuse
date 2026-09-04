@@ -698,6 +698,12 @@ ok(logoBytes.every((size) => size < 60 * 1024), `logo assets stay small (${logoB
   const unstyled = [...declared].filter((name) => !jsHooks.has(name) && !styles.includes(`.${name}`));
   ok(unstyled.length === 0, `every class in the markup has a rule${unstyled.length ? ` (unstyled: ${unstyled.join(", ")})` : ""}`);
   ok(/\.profile-drawer\.open \.drawer-sheet/.test(styles), "the profile drawer still slides over the workspace");
+  // The inline icons are bare paths: unstroked they paint as black blobs, and
+  // unsized they claim an SVG's default 300x150 inside a 39px button.
+  ok(/button svg[\s\S]{0,220}stroke: currentColor/.test(styles), "inline icons are stroked, not filled");
+  ok(/button svg[\s\S]{0,120}width: 18px/.test(styles), "inline icons are sized by rule, not by attribute");
+  ok(/\.topbar \.icon-button[\s\S]{0,160}color: var\(--gold\)/.test(styles), "icon buttons on the maroon bar draw in gold, not white on white");
+  ok(/<button class="sidebar-toggle" id="sidebarToggle"/.test(html) && html.indexOf('id="sidebarToggle"') < html.indexOf('class="brand"'), "the sidebar control sits at the left, over the rail it opens");
 }
 
 // ---------- ASU palette ----------

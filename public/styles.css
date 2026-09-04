@@ -277,7 +277,59 @@ button.mobile-reset-button { display: none; }
 .app-shell.sidebar-hidden { --sidebar-w: 0px; }
 .app-shell.sidebar-hidden .sidebar { border-right: 0; }
 
-.sidebar-toggle svg { fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; }
+/* Every inline icon in the markup is a line drawing: bare paths, no fill, meant
+   to be stroked. Without this they paint as solid black shapes, and the ones
+   with no width attribute claim an SVG's default 300x150 inside their button. */
+button svg,
+.icon-button svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Icon buttons on the maroon bar cannot keep the white fill they use on white
+   surfaces: the icon inherits the bar's white text and disappears into it. */
+.topbar .icon-button {
+  border-color: rgba(255, 198, 39, 0.45);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--gold);
+}
+.topbar .icon-button:hover { background: rgba(255, 198, 39, 0.18); }
+
+/* The control sits over the column it opens, at the left edge of the bar. On the
+   maroon band it draws itself in gold: .icon-button's white fill would have put
+   a white icon on a white square. */
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.sidebar-toggle {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid rgba(255, 198, 39, 0.45);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--gold);
+}
+.sidebar-toggle:hover { background: rgba(255, 198, 39, 0.18); }
+.sidebar-toggle svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+}
 
 .workspace {
   grid-column: 2;
