@@ -660,6 +660,17 @@ ok(/offLimitsPantry/.test(appJs) && /I left \$\{offLimits\.join/.test(appJs), "t
 ok(/off-limits/.test(appJs) && /does not fit/.test(appJs), "the pantry marks an item the current diet rules out");
 ok(fs.readFileSync("public/styles.css", "utf8").includes(".pantry-item.off-limits"), "an off-limits pantry item is styled as excluded");
 
+// ---------- saved recipes ----------
+// A dinner used to vanish the moment it was swapped or the plan rebuilt.
+ok(html.includes('id="savedRecipes"') && html.includes('id="savedRecipeList"'), "the rail has a saved-recipes section");
+ok(/data-action="save"/.test(appJs), "each dinner can be saved from its card");
+ok(/data-saved-action="cook"/.test(appJs) && /data-saved-action="remove"/.test(appJs), "a saved recipe can be cooked again or removed");
+// Saving keeps the citation, which is what the server matches on, not just a
+// title the model is free to reword.
+ok(/sourceRecipe: meal\.sourceRecipe/.test(appJs), "a saved recipe keeps its curated citation");
+ok(/recipe\.sourceRecipe \|\| recipe\.title/.test(appJs), "cooking it again asks for it by citation");
+ok(/savedRecipes: \[\]/.test(appJs) && /MAX_SAVED_RECIPES/.test(appJs), "saved recipes are persisted and bounded");
+
 // ---------- logo assets ----------
 for (const asset of ["logo-source.jpg", "logo-mark.png", "logo-mark-gold.png",
                      "logo-lockup.png", "logo-lockup-light.png", "favicon-32.png", "apple-touch-icon.png"]) {

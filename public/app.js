@@ -38,6 +38,7 @@ const DEFAULT_STATE = {
   plan: null,
   messages: [],
   groceryList: [],
+  savedRecipes: [],
   offLimitsPantry: [],
   location: null,
   // null = never asked. Only true sends coordinates to the place-name service.
@@ -47,6 +48,7 @@ const DEFAULT_STATE = {
 const MAX_EXCLUDED = 20;
 const MAX_MESSAGES = 30;
 const MAX_GROCERY_ITEMS = 50;
+const MAX_SAVED_RECIPES = 40;
 const MAX_GROCERY_QTY = 99;
 const PROFILE_EXTRA_DIET_TERMS = ["peanut allergy", "lactose intolerant", "celiac"];
 
@@ -106,6 +108,7 @@ function loadState() {
       excludedTitles: Array.isArray(stored.excludedTitles) ? stored.excludedTitles.slice(-MAX_EXCLUDED) : [],
       messages: Array.isArray(stored.messages) ? stored.messages.slice(-MAX_MESSAGES) : [],
       groceryList: Array.isArray(stored.groceryList) ? stored.groceryList.slice(0, MAX_GROCERY_ITEMS) : [],
+      savedRecipes: Array.isArray(stored.savedRecipes) ? stored.savedRecipes.slice(0, MAX_SAVED_RECIPES) : [],
       location: stored.location && Number.isFinite(stored.location.lat) && Number.isFinite(stored.location.lng)
         ? stored.location
         : null,
@@ -598,6 +601,7 @@ function renderPlan() {
         </div>
         <div class="meal-actions">
           <button data-action="details" data-index="${index}">Steps</button>
+          <button data-action="save" data-index="${index}" aria-pressed="${isRecipeSaved(meal)}">${isRecipeSaved(meal) ? "Saved" : "Save"}</button>
           <button data-action="swap" data-index="${index}">Swap</button>
         </div>
         <div class="meal-details">
@@ -635,6 +639,68 @@ function renderPlan() {
   $("leftoverList").innerHTML = leftovers.length
     ? leftovers.map((item) => `<div class="leftover-chip"><strong>${escapeHtml(item.item)}</strong><span>${escapeHtml(item.amount || item.remaining || "some left")}</span></div>`).join("")
     : `<div class="leftover-chip"><span>The plan uses the packages cleanly.</span></div>`;
+}
+
+// A dinner the student liked used to vanish the moment they swapped it or
+// rebuilt the plan. Saving keeps the recipe itself — its citation, timing and
+// steps — not the plan it happened to appear in.
+function recipeKey(meal) {
+  return normaliseKey(meal?.sourceRecipe || meal?.title);
+}
+
+function normaliseKey(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function isRecipeSaved(meal) {
+  const key = recipeKey(meal);
+  return Boolean(key) && state.savedRecipes.some((saved) => recipeKey(saved) === key);
+}
+
+function toggleSavedRecipe(meal) {
+  const key = recipeKey(meal);
+  if (!key) return;
+  const existing = state.savedRecipes.findIndex((saved) => recipeKey(saved) === key);
+  if (existing >= 0) {
+    const [removed] = state.savedRecipes.splice(existing, 1);
+    toast(`Removed ${removed.title} from your saved recipes`);
+  } else {
+    state.savedRecipes.unshift({
+      title: meal.title,
+      sourceRecipe: meal.sourceRecipe || "",
+      source: meal.source || "",
+      sourceUrl: meal.sourceUrl || "",
+      timeMin: Number(meal.timeMin) || null,
+      steps: Array.isArray(meal.steps) ? meal.steps.slice(0, 12) : [],
+      savedAt: new Date().toISOString()
+    });
+    state.savedRecipes = state.savedRecipes.slice(0, MAX_SAVED_RECIPES);
+    toast(`Saved ${meal.title}`);
+  }
+  saveState();
+  renderSavedRecipes();
+  renderPlan();
+}
+
+function renderSavedRecipes() {
+  const host = $("savedRecipeList");
+  $("savedRecipeCount").textContent = state.savedRecipes.length;
+  if (!state.savedRecipes.length) {
+    host.innerHTML = `<p class="saved-empty">Nothing saved yet. Press <strong>Save</strong> on a dinner you want to keep.</p>`;
+    return;
+  }
+  host.innerHTML = state.savedRecipes.map((recipe, index) => `
+    <article class="saved-recipe">
+      <div class="saved-recipe-main">
+        <strong>${escapeHtml(recipe.title)}</strong>
+        <span>${recipe.timeMin ? `${recipe.timeMin} min · ` : ""}${escapeHtml(recipe.source || "saved recipe")}</span>
+      </div>
+      <div class="saved-recipe-actions">
+        <button data-saved-action="cook" data-index="${index}">Cook again</button>
+        <button data-saved-action="remove" data-index="${index}" aria-label="Remove ${escapeHtml(recipe.title)}">Remove</button>
+      </div>
+    </article>
+  `).join("");
 }
 
 function renderPantry() {
@@ -1665,6 +1731,11 @@ $("mealList").addEventListener("click", async (event) => {
     return;
   }
 
+  if (button.dataset.action === "save") {
+    toggleSavedRecipe(meal);
+    return;
+  }
+
   if (button.dataset.action === "swap") {
     // The plan prompt lets a title describe the adapted result, so the title
     // alone does not identify the recipe to avoid; the citation does.
@@ -1689,6 +1760,24 @@ document.querySelectorAll("[data-view]").forEach((button) => {
     if (view === "chat") $("chatInput").focus();
     if (view === "plan") $("planView").querySelector(".plan-scroll").scrollTo({ top: 0, behavior: "smooth" });
   });
+});
+
+$("savedRecipeList").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-saved-action]");
+  if (!button) return;
+  const recipe = state.savedRecipes[Number(button.dataset.index)];
+  if (!recipe) return;
+
+  if (button.dataset.savedAction === "remove") {
+    toggleSavedRecipe(recipe);
+    return;
+  }
+  // "Cook again" asks for the recipe by its citation, which is what the server
+  // matches on, rather than by a title the model is free to reword.
+  const named = recipe.sourceRecipe || recipe.title;
+  setMobileView("chat");
+  addUserMessage(`Put ${named} back in the plan.`);
+  buildPlan(`Include ${named} as one of the dinners. Keep the same budget and equipment.`);
 });
 
 function resetDemo() {
@@ -1726,6 +1815,7 @@ renderProfile();
 renderPantry();
 renderPlan();
 renderGroceryList();
+renderSavedRecipes();
 renderLocation();
 setMobileView(activeMobileView);
 

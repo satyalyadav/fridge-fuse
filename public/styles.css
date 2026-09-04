@@ -1370,6 +1370,33 @@ body[data-welcome-open="true"] { overflow: hidden; }
 }
 .photo-wide-button:hover { background: var(--enamel); }
 .photo-wide-button svg { width: 18px; }
+
+.saved-recipe-list { display: grid; gap: 8px; }
+.saved-empty { margin: 0; color: var(--ink-soft); font-size: 12.5px; line-height: 1.5; }
+.saved-recipe {
+  display: grid;
+  gap: 7px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--paper);
+}
+.saved-recipe-main strong { display: block; font-size: 13.5px; }
+.saved-recipe-main span { display: block; margin-top: 2px; color: var(--ink-soft); font-size: 11.5px; }
+.saved-recipe-actions { display: flex; gap: 7px; }
+.saved-recipe-actions button {
+  flex: 1 1 auto;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+.saved-recipe-actions button:first-child { border-color: var(--maroon); color: var(--maroon); }
+.saved-recipe-actions button:first-child:hover { background: var(--maroon-wash); }
+.meal-actions button[aria-pressed="true"] { border-color: var(--maroon); background: var(--maroon-wash); color: var(--maroon); }
+
 .mobile-nav { display: none; }
 
 .toast-region {
