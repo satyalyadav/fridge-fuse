@@ -39,6 +39,7 @@ const DEFAULT_STATE = {
   messages: [],
   groceryList: [],
   offLimitsPantry: [],
+  sidebarOpen: true,
   location: null,
   // null = never asked. Only true sends coordinates to the place-name service.
   allowPlaceLookup: null
@@ -990,36 +991,48 @@ function closeProfile() {
   delete document.body.dataset.drawerOpen;
 }
 
+// Pantry and shop share one rail beside the conversation. Opening either means
+// showing that rail; on a phone it covers the workspace, on a laptop it takes a
+// column back. The preference is remembered because it is a working choice, not
+// a one-off.
+function setSidebar(open, { remember = true } = {}) {
+  document.querySelector(".app-shell").classList.toggle("sidebar-hidden", !open);
+  const toggle = $("sidebarToggle");
+  toggle.setAttribute("aria-expanded", String(open));
+  toggle.setAttribute("aria-label", open ? "Hide pantry and shop" : "Show pantry and shop");
+  if (remember) {
+    state.sidebarOpen = open;
+    saveState();
+  }
+  if (open) loadCatalog();
+}
+
 function openPantry() {
-  closeProfile();
-  $("pantryDrawer").classList.add("open");
-  $("pantryDrawer").setAttribute("aria-hidden", "false");
-  document.body.dataset.drawerOpen = "true";
-  requestAnimationFrame(() => $("pantryInput").focus());
+  setSidebar(true);
+  if (window.matchMedia("(max-width: 980px)").matches) setMobileView("sidebar");
+  $("pantryDrawer").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function closePantry() {
-  $("pantryDrawer").classList.remove("open");
-  $("pantryDrawer").setAttribute("aria-hidden", "true");
-  delete document.body.dataset.drawerOpen;
+  setSidebar(false);
 }
 
 // One view model for both breakpoints. Chat and plan stay paired side by side
 // on desktop (body[data-view] only splits the grocery tab out); on mobile the
 // .mobile-active class picks the single visible panel.
 function setMobileView(view) {
-  if (view === "pantry") {
-    openPantry();
-    return;
-  }
+  if (view === "pantry" || view === "grocery") view = "sidebar";
+  if (view === "sidebar") setSidebar(true, { remember: false });
   activeMobileView = view;
   document.body.dataset.view = view;
   $("chatView").classList.toggle("mobile-active", view === "chat");
   $("planView").classList.toggle("mobile-active", view === "plan");
+  if (view !== "sidebar" && window.matchMedia("(max-width: 980px)").matches) {
+    document.querySelector(".app-shell").classList.add("sidebar-hidden");
+  }
   document.querySelectorAll(".mobile-nav button, .desktop-nav .nav-item").forEach((button) => {
     if (button.dataset.view) button.classList.toggle("active", button.dataset.view === view);
   });
-  if (view === "grocery") loadCatalog();
 }
 
 function loadSamplePantry() {
@@ -1679,8 +1692,9 @@ $("mealList").addEventListener("click", async (event) => {
 document.querySelectorAll("[data-view]").forEach((button) => {
   button.addEventListener("click", () => {
     const view = button.dataset.view;
-    if (view === "pantry") {
-      openPantry();
+    if (view === "sidebar") {
+      setSidebar(true, { remember: false });
+      setMobileView("sidebar");
       return;
     }
     setMobileView(view);
@@ -1701,6 +1715,11 @@ function resetDemo() {
 
 $("resetDemoButton").addEventListener("click", resetDemo);
 $("resetMobileButton").addEventListener("click", resetDemo);
+$("sidebarToggle").addEventListener("click", () => {
+  const hidden = document.querySelector(".app-shell").classList.contains("sidebar-hidden");
+  setSidebar(hidden);
+  if (hidden && window.matchMedia("(max-width: 980px)").matches) setMobileView("sidebar");
+});
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
@@ -1727,6 +1746,9 @@ renderPantry();
 renderPlan();
 renderGroceryList();
 renderLocation();
+// The rail starts open on a laptop, where there is room for it, and closed on a
+// phone, where it would cover the conversation.
+setSidebar(state.sidebarOpen !== false && !window.matchMedia("(max-width: 980px)").matches, { remember: false });
 setMobileView(activeMobileView);
 
 // The welcome wizard is a one-time landing experience: it runs once, ever,

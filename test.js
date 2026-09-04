@@ -634,11 +634,19 @@ const missingIds = [...new Set([...appJs.matchAll(/\$\("([^"]+)"\)/g)].map((m) =
   .filter((id) => !htmlIds.has(id) && !RUNTIME_IDS.has(id));
 ok(missingIds.length === 0, `every element app.js touches exists in the HTML${missingIds.length ? ` (missing: ${missingIds.join(", ")})` : ""}`);
 
-ok(html.includes('id="groceryView"'), "index.html has the grocery panel");
-ok(html.includes('data-view="grocery"'), "index.html has the grocery nav entry");
+// Pantry and shop live in one collapsible rail beside the conversation, so the
+// whole kitchen is on screen at once instead of behind four tabs.
+ok(html.includes('id="groceryView"') && html.includes('id="pantryDrawer"'), "the pantry and shop panels exist");
+ok(/<aside class="sidebar" id="sidebar"[\s\S]*id="pantryDrawer"[\s\S]*id="groceryView"[\s\S]*<\/aside>/.test(html), "both live inside the sidebar rail");
+ok(html.includes('id="sidebarToggle"') && /aria-controls="sidebar"/.test(html), "the rail has a show/hide control");
+ok(!/data-view="grocery"|data-view="pantry"/.test(html), "shop and pantry are no longer separate views");
+ok(/data-view="chat"/.test(html) && /data-view="plan"/.test(html) && /data-view="sidebar"/.test(html), "the mobile tabs are chat, plan, and the rail");
+ok(!/class="desktop-nav"/.test(html), "the icon rail it replaced is gone");
+ok(/\.sidebar-hidden/.test(fs.readFileSync("public/styles.css", "utf8")), "hiding the rail is a styled state, not a display hack");
+ok(/setSidebar\(/.test(appJs) && /state\.sidebarOpen/.test(appJs), "the rail remembers whether it was open");
 ok(appJs.includes("/api/grocery/optimize"), "app.js calls the optimizer");
 ok(appJs.includes("navigator.geolocation"), "app.js asks the browser for a location");
-ok(fs.readFileSync("public/styles.css", "utf8").includes("repeat(4, 1fr)"), "mobile nav has room for the fourth tab");
+ok(fs.readFileSync("public/styles.css", "utf8").includes("repeat(3, 1fr)"), "mobile nav has room for its three tabs");
 
 const PROFILE_EXTRA_DIET_TERMS_SOURCE = (appJs.match(/const PROFILE_EXTRA_DIET_TERMS = \[([^\]]*)\]/)?.[1] || "")
   .split(",")
