@@ -2,26 +2,6 @@ const $ = (id) => document.getElementById(id);
 const STORAGE_KEY = "fridgefuse-state-v2";
 const MAX_VISION_IMAGE_EDGE = 1024;
 
-const KNOWN_INGREDIENTS = [
-  "banana", "black beans", "bread", "butter", "carrots", "cheddar",
-  "chicken breast", "eggs", "frozen peas", "garlic", "ground beef",
-  "marinara", "milk", "oats", "olive oil", "onion", "pasta",
-  "peanut butter", "potatoes", "rice", "salsa", "soy sauce",
-  "spinach", "tortillas", "yogurt"
-];
-
-const ALIASES = {
-  "beans": "black beans",
-  "cheese": "cheddar",
-  "chicken": "chicken breast",
-  "peas": "frozen peas",
-  "tomato": "tomatoes",
-  "tomatoes": "tomatoes",
-  "tomato sauce": "marinara",
-  "spaghetti sauce": "marinara",
-  "wraps": "tortillas"
-};
-
 const DEFAULT_STATE = {
   profile: {
     displayName: "",
@@ -70,16 +50,68 @@ function isLegacyRecipeCitation(dinner) {
   }
 }
 
+function safeText(value, limit = 500) {
+  return typeof value === "string" ? value.slice(0, limit) : "";
+}
+
+function safeStrings(value, limit = 100) {
+  return Array.isArray(value) ? value.filter((entry) => typeof entry === "string" && entry.trim()).slice(0, limit).map((entry) => entry.slice(0, 500)) : [];
+}
+
+function safeUrl(value) {
+  try {
+    const url = new URL(value);
+    return ["https:", "http:"].includes(url.protocol) ? url.href : "";
+  } catch { return ""; }
+}
+
+function safeNumber(value, fallback = 0, max = 100000) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? Math.min(number, max) : fallback;
+}
+
+function safeConstraints(value = {}) {
+  return {
+    budget: safeNumber(value?.budget, DEFAULT_STATE.constraints.budget, 100),
+    dinners: Math.max(1, Math.floor(safeNumber(value?.dinners, 3, 7))),
+    maxTimeMin: Math.max(1, safeNumber(value?.maxTimeMin, 20, 180)),
+    equipment: Array.isArray(value?.equipment) ? safeStrings(value.equipment, 20) : [...DEFAULT_STATE.constraints.equipment],
+    diet: safeText(value?.diet, 500)
+  };
+}
+
+function safeRequirements(value) {
+  return Array.isArray(value) ? value.filter((entry) => entry && typeof entry.item === "string" && Number(entry.amount) > 0 && typeof entry.unit === "string")
+    .slice(0, 100).map((entry) => ({ item: safeText(entry.item, 80), amount: safeNumber(entry.amount), unit: safeText(entry.unit, 30) })) : [];
+}
+
+function safeMeal(meal) {
+  if (!meal || typeof meal !== "object" || typeof meal.title !== "string" || !meal.title.trim()) return null;
+  const sourceUrl = safeUrl(meal.sourceUrl);
+  return {
+    title: safeText(meal.title), sourceRecipe: safeText(meal.sourceRecipe), source: safeText(meal.source), sourceUrl,
+    sourceUnavailable: !sourceUrl || isLegacyRecipeCitation(meal), adaptationNote: safeText(meal.adaptationNote),
+    timeMin: safeNumber(meal.timeMin, 0, 180), servings: Math.max(1, safeNumber(meal.servings, 1, 12)),
+    steps: safeStrings(meal.steps, 30), equip: safeStrings(meal.equip, 20), usesPantry: safeStrings(meal.usesPantry),
+    needs: safeRequirements(meal.needs), requirements: safeRequirements(meal.requirements), savedAt: safeText(meal.savedAt)
+  };
+}
+
 function sanitizeStoredPlan(plan) {
-  if (!plan || !Array.isArray(plan.dinners)) return plan;
-  let changed = false;
-  const dinners = plan.dinners.map((dinner) => {
-    if (!isLegacyRecipeCitation(dinner)) return dinner;
-    changed = true;
-    const { sourceRecipe, source, sourceUrl, ...rest } = dinner;
-    return { ...rest, sourceUnavailable: true };
-  });
-  return changed ? { ...plan, dinners } : plan;
+  if (!plan || !Array.isArray(plan.dinners)) return null;
+  const dinners = plan.dinners.slice(0, 7).map(safeMeal).filter(Boolean);
+  if (!dinners.length) return null;
+  return {
+    dinners, constraints: plan.constraints ? safeConstraints(plan.constraints) : undefined, totalCost: safeNumber(plan.totalCost),
+    shoppingList: (Array.isArray(plan.shoppingList) ? plan.shoppingList : []).filter((item) => item && typeof item.item === "string").slice(0, 50).map((item) => ({
+      item: safeText(item.item), qty: Math.max(1, Math.floor(safeNumber(item.qty, 1, 99))), packPrice: safeNumber(item.packPrice),
+      pack: safeText(item.pack), store: safeText(item.store), requiredLabel: safeText(item.requiredLabel), sharedBy: safeStrings(item.sharedBy)
+    })),
+    leftovers: (Array.isArray(plan.leftovers) ? plan.leftovers : []).filter((item) => item && typeof item.item === "string").slice(0, 50)
+      .map((item) => ({ item: safeText(item.item), amount: safeText(item.amount), remaining: safeNumber(item.remaining), unit: safeText(item.unit) })),
+    inventoryWarnings: safeStrings(plan.inventoryWarnings), offLimitsPantry: safeStrings(plan.offLimitsPantry),
+    checkoutStore: plan.checkoutStore && typeof plan.checkoutStore.name === "string" ? { name: safeText(plan.checkoutStore.name) } : null
+  };
 }
 
 // structuredClone is missing on Safari < 15.4 and other older browsers, and the
@@ -107,29 +139,25 @@ function loadState() {
 // therefore cannot put a shape in state that the renderers do not expect.
 function normaliseState(stored) {
   if (!stored || typeof stored !== "object" || Array.isArray(stored)) return clone(DEFAULT_STATE);
-  {
-    return {
-      ...clone(DEFAULT_STATE),
-      ...stored,
-      profile: {
-        ...DEFAULT_STATE.profile,
-        ...(stored.profile || {}),
-        onboarded: stored.profile?.onboarded === true
-      },
-      constraints: { ...DEFAULT_STATE.constraints, ...(stored.constraints || {}) },
-      plan: sanitizeStoredPlan(stored.plan || null),
-      pantry: Array.isArray(stored.pantry) ? stored.pantry : [],
-      excludedTitles: Array.isArray(stored.excludedTitles) ? stored.excludedTitles.slice(-MAX_EXCLUDED) : [],
-      messages: Array.isArray(stored.messages) ? stored.messages.slice(-MAX_MESSAGES) : [],
-      groceryList: Array.isArray(stored.groceryList) ? stored.groceryList.slice(0, MAX_GROCERY_ITEMS) : [],
-      savedRecipes: Array.isArray(stored.savedRecipes) ? stored.savedRecipes.slice(0, MAX_SAVED_RECIPES) : [],
-      location: stored.location && Number.isFinite(stored.location.lat) && Number.isFinite(stored.location.lng)
-        ? stored.location
-        : null,
-      // Anything other than a stored true/false means the question is still open.
-      allowPlaceLookup: typeof stored.allowPlaceLookup === "boolean" ? stored.allowPlaceLookup : null
-    };
-  }
+  const records = (value, max) => Array.isArray(value) ? value.filter((item) => item && typeof item === "object").slice(0, max) : [];
+  const location = stored.location;
+  return {
+    profile: { displayName: safeText(stored.profile?.displayName, 40), onboarded: stored.profile?.onboarded === true },
+    constraints: safeConstraints(stored.constraints),
+    plan: sanitizeStoredPlan(stored.plan),
+    pantry: records(stored.pantry, 100).filter((item) => typeof item.name === "string" && item.name.trim())
+      .map((item) => ({ name: item.name.trim().toLowerCase().slice(0, 80), amount: safeText(item.amount, 80) || "some", soon: item.soon === true })),
+    excludedTitles: safeStrings(stored.excludedTitles).slice(-MAX_EXCLUDED),
+    messages: records(stored.messages, MAX_MESSAGES).filter((item) => typeof item.text === "string")
+      .map((item) => ({ role: item.role === "user" ? "user" : "assistant", text: safeText(item.text, 4000), supportingText: safeText(item.supportingText, 4000), tone: item.tone === "error" ? "error" : "" })),
+    groceryList: records(stored.groceryList, MAX_GROCERY_ITEMS).filter((item) => typeof item.name === "string" && item.name.trim())
+      .map((item) => ({ name: item.name.trim().toLowerCase().slice(0, 80), qty: Math.max(1, Math.floor(safeNumber(item.qty, 1, MAX_GROCERY_QTY))), pack: safeText(item.pack, 100) })),
+    savedRecipes: records(stored.savedRecipes, MAX_SAVED_RECIPES).map(safeMeal).filter(Boolean),
+    offLimitsPantry: safeStrings(stored.offLimitsPantry),
+    location: location && Number.isFinite(location.lat) && Number.isFinite(location.lng) && Math.abs(location.lat) <= 90 && Math.abs(location.lng) <= 180
+      ? { lat: location.lat, lng: location.lng, accuracyM: safeNumber(location.accuracyM), label: safeText(location.label), detail: safeText(location.detail) } : null,
+    allowPlaceLookup: typeof stored.allowPlaceLookup === "boolean" ? stored.allowPlaceLookup : null
+  };
 }
 
 // Export and restore. Accounts would sync this same object, so the file is the
@@ -162,10 +190,11 @@ function exportKitchen() {
 async function importKitchen(file) {
   if (!file) return;
   try {
+    if (file.size > 2 * 1024 * 1024) throw new Error("Kitchen files must be under 2 MB.");
     const text = await file.text();
     const payload = JSON.parse(text);
     const incoming = payload?.format === EXPORT_FORMAT ? payload.state : payload;
-    if (!incoming || typeof incoming !== "object") {
+    if (!incoming || typeof incoming !== "object" || Array.isArray(incoming) || !["profile", "pantry", "constraints", "plan", "savedRecipes"].some((key) => Object.prototype.hasOwnProperty.call(incoming, key))) {
       throw new Error("That file is not a FridgeFuse kitchen.");
     }
     if (payload?.format === EXPORT_FORMAT && Number(payload.version) > EXPORT_VERSION) {
@@ -288,62 +317,17 @@ function scrollMessages() {
   });
 }
 
-function getIngredientMentions(message) {
-  const lower = ` ${message.toLowerCase()} `;
-  const found = new Set();
-
-  for (const ingredient of KNOWN_INGREDIENTS) {
-    const pattern = new RegExp(`\\b${ingredient.replaceAll(" ", "\\s+")}\\b`);
-    if (pattern.test(lower)) found.add(ingredient);
-  }
-  for (const [alias, ingredient] of Object.entries(ALIASES)) {
-    if (new RegExp(`\\b${alias.replace(" ", "\\s+")}\\b`).test(lower)) found.add(ingredient);
-  }
-  return [...found];
-}
-
-function mentionIndex(lower, ingredient) {
-  let idx = lower.indexOf(ingredient);
-  if (idx !== -1) return idx;
-  for (const [alias, target] of Object.entries(ALIASES)) {
-    if (target === ingredient) {
-      idx = lower.indexOf(alias);
-      if (idx !== -1) return idx;
-    }
-  }
-  return -1;
-}
-
-function roughAmount(message, ingredient) {
-  const lower = message.toLowerCase();
-  const idx = mentionIndex(lower, ingredient);
-  if (idx === -1) return "some";
-  const near = lower.slice(Math.max(0, idx - 18), idx + ingredient.length + 18);
-  if (/half|1\/2/.test(near)) return "about half left";
-  if (/almost (?:gone|empty)|little|tiny bit/.test(near)) return "almost gone";
-  if (/full|unopened|whole/.test(near)) return "plenty";
-  const count = near.match(/\b(\d+)\b/);
-  return count ? `about ${count[1]} left` : "some";
-}
-
 function addPantryItem(name, amount = "some", soon = false) {
   const normalized = name.trim().toLowerCase();
   if (!normalized) return false;
   const existing = state.pantry.find((item) => item.name === normalized);
   if (existing) {
-    existing.amount = amount || existing.amount;
+    existing.amount = amount && amount !== "some" ? amount : existing.amount;
     existing.soon = Boolean(existing.soon || soon);
     return false;
   }
   state.pantry.push({ name: normalized, amount: amount || "some", soon: Boolean(soon) });
   return true;
-}
-
-function ingredientNeedsUsing(message, ingredient) {
-  const itemPattern = ingredient.replaceAll(" ", "\\s+");
-  const item = new RegExp("\\b" + itemPattern + "\\b", "i");
-  const urgency = /\b(?:use|using|used|going bad|expir|wilting|old)\b/i;
-  return message.split(/[.!?;\n]+/).some((sentence) => item.test(sentence) && urgency.test(sentence));
 }
 
 const CLAUSE_BOUNDARY = /\bbut\b|\bhowever\b|\balthough\b|\bthough\b|\bexcept\b|[,;]+/;
@@ -393,37 +377,6 @@ function preferenceMentions(message, options) {
 
 function parseMessage(message) {
   const lower = message.toLowerCase();
-  const ingredients = getIngredientMentions(message);
-  const removalPattern = /\b(?:out of|no more|used up|remov(?:e|ing)|don't have|do not have|dont have|all gone|no (?:more )?left)\b/;
-  const removalTargets = new Set();
-  for (const sentence of message.split(/[.!?;\n]+/)) {
-    if (!removalPattern.test(sentence.toLowerCase())) continue;
-    for (const name of getIngredientMentions(sentence)) {
-      const clause = clausesOf(sentence).find((c) => clauseMentionIndex(c, name) !== -1) || sentence;
-      const idx = clauseMentionIndex(clause, name);
-      // "I have eggs, but I'm out of milk" must only remove milk: an affirmed
-      // mention without its own negation is exempt.
-      if (idx !== -1 && affirmedBefore(clause, idx) && !negatedBefore(clause, idx)) continue;
-      removalTargets.add(name);
-    }
-  }
-  const removal = removalTargets.size > 0;
-  const urgency = /\b(?:use|using|used|going bad|expir|wilting|old)\b/.test(lower);
-  let pantryChanged = false;
-
-  if (removal) {
-    for (const ingredient of removalTargets) {
-      const before = state.pantry.length;
-      state.pantry = state.pantry.filter((item) => item.name !== ingredient);
-      pantryChanged ||= before !== state.pantry.length;
-    }
-  } else if (ingredients.length) {
-    for (const ingredient of ingredients) {
-      const useSoon = urgency && ingredientNeedsUsing(message, ingredient);
-      pantryChanged = addPantryItem(ingredient, roughAmount(message, ingredient), useSoon) || pantryChanged;
-    }
-  }
-
   const budget = lower.match(/\$(\d+(?:\.\d{1,2})?)|(\d+(?:\.\d{1,2})?)\s*(?:dollars|bucks)/);
   if (budget) state.constraints.budget = Number(budget[1] || budget[2]);
 
@@ -446,31 +399,26 @@ function parseMessage(message) {
     .filter((item) => !removedEquipment.includes(item));
   if (removedEquipment.length) {
     state.constraints.equipment = state.constraints.equipment.filter((item) => !removedEquipment.includes(item));
-    if (!state.constraints.equipment.length) state.constraints.equipment = ["microwave"];
   }
   if (addedEquipment.length && /\b(?:only|just)\b/.test(lower)) state.constraints.equipment = [...new Set(addedEquipment)];
   else if (addedEquipment.length) state.constraints.equipment = [...new Set([...state.constraints.equipment, ...addedEquipment])];
 
   if (/\b(?:no (?:diet|diets|restrictions?)|not (?:vegetarian|vegan|gluten-free|dairy-free)(?: anymore)?|eat (?:everything|anything)|clear (?:my )?diet|regular diet)\b/.test(lower)) {
-    state.constraints.diet = "";
+    // Casual diet changes never remove an allergy. Allergies are edited explicitly in the profile.
+    const clearable = new Set(PREFERENCES.diets.filter((option) => option.group !== "Allergy").map((option) => option.id));
+    const removed = preferenceMentions(message, PREFERENCES.diets).map((mention) => mention.id);
+    state.constraints.diet = safeStrings(String(state.constraints.diet || "").split(",").map((item) => item.trim()))
+      .filter((item) => !clearable.has(item) || (removed.length && !removed.includes(item))).join(", ");
   } else {
     const diets = preferenceMentions(message, PREFERENCES.diets).map((mention) => mention.id);
-    if (diets.length) state.constraints.diet = diets.join(", ");
+    if (diets.length) state.constraints.diet = [...new Set([...String(state.constraints.diet || "").split(",").map((item) => item.trim()).filter(Boolean), ...diets])].join(", ");
   }
 
   saveState();
   renderPantry();
-  return { ingredients, pantryChanged, removal, urgency };
+  return {};
 }
 
-function isPantryOnlyRequest(message) {
-  const lower = message.toLowerCase().trim();
-  const namesPantry = /\b(?:pantry|fridge|mini[- ]fridge)\b/.test(lower);
-  const changesPantry = /\b(?:add|put|save|store|remove)\b/.test(lower);
-  const startsWithPantryAction = /^(?:(?:can|could|would) you\s+|please\s+)?(?:add|put|save|store|remove)\b/.test(lower);
-  const asksForFoodIdeas = /\b(?:plan|recipe|dinner|meal|cook|make|suggest|idea|breakfast|lunch|tonight)\b/.test(lower);
-  return (startsWithPantryAction || (namesPantry && changesPantry)) && !asksForFoodIdeas;
-}
 
 function planningFailureCopy(context) {
   const failure = context?.failure || null;
@@ -511,6 +459,10 @@ function planningFailureCopy(context) {
     };
   }
 
+  if ([400, 422].includes(context?.httpStatus) && failure?.message) {
+    return { title: "This plan needs a change", detail: failure.message };
+  }
+
   if (!context?.responseReceived) {
     return {
       title: "FridgeFuse connection failure",
@@ -533,56 +485,104 @@ function planningFailureCopy(context) {
   };
 }
 
+let planRequestSequence = 0;
+let planningOptions = {};
+
+let interpreting = false;
+
+async function interpretMessage(message) {
+  const response = await fetch("/api/chat/interpret", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, pantry: state.pantry.map(({ name }) => ({ name })) })
+  });
+  const result = await response.json();
+  if (!response.ok || !result.ok) throw new Error(result.failure?.message || "Could not understand that message. No changes were made.");
+  return result;
+}
+
+function applyChatActions(actions) {
+  if (!Array.isArray(actions)) throw new Error("AI returned no action list.");
+  const pantryNames = new Set(state.pantry.map(item => item.name));
+  const shoppingNames = new Set(state.groceryList.map(item => item.name));
+  for (const action of actions) {
+    if (action.type === "pantry_set") pantryNames.add(action.name);
+    if (action.type === "pantry_remove") pantryNames.delete(action.name);
+    if (action.type === "shopping_add") shoppingNames.add(action.name);
+    if (action.type === "shopping_remove") shoppingNames.delete(action.name);
+  }
+  if (pantryNames.size > 100 || shoppingNames.size > MAX_GROCERY_ITEMS) throw new Error("This update exceeds the list limit. Remove some items first.");
+  const confirmations = [];
+  for (const action of actions) {
+    if (action.type === "pantry_set") {
+      addPantryItem(action.name, action.amount, action.soon);
+      confirmations.push(`Pantry updated: ${action.name}${action.amount !== "some" ? ` (${action.amount})` : ""}.`);
+    } else if (action.type === "pantry_remove") {
+      state.pantry = state.pantry.filter(item => item.name !== action.name);
+      confirmations.push(`Removed ${action.name} from your pantry.`);
+    } else if (action.type === "shopping_add") {
+      addGroceryItem(action.name, action.qty);
+      confirmations.push(`Added ${action.name} to your shopping list.`);
+    } else if (action.type === "shopping_remove") {
+      state.groceryList = state.groceryList.filter(item => item.name !== action.name);
+      confirmations.push(`Removed ${action.name} from your shopping list.`);
+    }
+  }
+  if (actions.some(action => action.type.startsWith("shopping_"))) invalidateGroceryResults();
+  saveState(); renderPantry(); renderGroceryList();
+  return confirmations.join(" ");
+}
+
 async function handleMessage(message) {
   const clean = message.trim();
   if (!clean) return;
-
+  if (interpreting) { toast("Please wait for the current message to finish."); return; }
+  interpreting = true;
   addUserMessage(clean);
   $("starterPrompts").hidden = true;
-  const swapMatch = clean.toLowerCase().match(/\bswap\b.*?\b(one|two|three|four|five|six|seven|first|second|third|fourth|fifth|sixth|seventh|[1-7])\b/);
-  if (swapMatch && state.plan?.dinners?.length) {
-    const positions = { one: 0, two: 1, three: 2, four: 3, five: 4, six: 5, seven: 6, first: 0, second: 1, third: 2, fourth: 3, fifth: 4, sixth: 5, seventh: 6, 1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6 };
-    const meal = state.plan.dinners[positions[swapMatch[1]]];
-    if (meal) addExclusion(meal.sourceRecipe || meal.title);
-  }
-  await loadPreferences();
-  const parsed = parseMessage(clean);
-
-  if (isPantryOnlyRequest(clean) && parsed.ingredients.length) {
-    const orderedIngredients = [...parsed.ingredients]
-      .sort((a, b) => mentionIndex(clean.toLowerCase(), a) - mentionIndex(clean.toLowerCase(), b));
-    const names = new Intl.ListFormat("en-US", { style: "long", type: "conjunction" })
-      .format(orderedIngredients);
-    let confirmation;
-    if (parsed.removal) {
-      confirmation = parsed.pantryChanged
-        ? `Removed ${names} from your pantry.`
-        : `${capitalize(names)} ${orderedIngredients.length === 1 ? "was" : "were"} not in your pantry.`;
-    } else {
-      confirmation = parsed.pantryChanged
-        ? `Added ${names} to your pantry.`
-        : `${capitalize(names)} ${orderedIngredients.length === 1 ? "is" : "are"} already in your pantry.`;
+  // Discard interpretation if the user edits or resets inventory while AIR is responding.
+  const requestState = state;
+  const snapshot = JSON.stringify([state.pantry, state.groceryList, state.constraints]);
+  showThinking();
+  try {
+    await loadPreferences();
+    const parsed = await interpretMessage(clean);
+    if (requestState !== state || snapshot !== JSON.stringify([state.pantry, state.groceryList, state.constraints])) {
+      addAssistantMessage("Your pantry or preferences changed while I was reading that. Please send the message again.");
+      return;
     }
-    addAssistantMessage(confirmation, "Ask me to build a meal plan when you want one.");
-    setMobileView("chat");
-    return;
+    if (parsed.clarification) { addAssistantMessage(parsed.clarification); return; }
+    const confirmation = applyChatActions(parsed.actions);
+    parseMessage(clean);
+    if (confirmation) addAssistantMessage(confirmation);
+    if (!parsed.requestPlan) {
+      if (!confirmation) addAssistantMessage("Preferences noted. Ask me to build a meal plan when you want one.");
+      setMobileView("chat");
+      return;
+    }
+    if (parsed.swapIndex !== null) {
+      const meal = state.plan?.dinners?.[parsed.swapIndex];
+      if (!meal) { addAssistantMessage("That meal number is not in your current plan."); return; }
+      addExclusion(meal.sourceRecipe || meal.title);
+      planningOptions = { swapIndex: parsed.swapIndex, previousDinners: clone(state.plan.dinners) };
+    }
+    hideThinking();
+    await buildPlan(clean);
+  } catch (error) {
+    addAssistantMessage(error.message, "Your message was not completed. Please try again.", { tone: "error" });
+  } finally {
+    interpreting = false;
+    hideThinking();
   }
-
-  if (!state.pantry.length && !parsed.ingredients.length) {
-    addAssistantMessage(
-      "What is already in your mini-fridge or room?",
-      "Tell me two or three things you have, or add a photo."
-    );
-    setMobileView("chat");
-    return;
-  }
-
-  await buildPlan(clean);
 }
 
 async function buildPlan(request = "") {
+  const requestId = ++planRequestSequence;
+  const snapshot = clone(state);
+  const options = planningOptions;
+  planningOptions = {};
+  hideThinking();
   showThinking();
-  const soon = state.pantry.filter((item) => item.soon).map((item) => item.name);
+  const soon = snapshot.pantry.filter((item) => item.soon).map((item) => item.name);
   let responseReceived = false;
   let responseAccepted = false;
   let httpStatus = null;
@@ -593,23 +593,33 @@ async function buildPlan(request = "") {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        pantry: state.pantry.map((item) => item.name),
+        pantry: snapshot.pantry.map((item) => item.name),
+        pantryInventory: snapshot.pantry.map(({ name, amount }) => ({ name, amount })),
+        shoppingLocation: snapshot.location ? { lat: snapshot.location.lat, lng: snapshot.location.lng } : undefined,
+        ...options,
         useSoon: soon,
-        budget: state.constraints.budget,
-        dinners: state.constraints.dinners,
-        maxTimeMin: state.constraints.maxTimeMin,
-        equipment: state.constraints.equipment,
-        diet: state.constraints.diet,
+        budget: snapshot.constraints.budget,
+        dinners: snapshot.constraints.dinners,
+        maxTimeMin: snapshot.constraints.maxTimeMin,
+        equipment: snapshot.constraints.equipment,
+        diet: snapshot.constraints.diet,
         request,
-        exclude: state.excludedTitles
+        exclude: snapshot.excludedTitles
       })
     });
+    if (requestId !== planRequestSequence) return;
     responseReceived = true;
     httpStatus = response.status;
     // Read the body even on an error status: the server explains WHY it refused
     // (an unpriced ingredient, an unapproved recipe, a dietary violation), and
     // that reason is more useful to the student than the status code.
     const result = await response.json().catch(() => null);
+    if (requestId !== planRequestSequence) return;
+    if (JSON.stringify(state.constraints) !== JSON.stringify(snapshot.constraints) || JSON.stringify(state.pantry) !== JSON.stringify(snapshot.pantry)) {
+      hideThinking();
+      addAssistantMessage("Your kitchen changed while the plan was being made.", "Build a new plan to use your latest pantry and preferences.");
+      return;
+    }
     serverFailure = result?.failure || null;
     if (!response.ok) {
       throw new Error(result?.failure?.message || `Planning returned HTTP ${response.status}`);
@@ -625,12 +635,13 @@ async function buildPlan(request = "") {
 
     state.plan = {
       ...result,
-      constraints: structuredClone(state.constraints)
+      constraints: clone(snapshot.constraints)
     };
     state.offLimitsPantry = offLimits;
     saveState();
     renderPlan();
     renderGroceryList();
+    renderPantry();
     hideThinking();
 
     if (!result.dinners?.length) {
@@ -641,13 +652,15 @@ async function buildPlan(request = "") {
       setMobileView("plan");
       return;
     }
-    const budgetStatus = result.totalCost <= state.constraints.budget
-      ? `The checkout total is ${formatMoney(result.totalCost)}, under your ${formatMoney(state.constraints.budget)} limit.`
-      : `The cheapest full-package version is ${formatMoney(result.totalCost)}, which is over your ${formatMoney(state.constraints.budget)} limit.`;
-    const soonText = soon.length ? ` I put ${soon.join(" and ")} first so it gets used.` : "";
-    const dietText = state.constraints.diet ? ` Every dinner is ${state.constraints.diet}.` : "";
+    const budgetStatus = result.totalCost <= snapshot.constraints.budget
+      ? `The checkout total is ${formatMoney(result.totalCost)}, under your ${formatMoney(snapshot.constraints.budget)} limit.`
+      : `The cheapest full-package version is ${formatMoney(result.totalCost)}, which is over your ${formatMoney(snapshot.constraints.budget)} limit.`;
+    const usedSoon = soon.filter((name) => result.dinners?.[0]?.usesPantry?.includes(name));
+    const soonText = usedSoon.length ? ` The first dinner uses ${usedSoon.join(" and ")}.` : "";
+    if (result.inventoryWarnings?.length) addAssistantMessage("Check your pantry quantities before shopping.", result.inventoryWarnings.join(" "));
+    const dietText = snapshot.constraints.diet ? ` Every dinner is ${snapshot.constraints.diet}.` : "";
     const offLimitsText = offLimits.length
-      ? ` I left ${offLimits.join(" and ")} out of the cooking — ${offLimits.length === 1 ? "it does not" : "they do not"} fit ${state.constraints.diet || "your food restrictions"}. If yours is a safe version, add it under its own name (for example "gluten free pasta") and I will use it.`
+      ? ` I left ${offLimits.join(" and ")} out of the cooking — ${offLimits.length === 1 ? "it does not" : "they do not"} fit ${snapshot.constraints.diet || "your food restrictions"}. If yours is a safe version, add it under its own name (for example "gluten free pasta") and I will use it.`
       : "";
     if (result.swapUnavailable) {
       addAssistantMessage(
@@ -661,6 +674,7 @@ async function buildPlan(request = "") {
     );
     setMobileView("plan");
   } catch (error) {
+    if (requestId !== planRequestSequence) return;
     hideThinking();
     const copy = planningFailureCopy({
       failure: serverFailure,
@@ -703,12 +717,14 @@ function renderPlan() {
   $("budgetLimit").textContent = `of ${formatMoney(planConstraints.budget)}`;
   $("budgetStamp").classList.toggle("over", plan.totalCost > planConstraints.budget);
   $("tripStatus").classList.add("ready");
-  $("tripLabel").textContent = `${plan.shoppingList?.length || 0} packages · ${formatMoney(plan.totalCost)} estimated`;
+  const packages = (plan.shoppingList || []).reduce((sum, item) => sum + Math.max(1, Number(item.qty) || 1), 0);
+  $("tripLabel").textContent = `${packages} ${packages === 1 ? "package" : "packages"} · ${formatMoney(plan.totalCost)} estimated${plan.checkoutStore?.name ? ` at ${plan.checkoutStore.name}` : ""}`;
 
   const soon = state.pantry.filter((item) => item.soon).map((item) => item.name);
   const shared = (plan.shoppingList || []).filter((item) => (item.sharedBy || []).length > 1);
   const logicParts = [];
-  if (soon.length) logicParts.push(`${capitalize(soon.join(" and "))} get used first`);
+  const usedFirst = soon.filter((name) => plan.dinners[0]?.usesPantry?.includes(name));
+  if (usedFirst.length) logicParts.push(`The first dinner uses ${usedFirst.join(" and ")}`);
   if (shared.length) logicParts.push(`${shared.length} purchase${shared.length === 1 ? " works" : "s work"} across multiple dinners`);
   logicParts.push(plan.totalCost <= planConstraints.budget ? `${formatMoney(planConstraints.budget - plan.totalCost)} stays in your budget` : `${formatMoney(plan.totalCost - planConstraints.budget)} over budget`);
   $("planLogic").textContent = logicParts.join(". ") + ".";
@@ -769,13 +785,10 @@ function renderPlan() {
   }).join("") + `
     <div class="receipt-total"><span>ESTIMATED TOTAL</span><strong>${formatMoney(plan.totalCost)}</strong></div>`;
 
-  const leftovers = plan.leftovers?.length ? plan.leftovers : shopping.slice(0, 4).map((item) => ({
-    item: item.item,
-    amount: (item.sharedBy || []).length > 1 ? "a little left" : "most of the package"
-  }));
+  const leftovers = Array.isArray(plan.leftovers) ? plan.leftovers : [];
   $("leftoverList").innerHTML = leftovers.length
     ? leftovers.map((item) => `<div class="leftover-chip"><strong>${escapeHtml(item.item)}</strong><span>${escapeHtml(item.amount || item.remaining || "some left")}</span></div>`).join("")
-    : `<div class="leftover-chip"><span>The plan uses the packages cleanly.</span></div>`;
+    : `<div class="leftover-chip"><span>No confirmed leftovers.</span></div>`;
 }
 
 // A dinner the student liked used to vanish the moment they swapped it or
@@ -832,7 +845,7 @@ function renderSavedRecipes() {
     <article class="saved-recipe">
       <div class="saved-recipe-main">
         <strong>${escapeHtml(recipe.title)}</strong>
-        <span>${recipe.timeMin ? `${recipe.timeMin} min · ` : ""}${escapeHtml(recipe.source || "saved recipe")}</span>
+        <span>${recipe.timeMin ? `${safeNumber(recipe.timeMin, 0, 180)} min · ` : ""}${escapeHtml(recipe.source || "saved recipe")}</span>
       </div>
       <div class="saved-recipe-actions">
         <button data-saved-action="cook" data-index="${index}">Cook again</button>
@@ -874,6 +887,8 @@ function renderPantry() {
           <span>${escapeHtml(item.amount)}${item.soon ? " · use first" : ""}${offLimits.has(item.name.toLowerCase()) ? ` · not used · does not fit ${escapeHtml(state.constraints.diet || "your food restrictions")}` : ""}</span>
         </span>
       </button>
+      <input class="pantry-amount" data-pantry-amount="${index}" value="${escapeHtml(item.amount)}"
+        aria-label="Amount of ${escapeHtml(item.name)}" placeholder="e.g. 2 each or 8 oz" maxlength="80">
       <button class="pantry-remove" data-pantry-action="remove" data-index="${index}" aria-label="Remove ${escapeHtml(item.name)}" title="Remove">&times;</button>
     </div>
   `).join("");
@@ -1240,11 +1255,11 @@ function loadSamplePantry() {
     { name: "cheddar", amount: "some", soon: false },
     { name: "salsa", amount: "half a jar", soon: false }
   ];
-  state.constraints = { ...DEFAULT_STATE.constraints, budget: 18, dinners: 3, maxTimeMin: 20, equipment: ["microwave"] };
+  state.constraints = { ...state.constraints, budget: 18, dinners: 3, maxTimeMin: 20 };
   state.excludedTitles = [];
   saveState();
   renderPantry();
-  addUserMessage("I have 4 eggs, half a bag of spinach, 2 cups of cooked rice, 4 tortillas, some cheddar and salsa. The spinach and eggs need using. I have $18 and only a microwave.");
+  addUserMessage("I have 4 eggs, half a bag of spinach, 2 cups of cooked rice, 4 tortillas, some cheddar and salsa. The spinach and eggs need using. I have $18 and my saved cooking equipment.");
   $("starterPrompts").hidden = true;
   buildPlan("Prioritize the spinach and eggs, minimize extra purchases, and keep every dinner beginner-friendly.");
 }
@@ -1490,7 +1505,8 @@ function renderGroceryList() {
     <div class="grocery-item${item.unknown ? " unknown" : ""}">
       <span class="grocery-item-name">
         <strong>${escapeHtml(item.name)}</strong>
-        ${item.unknown ? "<span>Not in the Tempe mock catalog — not priced</span>" : ""}
+        ${item.pack ? `<span>Requested package: ${escapeHtml(item.pack)}</span>` : ""}
+        ${item.unknown ? "<span>No supported web price found</span>" : ""}
       </span>
       <span class="qty-stepper">
         <button type="button" data-grocery-action="less" data-index="${index}" aria-label="Fewer ${escapeHtml(item.name)}">−</button>
@@ -1563,7 +1579,7 @@ function answerLookupConsent(allow) {
   describeCurrentLocation(allow);
   toast(allow
     ? "Place-name lookup enabled. Reset the demo to change this."
-    : "Kept local. Your coordinates stay on this machine.");
+    : "Place-name lookup declined. Only the FridgeFuse server receives your coordinates for distances.");
 }
 
 function requestLocation() {
@@ -1604,6 +1620,7 @@ function requestLocation() {
       // Local description first — it needs no network and cannot fail.
       describeCurrentLocation(state.allowPlaceLookup === true);
       showLookupConsent();
+      invalidateGroceryResults();
       if (state.groceryList.length) compareStores();
     },
     (error) => {
@@ -1620,9 +1637,16 @@ function requestLocation() {
   );
 }
 
+let groceryRevision = 0;
+function invalidateGroceryResults() {
+  groceryRevision += 1;
+  $("groceryResults").innerHTML = '<p class="results-note">Your list changed. Compare stores again for updated totals.</p>';
+}
+
 async function compareStores() {
   if (comparing || !state.groceryList.length) return;
   comparing = true;
+  const revision = groceryRevision;
   const button = $("compareButton");
   button.disabled = true;
   button.textContent = "Comparing…";
@@ -1642,6 +1666,7 @@ async function compareStores() {
     if (!response.ok || !result.ok) {
       throw new Error(result.failure?.message || `Comparison returned HTTP ${response.status}`);
     }
+    if (revision !== groceryRevision) return;
     // Flag list entries the catalog could not price so the user can fix them.
     const unmatched = new Set((result.unmatched || []).map((name) => String(name).toLowerCase()));
     for (const item of state.groceryList) item.unknown = unmatched.has(item.name);
@@ -1649,6 +1674,7 @@ async function compareStores() {
     renderGroceryList();
     renderGroceryResults(result);
   } catch (error) {
+    if (revision !== groceryRevision) return;
     $("groceryResults").innerHTML = `<p class="results-note warn">${escapeHtml(error.message)}</p>`;
     toast(error.message, "error");
   } finally {
@@ -1678,7 +1704,7 @@ function renderGroceryResults(result) {
     ? `${titleCase(best.name)} on ${best.area.replace(/^.*—\s*/, "")} fills the whole list for ${formatMoney(best.subtotal)} — ${formatMoney(savings)} less than the priciest nearby option, ${priciest.distanceMi} miles away.`
     : best.complete
       ? `${titleCase(best.name)} fills the list for ${formatMoney(best.subtotal)}, ${best.distanceMi} miles away.`
-      : `${titleCase(best.name)} covers ${best.itemCount} of ${(result.requested || []).length} items for ${formatMoney(best.subtotal)}, ${best.distanceMi} miles away.`;
+      : `${titleCase(best.name)} covers ${best.itemCount} of ${result.requestedCount ?? ((result.requested || []).length + (result.unmatched || []).length)} items for ${formatMoney(best.subtotal)}, ${best.distanceMi} miles away.`;
 
   const cards = options.map((option, index) => {
     const rows = (option.lineItems || []).map((line) => `
@@ -1694,7 +1720,7 @@ function renderGroceryResults(result) {
         <div>
           <span class="store-rank">${option.best ? "CHEAPEST" : `#${index + 1}`}</span>
           <h3 class="store-name">${escapeHtml(option.name)}</h3>
-          <p class="store-meta">${escapeHtml(option.area)} · ${option.distanceMi} mi away · ${option.itemCount} of ${(result.requested || []).length} items</p>
+          <p class="store-meta">${escapeHtml(option.area)} · ${option.distanceMi} mi away · ${option.itemCount} of ${result.requestedCount ?? ((result.requested || []).length + (result.unmatched || []).length)} items</p>
           ${option.missing?.length ? `<p class="store-missing">Does not stock: ${escapeHtml(option.missing.join(", "))}</p>` : ""}
         </div>
         <div class="store-total">
@@ -1733,6 +1759,7 @@ $("groceryForm").addEventListener("submit", (event) => {
   $("groceryInput").value = "";
   saveState();
   renderGroceryList();
+  invalidateGroceryResults();
   if (added) toast(`${added === 1 ? titleCase(names[0]) : `${added} items`} added to the list`);
 });
 
@@ -1751,15 +1778,25 @@ $("groceryList").addEventListener("click", (event) => {
   }
   saveState();
   renderGroceryList();
+  invalidateGroceryResults();
 });
 
 $("fromPlanButton").addEventListener("click", () => {
   const planItems = state.plan?.shoppingList || [];
   if (!planItems.length) return;
   let added = 0;
-  for (const entry of planItems) if (addGroceryItem(entry.item, Number(entry.qty) || 1)) added++;
+  for (const entry of planItems) {
+    const existing = state.groceryList.find((item) => item.name === entry.item.toLowerCase());
+    const required = Math.min(MAX_GROCERY_QTY, Math.max(1, Number(entry.qty) || 1));
+    if (existing) {
+      if (existing.qty < required) { existing.qty = required; added++; }
+    } else if (addGroceryItem(entry.item, required)) added++;
+    const grocery = state.groceryList.find(item => item.name === entry.item.toLowerCase());
+    if (grocery) grocery.pack = entry.pack || "";
+  }
   saveState();
   renderGroceryList();
+  invalidateGroceryResults();
   toast(added ? `${added} item${added === 1 ? "" : "s"} added from your meal plan` : "Those items are already on the list");
 });
 
@@ -1847,6 +1884,16 @@ $("pantryList").addEventListener("click", (event) => {
   renderPantry();
 });
 
+$("pantryList").addEventListener("change", (event) => {
+  const input = event.target.closest("[data-pantry-amount]");
+  if (!input) return;
+  const item = state.pantry[Number(input.dataset.pantryAmount)];
+  if (!item) return;
+  item.amount = input.value.trim().slice(0, 80) || "some";
+  saveState();
+  renderPantry();
+});
+
 $("visionReviewList").addEventListener("click", (event) => {
   const button = event.target.closest("[data-vision-action]");
   if (!button) return;
@@ -1890,6 +1937,7 @@ $("mealList").addEventListener("click", async (event) => {
     // The plan prompt lets a title describe the adapted result, so the title
     // alone does not identify the recipe to avoid; the citation does.
     addExclusion(meal.sourceRecipe || meal.title);
+    planningOptions = { swapIndex: index, previousDinners: clone(state.plan.dinners) };
     saveState();
     setMobileView("chat");
     addUserMessage(`Swap ${meal.title}. Keep the same budget and equipment.`);
@@ -1925,6 +1973,9 @@ $("savedRecipeList").addEventListener("click", (event) => {
   // "Cook again" asks for the recipe by its citation, which is what the server
   // matches on, rather than by a title the model is free to reword.
   const named = recipe.sourceRecipe || recipe.title;
+  state.excludedTitles = state.excludedTitles.filter((title) => normaliseKey(title) !== normaliseKey(named));
+  planningOptions = { includeRecipe: named };
+  saveState();
   setMobileView("chat");
   addUserMessage(`Put ${named} back in the plan.`);
   buildPlan(`Include ${named} as one of the dinners. Keep the same budget and equipment.`);

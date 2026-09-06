@@ -8,19 +8,17 @@
     "build": "npm test",
     "test": "node test.js",
     "codes:propose": "node scripts/propose-food-codes.js",
-    "dev:vercel": "npx vercel@latest dev",
-    "dev:netlify": "npx netlify-cli@17.38.0 dev --offline"
+    "dev:vercel": "npx vercel@latest dev"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "engines": {
-    "node": "20.x"
+    "node": "24.x"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
-    "express": "^5.2.1",
-    "serverless-http": "^4.0.0"
+    "express": "^5.2.1"
   }
 }

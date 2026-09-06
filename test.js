@@ -31,8 +31,8 @@ ok(PRICES.items.length >= 20, `price DB has ${PRICES.items.length} items`);
 ok(Object.keys(PRICES.stores).length === 4, "4 stores");
 ok(
   typeof resolveDataPath === "function" &&
-    toSlashes(resolveDataPath("/var/task/netlify/functions", "/var/task", (candidate) => toSlashes(candidate) === "/var/task/data/prices.json")) === "/var/task/data/prices.json",
-  "price data resolves from the Netlify task root"
+    toSlashes(resolveDataPath("/var/task/server/functions", "/var/task", (candidate) => toSlashes(candidate) === "/var/task/data/prices.json")) === "/var/task/data/prices.json",
+  "price data resolves from the serverless task root"
 );
 ok(AIR_VISION_MODEL === "qwen3-vl-32b-instruct", "photo requests use the dedicated vision model");
 ok(DEFAULT_AIR_MODEL === "llama4-scout-17b", "tracked text-model default uses the verified fast model");
@@ -96,8 +96,8 @@ for (const recipe of APPROVED_RECIPES) {
 ok(!isApprovedRecipeCitation("Budget Bytes", "Invented Recipe", "https://www.budgetbytes.com"), "a publisher homepage cannot validate an invented recipe");
 ok(
   typeof resolveDataPath === "function" &&
-    toSlashes(resolveDataPath("/var/task/netlify/functions", "/var/task", (candidate) => toSlashes(candidate) === "/var/task/data/recipe-sources.json", "recipe-sources.json")) === "/var/task/data/recipe-sources.json",
-  "recipe sources resolve from the Netlify task root"
+    toSlashes(resolveDataPath("/var/task/server/functions", "/var/task", (candidate) => toSlashes(candidate) === "/var/task/data/recipe-sources.json", "recipe-sources.json")) === "/var/task/data/recipe-sources.json",
+  "recipe sources resolve from the serverless task root"
 );
 
 // ---------- recipes as typed requirements: quantities, packages, leftovers ----------
@@ -309,30 +309,14 @@ ok(
 );
 ok(/geolocation=\(self\)/.test(JSON.stringify(vercelConfig)), "Vercel allows browser geolocation");
 ok(typeof vercelServer === "function" && vercelServer === vercelServer.app, "Vercel receives the Express app export");
-const netlifyConfig = fs.readFileSync("netlify.toml", "utf8");
-for (const dataFile of ["prices.json", "stores.json", "recipe-sources.json", "diet-rules.json"]) {
-  ok(netlifyConfig.includes(`data/${dataFile}`), `Netlify bundles data/${dataFile} with the function`);
-}
 const html = fs.readFileSync("public/index.html", "utf8");
 ok(html.includes("app.js") && html.includes("api/plan") === false, "index.html loads app.js");
 const appJs = fs.readFileSync("public/app.js", "utf8");
 const serverSrc = fs.readFileSync("server.js", "utf8");
 const recipeSourcesJson = fs.readFileSync("data/recipe-sources.json", "utf8");
 
-const ingredientMentionsSource = appJs.replaceAll("\r\n", "\n")
-  .match(/function getIngredientMentions\(message\) \{[\s\S]*?\n\}/)?.[0] || "";
-const ingredientConfigSource = appJs.replaceAll("\r\n", "\n")
-  .match(/const KNOWN_INGREDIENTS = \[[\s\S]*?\n\];\n\nconst ALIASES = \{[\s\S]*?\n\};/)?.[0] || "";
-ok(Boolean(ingredientMentionsSource && ingredientConfigSource), "the pantry ingredient parser is available for chat commands");
-if (ingredientMentionsSource && ingredientConfigSource) {
-  const ingredientContext = {};
-  vm.createContext(ingredientContext);
-  vm.runInContext(`${ingredientConfigSource}\n${ingredientMentionsSource}\nthis.testIngredientMentions = getIngredientMentions;`, ingredientContext);
-  ok(
-    ingredientContext.testIngredientMentions("add tomatoes").join(",") === "tomatoes",
-    'the exact shorthand command "add tomatoes" identifies the pantry item'
-  );
-}
+ok(appJs.includes("/api/chat/interpret"), "chat uses server-side AI interpretation");
+ok(!appJs.includes("KNOWN_INGREDIENTS"), "arbitrary foods do not depend on a frontend ingredient dictionary");
 
 const planningFailureCopySource = appJs.replaceAll("\r\n", "\n")
   .match(/function planningFailureCopy\(context\) \{[\s\S]*?\n\}/)?.[0] || "";
@@ -381,35 +365,17 @@ if (planningFailureCopySource) {
 }
 
 async function exerciseFrontendMessage(message, parsed, pantryAfter) {
-  const normalizedAppJs = appJs.replaceAll("\r\n", "\n");
-  const handlerSource = normalizedAppJs.match(/async function handleMessage\(message\) \{[\s\S]*?\n\}\n\nasync function buildPlan/)?.[0]
-    ?.replace(/\n\nasync function buildPlan$/, "") || "";
-  const intentSource = normalizedAppJs.match(/function isPantryOnlyRequest\(message\) \{[\s\S]*?\n\}/)?.[0] || "";
-  assert(handlerSource, "could not extract handleMessage from public/app.js");
-
-  const assistantMessages = [];
+  const { client } = require("./test-fixes");
+  const c = client();
   let buildPlanCalls = 0;
-  const context = {
-    state: { pantry: [], plan: null },
-    addUserMessage() {},
-    addExclusion() {},
-    addAssistantMessage(...args) { assistantMessages.push(args); },
-    buildPlan: async () => { buildPlanCalls++; },
-    capitalize(value) { return value ? value[0].toUpperCase() + value.slice(1) : value; },
-    mentionIndex(lower, ingredient) { return lower.indexOf(ingredient); },
-    parseMessage() {
-      context.state.pantry = pantryAfter;
-      return parsed;
-    },
-    loadPreferences: async () => {},
-    setMobileView() {},
-    $() { return { hidden: false }; }
-  };
-  vm.createContext(context);
-  if (intentSource) vm.runInContext(intentSource, context);
-  else context.isPantryOnlyRequest = () => false;
-  vm.runInContext(handlerSource, context);
-  await vm.runInContext(`handleMessage(${JSON.stringify(message)})`, context);
+  const assistantMessages = [];
+  c.context.interpretMessage = async () => ({
+    actions: pantryAfter.map(item => ({ type: "pantry_set", name: item.name, amount: "some", qty: 1, soon: false })),
+    requestPlan: /build a dinner plan/.test(message), swapIndex: null, clarification: ""
+  });
+  c.context.buildPlan = async () => { buildPlanCalls++; };
+  c.context.addAssistantMessage = (...args) => assistantMessages.push(args);
+  await c.context.handleMessage(message);
   return { assistantMessages, buildPlanCalls };
 }
 ok(appJs.includes("/api/plan"), "app.js calls /api/plan");
@@ -529,18 +495,11 @@ ok(
 // ---------- grocery optimizer ----------
 ok(fs.existsSync("data/stores.json"), "data/stores.json exists");
 ok(
-  resolveDataPath("/var/task/netlify/functions", "/var/task", (c) => c === "/var/task/data/stores.json", "stores.json") === "/var/task/data/stores.json",
-  "store data resolves from the Netlify task root"
-);
-ok(fs.readFileSync("netlify.toml", "utf8").includes("data/stores.json"), "netlify bundles the store data with the function");
-ok(
-  (fs.readFileSync("netlify.toml", "utf8").match(/^\s*included_files\s*=/gm) || []).length === 1 &&
-    fs.readFileSync("netlify.toml", "utf8").includes("data/recipe-sources.json"),
-  "netlify bundles all catalog data in one included_files setting"
+  resolveDataPath("/var/task/server/functions", "/var/task", (c) => c === "/var/task/data/stores.json", "stores.json") === "/var/task/data/stores.json",
+  "store data resolves from the serverless task root"
 );
 // geolocation=() silently disables the browser location API — the Shop tab needs it.
 ok(/geolocation=\(self\)/.test(fs.readFileSync("server.js", "utf8")), "server Permissions-Policy allows geolocation");
-ok(/geolocation=\(self\)/.test(fs.readFileSync("netlify.toml", "utf8")), "netlify Permissions-Policy allows geolocation");
 
 ok(BRANCHES.length >= 4, `store catalog has ${BRANCHES.length} branches`);
 ok(BRANCHES.every((b) => PRICES.stores[b.chain]), "every branch maps to a chain with prices");
@@ -752,7 +711,7 @@ ok(missingIds.length === 0, `every element app.js touches exists in the HTML${mi
 
 ok(html.includes('id="groceryView"'), "index.html has the grocery panel");
 ok(html.includes('data-view="grocery"'), "index.html has the grocery nav entry");
-ok(appJs.includes("/api/grocery/optimize"), "app.js calls the optimizer");
+ok(appJs.includes("/api/grocery/optimize"), "app.js prices the list against nearby stores");
 ok(appJs.includes("navigator.geolocation"), "app.js asks the browser for a location");
 ok(fs.readFileSync("public/styles.css", "utf8").includes("repeat(4, 1fr)"), "mobile nav has room for the fourth tab");
 
@@ -1009,7 +968,7 @@ async function runRouteChecks() {
   );
   ok(
     pantryOnly.buildPlanCalls === 0 &&
-      pantryOnly.assistantMessages[0]?.[0] === "Added rice and potatoes to your pantry.",
+      pantryOnly.assistantMessages[0]?.[0] === "Pantry updated: potatoes. Pantry updated: rice.",
     "a pantry-only chat command confirms the update without requesting a meal plan"
   );
 
@@ -1020,7 +979,7 @@ async function runRouteChecks() {
   );
   ok(
     shorthandPantryAdd.buildPlanCalls === 0 &&
-      shorthandPantryAdd.assistantMessages[0]?.[0] === "Added milk to your pantry.",
+      shorthandPantryAdd.assistantMessages[0]?.[0] === "Pantry updated: milk.",
     "a shorthand add command confirms the pantry update without requesting a meal plan"
   );
 
@@ -1031,7 +990,7 @@ async function runRouteChecks() {
   );
   ok(
     tomatoPantryAdd.buildPlanCalls === 0 &&
-      tomatoPantryAdd.assistantMessages[0]?.[0] === "Added tomatoes to your pantry.",
+      tomatoPantryAdd.assistantMessages[0]?.[0] === "Pantry updated: tomatoes.",
     '"add tomatoes" updates the pantry without starting a plan or showing a pricing error'
   );
 
@@ -1041,7 +1000,7 @@ async function runRouteChecks() {
     [{ name: "rice" }]
   );
   ok(
-    pantryAndPlan.buildPlanCalls === 1 && pantryAndPlan.assistantMessages.length === 0,
+    pantryAndPlan.buildPlanCalls === 1 && pantryAndPlan.assistantMessages[0]?.[0] === "Pantry updated: rice.",
     "a combined pantry and planning request still requests a meal plan"
   );
 
@@ -1051,7 +1010,7 @@ async function runRouteChecks() {
     budget: 18,
     dinners: 1,
     maxTimeMin: 20,
-    equipment: ["microwave"],
+    equipment: ["stove", "microwave"],
     diet: "",
     request: "Use the spinach first",
     exclude: []
@@ -1846,6 +1805,7 @@ async function runRouteChecks() {
   });
   ok(!/Hard exclusions/.test(noDietPrompt), "no diet means no fabricated exclusion list");
 
+  n += await require("./test-fixes")();
   console.log(`\nALL ${n} CHECKS PASSED`);
 }
 

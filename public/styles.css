@@ -1333,7 +1333,7 @@ body[data-welcome-open="true"] { overflow: hidden; }
 .pantry-list { display: grid; gap: 8px; }
 .pantry-item {
   display: grid;
-  grid-template-columns: 35px minmax(0, 1fr) auto;
+  grid-template-columns: 35px minmax(0, 1fr) minmax(65px, 100px) 26px;
   align-items: center;
   gap: 10px;
   padding: 11px;
@@ -1769,3 +1769,6 @@ body[data-welcome-open="true"] { overflow: hidden; }
   text-decoration: line-through;
   text-decoration-thickness: 1px;
 }
+
+/* Keep measured pantry amounts editable without opening another form. */
+.pantry-amount { width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: inherit; }

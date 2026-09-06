@@ -30,11 +30,10 @@ npm install          # required before anything; node_modules is not committed
 npm start            # Express on 0.0.0.0:3000 (PORT=4000 npm start to change)
 npm test             # the whole test suite — must print "ALL <n> CHECKS PASSED"
 npm run dev:vercel   # vercel dev
-npm run dev:netlify  # netlify dev --offline
 ```
 
-There is no linter, formatter, or watch mode. `npm test` is the only gate, and both
-`vercel.json` (`buildCommand`) and `netlify.toml` (`command`) run it during deploy —
+There is no linter, formatter, or watch mode. `npm test` is the only gate, and
+`vercel.json` (`buildCommand`) runs it during deploy —
 a failing test blocks the deploy.
 
 ## Layout
@@ -42,7 +41,7 @@ a failing test blocks the deploy.
 - `server.js` (~1100 lines) — the entire backend: Express app, Voyager/ASU AIR proxy,
   price + store catalog loading, grocery optimizer, geocoding. Exports the `app`
   itself (so Vercel detects an Express deployment) with named helpers attached via
-  `Object.assign` for tests and the Netlify wrapper.
+  `Object.assign` for tests.
 - `public/` — `index.html`, `app.js` (~1300 lines), `styles.css`. Plain DOM, no
   bundler; `app.js` is served as-is.
 - `data/prices.json` — mock Tempe 85281 catalog: `aliases`, `items[].prices[chain]`,
@@ -54,7 +53,6 @@ a failing test blocks the deploy.
 - `scripts/propose-food-codes.js` — maintenance only, never runtime. Proposes
   FoodOn/FDC codes for review; `npm run codes:propose`.
 - `test.js` — one flat script of `ok(...)` assertions, run in-process.
-- `netlify/functions/api.js` — 4-line `serverless-http` wrapper around `server.js`.
 
 ## Things that will bite you
 
@@ -124,11 +122,10 @@ are throttled server-side (`NOMINATIM_MIN_INTERVAL_MS`, ~1/sec) and never made f
 the browser, to honor Nominatim's policy. The catalog's own ZIP resolves locally with
 no lookup at all.
 
-**Two deploy targets share one app.** `server.js` must keep working under Vercel
-(Express export, `data/*.json` via `includeFiles`) and Netlify (`serverless-http`,
-`included_files`). `resolveDataPath()` exists so data files resolve from
-`LAMBDA_TASK_ROOT` as well as `__dirname` — use it for any new data file, and add the
-file to both `netlify.toml` and `vercel.json`.
+**One deploy target.** `server.js` runs on Vercel (Express export,
+`data/*.json` via `includeFiles`). `resolveDataPath()` exists so data files
+resolve from `LAMBDA_TASK_ROOT` as well as `__dirname` — use it for any new
+data file, and add the file to `vercel.json`.
 
 **Frontend state lives in localStorage** under `fridgefuse-state-v2` (pantry,
 constraints, messages, grocery list, profile, location consent). Changing the shape of

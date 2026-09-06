@@ -81,7 +81,7 @@ function appendFailureLog(entry) {
     }
     fs.appendFileSync(FAILURE_LOG_PATH, JSON.stringify(entry) + "\n");
   } catch {
-    // Ephemeral/read-only FS (e.g. Netlify) — memory + console carry it.
+    // Ephemeral/read-only serverless FS — memory + console carry it.
   }
 }
 function reportFailure(provider, operation, details) {
@@ -104,7 +104,7 @@ function aiFailureStatus(failure) {
   return failure?.status === "no-key" ? 503 : 502;
 }
 
-async function airChat(messages, { maxTokens = 1200, wantJson = true, model = AIR_MODEL } = {}) {
+async function airChat(messages, { maxTokens = 1200, wantJson = true, model = AIR_MODEL, schema = null, temperature } = {}) {
   // Returns { ok:true, data } or { ok:false, failure }
   if (!AIR_KEY) {
     const f = reportFailure("asu-air", "chat", {
@@ -119,7 +119,9 @@ async function airChat(messages, { maxTokens = 1200, wantJson = true, model = AI
   const t = setTimeout(() => ctrl.abort(), 45000);
   try {
     const body = { model, messages, max_tokens: maxTokens };
-    if (wantJson) body.response_format = { type: "json_object" };
+    if (Number.isFinite(temperature)) body.temperature = temperature;
+    if (schema) body.response_format = { type: "json_schema", json_schema: { name: "meal_plan", strict: true, schema } };
+    else if (wantJson) body.response_format = { type: "json_object" };
     const r = await fetch(`${AIR_BASE}/chat/completions`, {
       method: "POST",
       signal: ctrl.signal,
@@ -171,7 +173,7 @@ function extractJson(content) {
   return JSON.parse(raw);
 }
 
-// ---------- data files (work both locally and from the Netlify task root) ----------
+// ---------- data files (work both locally and from the serverless task root) ----------
 function resolveDataPath(runtimeDir = __dirname, taskRoot = process.env.LAMBDA_TASK_ROOT, exists = fs.existsSync, filename = "prices.json") {
   const candidates = [path.join(runtimeDir, "data", filename)];
   if (taskRoot) candidates.push(path.join(taskRoot, "data", filename));
@@ -224,8 +226,38 @@ function recipesWithinTime(maxTimeMin) {
 
 function recipeSourcesContext(recipes = APPROVED_RECIPES) {
   return recipes
-    .map((recipe) => `- sourceRecipe: ${JSON.stringify(recipe.title)}; source: ${JSON.stringify(recipe.source)}; sourceUrl: ${recipe.url}; verified time: ${recipe.timeMin} min; equipment: ${recipe.equipment.join(", ")}; catalog-ready ingredients: ${recipe.ingredients.join(", ")}; method outline: ${recipe.method}`)
+    .map((recipe) => `- recipeId: "recipe-${APPROVED_RECIPES.indexOf(recipe) + 1}"; sourceRecipe: ${JSON.stringify(recipe.title)}; source: ${JSON.stringify(recipe.source)}; sourceUrl: ${recipe.url}; verified time: ${recipe.timeMin} min; equipment: ${recipe.equipment.join(", ")}; catalog-ready ingredients: ${recipe.ingredients.join(", ")}; method outline: ${recipe.method}`)
     .join("\n");
+}
+
+function recipeFitsEquipment(recipe, equipment) {
+  const appliances = new Set(EQUIPMENT_OPTIONS.map((option) => option.id));
+  const available = new Set(equipment);
+  return recipe.equipment.filter((item) => appliances.has(item)).every((item) => available.has(item));
+}
+
+function assertPlanEquipment(plan, equipment) {
+  for (const dinner of plan.dinners) {
+    const recipe = approvedRecipeForCitation(dinner.source, dinner.sourceRecipe, dinner.sourceUrl);
+    if (!recipeFitsEquipment(recipe, equipment)) {
+      throw new Error(`"${recipe.title}" requires ${recipe.equipment.join(" + ")}; available equipment: ${equipment.join(" + ") || "none"}`);
+    }
+    // A model must not add an unavailable appliance in its instructions either.
+    let instructionText = normalizeDietText((dinner.steps || []).join(" "));
+    for (const option of EQUIPMENT_OPTIONS.filter((option) => equipment.includes(option.id))) {
+      for (const term of [option.id, ...(option.aliases || [])].sort((a, b) => b.length - a.length)) {
+        instructionText = instructionText.replace(new RegExp(`\\b${escapeRegExp(term)}\\b`, "g"), " ");
+      }
+    }
+    for (const option of EQUIPMENT_OPTIONS) {
+      if (equipment.includes(option.id)) continue;
+      const terms = [option.id, ...(option.aliases || [])];
+      if (terms.some((term) => dietPhraseMatcher(term)?.test(instructionText))) {
+        throw new Error(`Cooking steps require unavailable equipment: ${option.id}`);
+      }
+    }
+  }
+  return plan;
 }
 
 function approvedRecipeForCitation(source, sourceRecipe, sourceUrl) {
@@ -548,16 +580,8 @@ function findPrice(itemName) {
     const hit = PRICES.items.find((it) => it.name.toLowerCase() === String(aliased).toLowerCase());
     if (hit) return hit;
   }
-  // Fall back to a loose match, longest catalog name first: "gluten free pasta"
-  // contains "pasta", and pricing a celiac's dinner as wheat pasta is the one
-  // outcome this lookup must never produce.
-  const loose = PRICES.items
-    .filter((it) => {
-      const name = it.name.toLowerCase();
-      return name.includes(q) || q.includes(name);
-    })
-    .sort((a, b) => b.name.length - a.name.length);
-  return loose[0] || null;
+  // Ingredient identity must survive pricing unchanged, especially substitutes.
+  return null;
 }
 function cheapestPack(itemName) {
   const hit = findPrice(itemName);
@@ -754,7 +778,7 @@ function optimizeCart({ items = [], lat, lng, maxDistanceMi } = {}) {
   // return no options and let `note` explain why.
   const options = (resolved.length === 0 ? [] : inRange).map(({ branch, distanceMi }) => {
     const lineItems = [];
-    const missing = [];
+    const missing = [...unmatched];
     let subtotal = 0;
     for (const entry of resolved) {
       const pack = entry.prices[branch.chain];
@@ -797,6 +821,7 @@ function optimizeCart({ items = [], lat, lng, maxDistanceMi } = {}) {
   // tie-break keeps the order stable for identical branches.
   options.sort((a, b) =>
     Number(b.complete) - Number(a.complete) ||
+    (a.complete ? 0 : b.itemCount - a.itemCount) ||
     a.subtotal - b.subtotal ||
     a.distanceMi - b.distanceMi ||
     a.storeId.localeCompare(b.storeId)
@@ -822,6 +847,7 @@ function optimizeCart({ items = [], lat, lng, maxDistanceMi } = {}) {
     widenedSearch,
     requested: resolved.map(({ prices, ...rest }) => rest),
     unmatched,
+    requestedCount: resolved.length + unmatched.length,
     options,
     cheapestStoreId: options[0]?.storeId || null,
     savingsVsWorst,
@@ -1060,16 +1086,19 @@ function servingsOf(dinner) {
 // Nothing here is estimated — the model supplies amounts, the arithmetic is ours.
 function groundShoppingPlan(plan) {
   const demand = new Map();
-  for (const dinner of plan.dinners || []) {
+  for (const [dinnerIndex, dinner] of (plan.dinners || []).entries()) {
     for (const raw of dinner.needs || []) {
-      const need = normalizeRequirement(raw, { servings: servingsOf(dinner) });
+      const need = raw?.pantryAdjusted === true
+        ? { name: raw.item, base: raw.amount, family: packSizeOf(findPrice(raw.item)).family, assumed: raw.assumedWholePackage === true, assumedReason: raw.assumedReason }
+        : normalizeRequirement(raw, { servings: servingsOf(dinner) });
       const entry = demand.get(need.name) || { base: 0, family: need.family, sharedBy: [], assumed: false, assumedReason: "" };
       entry.base += need.base;
       if (need.assumed) {
         entry.assumed = true;
         if (need.assumedReason) entry.assumedReason = need.assumedReason;
       }
-      if (dinner.title && !entry.sharedBy.includes(dinner.title)) entry.sharedBy.push(dinner.title);
+      const mealLabel = `Night ${dinnerIndex + 1}: ${dinner.title}`;
+      if (!entry.sharedBy.includes(mealLabel)) entry.sharedBy.push(mealLabel);
       demand.set(need.name, entry);
     }
   }
@@ -1104,8 +1133,22 @@ function groundShoppingPlan(plan) {
     }
   }
 
+  // Quote one complete checkout, using the same deterministic comparison as Shop.
+  let checkoutStore = null;
+  if (shoppingList.length) {
+    const comparison = optimizeCart({ items: shoppingList.map((item) => ({ name: item.item, qty: item.qty })), lat: plan.shoppingLocation?.lat, lng: plan.shoppingLocation?.lng });
+    if (shoppingList.some((item) => item.qty > MAX_ITEM_QTY)) throw new Error("This plan exceeds the supported 99 packages per ingredient. Reduce servings or dinners.");
+    const best = comparison.options.find((option) => option.complete);
+    if (!best) throw new Error("No nearby catalog store stocks the complete shopping list.");
+    checkoutStore = { id: best.storeId, name: best.name, chain: best.chain };
+    for (const item of shoppingList) {
+      const price = findPrice(item.item).prices[best.chain];
+      Object.assign(item, { store: best.chain, pack: price.pack, packPrice: price.price });
+    }
+  }
   return {
     ...plan,
+    checkoutStore,
     shoppingList,
     leftovers,
     totalCost: +shoppingList.reduce((total, item) => total + item.packPrice * item.qty, 0).toFixed(2)
@@ -1124,6 +1167,14 @@ function parseAiPlan(content, expectedDinners, { strictAmounts = true, maxTimeMi
     if (!dinner || typeof dinner !== "object") throw new Error(`Dinner ${index + 1} must be an object`);
     if (typeof dinner.title !== "string" || !dinner.title.trim()) throw new Error(`Dinner ${index + 1} needs a title`);
     if (!Number.isFinite(Number(dinner.timeMin))) throw new Error(`Dinner ${index + 1} needs a numeric timeMin`);
+    if (dinner.recipeId !== undefined) {
+      const recipeIndex = /^recipe-([1-9]\d*)$/.exec(String(dinner.recipeId));
+      const selected = recipeIndex && APPROVED_RECIPES[Number(recipeIndex[1]) - 1];
+      if (!selected) throw new Error(`Dinner ${index + 1} has an unknown recipeId`);
+      dinner.source = selected.source;
+      dinner.sourceRecipe = selected.title;
+      dinner.sourceUrl = selected.url;
+    }
     const approvedRecipe = approvedRecipeForCitation(dinner.source, dinner.sourceRecipe, dinner.sourceUrl);
     if (!approvedRecipe) {
       throw new Error(`Dinner ${index + 1} needs an exact sourceRecipe/source/sourceUrl match from the approved recipe catalog`);
@@ -1137,6 +1188,7 @@ function parseAiPlan(content, expectedDinners, { strictAmounts = true, maxTimeMi
     if (dinner.usesPantry.some((item) => typeof item !== "string" || !item.trim())) {
       throw new Error(`Dinner ${index + 1} usesPantry must contain ingredient names`);
     }
+    if (dinner.steps.some((step) => typeof step !== "string" || !step.trim())) throw new Error(`Dinner ${index + 1} needs text cooking steps`);
     if (dinner.steps.length === 0) throw new Error(`Dinner ${index + 1} needs at least one cooking step`);
     if (dinner.servings !== undefined && (!Number.isFinite(Number(dinner.servings)) || Number(dinner.servings) < 1 || Number(dinner.servings) > 12)) {
       throw new Error(`Dinner ${index + 1} servings must be a number between 1 and 12`);
@@ -1169,6 +1221,54 @@ function assertPlanUsesExactRecipes(plan) {
     assertDinnerMatchesRecipe(dinner, recipe, index + 1, { exact: true });
   }
   return plan;
+}
+
+function pantrySupply(entry) {
+  const item = findPrice(entry?.name);
+  if (!item) return null;
+  const text = String(entry.amount || "").trim().toLowerCase();
+  if (/cooked|prepared|about|half|some|unknown|plenty/.test(text)) return null;
+  const match = text.match(/^(\d+(?:\.\d+)?)(?:\s+([a-z ]+))?$/);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount) || amount < 0 || amount > 10000) return null;
+  const pack = packSizeOf(item);
+  const unit = (match[2] || "").replace(/\s*left$/, "").trim();
+  const resolvedUnit = unit || (pack.family === "count" ? "each" : "");
+  const converted = convertViaEquivalents(item, amount, resolvedUnit, pack) || toBaseAmount(amount, resolvedUnit);
+  return converted?.family === pack.family ? { name: item.name, base: converted.base } : null;
+}
+
+function allocatePantry(plan, inventory) {
+  const supply = new Map();
+  const inventoryWarnings = [];
+  const demanded = new Set(plan.dinners.flatMap((dinner) => [...dinner.needs.map((need) => findPrice(need?.item || need)?.name), ...dinner.usesPantry.map((name) => findPrice(name)?.name)]));
+  for (const entry of inventory) {
+    const available = pantrySupply(entry);
+    if (available) supply.set(available.name, (supply.get(available.name) || 0) + available.base);
+    else if (entry?.name && demanded.has(findPrice(entry.name)?.name)) inventoryWarnings.push(`Amount of ${entry.name} is unknown. Its full recipe requirement is included in shopping; check what you have before buying.`);
+  }
+  const dinners = plan.dinners.map((dinner) => {
+    const needs = [];
+    const usesPantry = [];
+    const requirements = [];
+    // Missing pantry quantities in a model response are conservatively one pack.
+    const rawNeeds = [...(dinner.needs || [])];
+    for (const name of dinner.usesPantry || []) {
+      if (!rawNeeds.some((raw) => findPrice(raw?.item || raw)?.name === findPrice(name)?.name)) rawNeeds.push(name);
+    }
+    for (const raw of rawNeeds) {
+      const need = normalizeRequirement(raw, { servings: servingsOf(dinner) });
+      requirements.push({ item: need.name, amount: need.base, unit: FAMILY_BASE_UNIT[need.family] || "each" });
+      const used = need.assumed ? 0 : Math.min(supply.get(need.name) || 0, need.base);
+      if (used > 0) { usesPantry.push(need.name); supply.set(need.name, supply.get(need.name) - used); }
+      const shortage = need.base - used;
+      if (shortage > 1e-9) needs.push({ item: need.name, amount: shortage, unit: FAMILY_BASE_UNIT[need.family] || "each", pantryAdjusted: true, assumedWholePackage: need.assumed === true, assumedReason: need.assumedReason });
+      if (need.assumed) inventoryWarnings.push(`Recipe amount for ${need.name} was not usable. Shopping includes a whole package for this dinner; verify the amount before cooking.`);
+    }
+    return { ...dinner, requirements, usesPantry: [...new Set(usesPantry)], needs };
+  });
+  return { ...plan, dinners, inventoryWarnings: [...new Set(inventoryWarnings)] };
 }
 
 function reconcilePantryOwnership(plan, pantry) {
@@ -1232,20 +1332,20 @@ function canonicalizeRepairedPlan(plan, pantry) {
   };
 }
 
-async function repairAiPlan(chat, _content, expectedDinners, initialError, requirements, maxTimeMin = null, requireExactRecipe = true) {
+async function repairAiPlan(chat, _content, expectedDinners, initialError, requirements, maxTimeMin = null, requireExactRecipe = true, recipes = recipesWithinTime(maxTimeMin), schema = null) {
   const ingredientRule = requireExactRecipe
     ? "Adaptations are not allowed during repair: copy one record's complete ingredient set with no additions, omissions, or substitutions, and use an empty adaptationNote."
     : "Make only the dietary substitutions required by the original restrictions, name them in adaptationNote, and keep the result recognizably grounded in one record.";
   return chat([
     {
       role: "system",
-      content: `Start a new FridgeFuse meal plan from the original requirements. The earlier response was rejected, so do not preserve or imitate it. Reply ONLY with valid JSON containing exactly ${expectedDinners} dinners and notes. Each dinner must have a non-empty title, numeric timeMin, arrays named usesPantry, needs, and steps, and an exact sourceRecipe/source/sourceUrl triple from this curated recipe catalog. ${ingredientRule} usesPantry is the intersection of that record's ingredients and the user's pantry, not a copy of the pantry. Put every remaining record ingredient in needs. An ingredient must never appear in both arrays. Keep timeMin equal to the record's verified time and base the steps on its method. Every selected record's verified time must fit the user's requested maximum; choose a different curated record when one takes too long:\n${recipeSourcesContext(recipesWithinTime(maxTimeMin))} Every entry in needs must be an object {"item","amount","unit"} giving how much the dinner uses, with an ingredient name from the supplied price catalog and a unit from the family that catalog lists for it. Do not return shoppingList, leftovers, or totalCost — the server computes them. Do not add commentary or Markdown fences.`
+      content: `Start a new FridgeFuse meal plan from the original requirements. The earlier response was rejected, so do not preserve or imitate it. Reply ONLY with valid JSON containing exactly ${expectedDinners} dinners and notes. Prefer the exact recipeId from the catalog; the server supplies its citation fields. Each dinner must have a non-empty title, numeric timeMin, arrays named usesPantry, needs, and steps, and an exact sourceRecipe/source/sourceUrl triple from this curated recipe catalog. ${ingredientRule} usesPantry is the intersection of that record's ingredients and the user's pantry, not a copy of the pantry. Put every remaining record ingredient in needs. An ingredient must never appear in both arrays. Keep timeMin equal to the record's verified time and base the steps on its method. Every selected record's verified time must fit the user's requested maximum; choose a different curated record when one takes too long:\n${recipeSourcesContext(recipes)} Every entry in needs must be an object {"item","amount","unit"} giving how much the dinner uses, with an ingredient name from the supplied price catalog and a unit from the family that catalog lists for it. Do not return shoppingList, leftovers, or totalCost — the server computes them. Do not add commentary or Markdown fences.`
     },
     {
       role: "user",
       content: `Original requirements:\n${requirements}\n\nWhy the earlier response was rejected:\n${initialError.message}\n\nStart over from the original requirements and return a new plan.`
     }
-  ], { maxTokens: 1800 });
+  ], { maxTokens: Math.max(1800, expectedDinners * 1400), schema });
 }
 
 // ---------- routes ----------
@@ -1479,8 +1579,8 @@ app.post("/api/vision", handleVisionRequest);
 // System prompt for AI meal generation. Grounded to exact, curated recipe
 // records in data/recipe-sources.json rather than publisher homepages, and
 // carrying the user's dietary restrictions when they have any.
-function buildPlanSystemPrompt(priceCtx, dietCtx = "", maxTimeMin = null) {
-  const sourcesCtx = recipeSourcesContext(recipesWithinTime(maxTimeMin));
+function buildPlanSystemPrompt(priceCtx, dietCtx = "", maxTimeMin = null, recipes = recipesWithinTime(maxTimeMin)) {
+  const sourcesCtx = recipeSourcesContext(recipes);
   const dietSection = dietCtx
     ? `\nDietary restrictions (STRICT — these are safety constraints):
 - The restrictions below are absolute. NEVER put a forbidden ingredient in a title, usesPantry, needs, steps, leftovers, or notes — not as a garnish, not as an optional topping, not as a "serve with" suggestion.
@@ -1490,8 +1590,9 @@ function buildPlanSystemPrompt(priceCtx, dietCtx = "", maxTimeMin = null) {
 ${dietCtx}`
     : "";
   return `You are FridgeFuse, a student meal planner for Tempe AZ 85281. Reply ONLY with JSON:
-{"dinners":[{"title":"...","sourceRecipe":"...","source":"...","sourceUrl":"...","adaptationNote":"","timeMin":20,"protein":25,"carbs":50,"fiber":6,"servings":1,"usesPantry":["..."],"needs":[{"item":"...","amount":2,"unit":"..."}],"steps":["..."]}],
+{"dinners":[{"recipeId":"recipe-1","title":"...","sourceRecipe":"...","source":"...","sourceUrl":"...","adaptationNote":"","timeMin":20,"protein":25,"carbs":50,"fiber":6,"servings":1,"usesPantry":["..."],"needs":[{"item":"...","amount":2,"unit":"..."}],"steps":["..."]}],
 "notes":"..."}
+Use recipeId from a curated record for every dinner. The server fills sourceRecipe, source, and sourceUrl from that ID; you may omit those three fields.
 Rules: plan EXACTLY the requested number of dinners. The user is a freshman cook, so give concrete beginner-safe steps and only use the listed equipment. First use food marked use-soon, then minimize unique purchases, stay within budget, and keep cooking easy. Prefer purchases shared across dinners. Put only missing ingredients in needs; pantry items cost $0. Respect time, equipment, and dietary restrictions.
 Quantities (REQUIRED): every need is how much that dinner actually uses — {"item","amount","unit"} — not a package. Three eggs is {"item":"eggs","amount":3,"unit":"each"}, even though eggs are sold by the dozen. Use only ingredient names from the price context, and give each amount in the unit family the price context shows for that item: count items in each, weight items in oz or lb, liquids in fl oz, cups, or tbsp. Never answer a weight item in cups or a count item in ounces. Amounts are the TOTAL the dinner uses; "servings" says how many portions that makes (1 for a student cooking for themselves), and each amount must be a sensible size for that many portions — a dinner does not use forty ounces of spinach. Do NOT return shoppingList, leftovers, or totalCost — the server buys whole packages from its own catalog, sums the cost, and works out what is left over. Price context: ${priceCtx}.
 Recipe grounding (STRICT):
@@ -1506,9 +1607,57 @@ Curated recipes:
 ${sourcesCtx}${dietSection}`;
 }
 
+function inventoryPlanSchema(recipes, count, rules) {
+  const ingredients = PRICES.items.filter((item) => !rules.some((rule) => findIngredientConflict(item.name, rule)));
+  const requirement = {
+    anyOf: ingredients.map((item) => ({
+      type: "object", additionalProperties: false,
+      properties: {
+        item: { type: "string", enum: [item.name] },
+        amount: { type: "number", minimum: servingBandOf(item)?.min || 0.01, maximum: (servingBandOf(item)?.max || packSizeOf(item).base) * 12 },
+        unit: { type: "string", enum: [FAMILY_BASE_UNIT[packSizeOf(item).family] || "each"] }
+      }, required: ["item", "amount", "unit"]
+    }))
+  };
+  return {
+    type: "object", additionalProperties: false,
+    properties: {
+      dinners: {
+        type: "array", minItems: count, maxItems: count,
+        items: {
+          type: "object", additionalProperties: false,
+          properties: {
+            recipeId: { type: "string", enum: recipes.map((recipe) => `recipe-${APPROVED_RECIPES.indexOf(recipe) + 1}`) },
+            title: { type: "string" }, timeMin: { type: "number", minimum: 1, maximum: 180 },
+            servings: { type: "integer", minimum: 1, maximum: 12 },
+            usesPantry: { type: "array", maxItems: 0, items: { type: "string" } },
+            needs: { type: "array", minItems: 1, maxItems: 20, items: requirement },
+            steps: { type: "array", minItems: 1, maxItems: 12, items: { type: "string" } },
+            adaptationNote: { type: "string" }
+          }, required: ["recipeId", "title", "timeMin", "servings", "usesPantry", "needs", "steps", "adaptationNote"]
+        }
+      }
+    }, required: ["dinners"]
+  };
+}
+
+function buildInventoryPrompt(recipes, priceCtx, dietCtx) {
+  return `Plan student dinners using ONLY the eligible recipe records below. Return JSON:
+{"dinners":[{"recipeId":"recipe-${APPROVED_RECIPES.indexOf(recipes[0]) + 1}","title":"meal title","timeMin":10,"servings":1,"usesPantry":[],"needs":[{"item":"catalog name","amount":1,"unit":"oz"}],"steps":["concrete cooking instruction"],"adaptationNote":""}]}
+Return EXACTLY the requested number of dinners. Repeating an eligible recipe is allowed when choices are limited. Never invent another recipe to create variety. ${recipes.length === 1 ? `Every dinner MUST use recipeId recipe-${APPROVED_RECIPES.indexOf(recipes[0]) + 1}.` : ""}
+For each dinner use the selected record's complete ingredient list, time, and cooking method. Only make substitutions required by dietary restrictions, and describe them in adaptationNote. Never change the recipe to incorporate unrelated pantry food. If use-soon food does not belong in an eligible recipe, leave it out.
+needs lists TOTAL ingredients consumed by this dinner, including anything already in the pantry. usesPantry MUST be []. State normal one-person amounts using the catalog units. Do not list packages as recipe amounts. The server subtracts measured pantry supplies and calculates checkout totals. Never return prices, shoppingList, leftovers, or citations; the server supplies them from the selected recipeId.
+Only use the available equipment. Keep steps concrete with quantities, timing, and doneness cues. Respect the user's diet absolutely. Do not mention restricted ingredients in steps or toppings.
+${dietCtx}
+Eligible recipes:
+${recipeSourcesContext(recipes)}
+Ingredient packages and unit families:
+${priceCtx}`;
+}
+
 async function handlePlanRequest(req, res, { chat = airChat } = {}) {
   const { pantry = [], budget = 30, dinners = 3, maxTimeMin = 30,
-          equipment = ["stove"], diet = "", useSoon = [], request = "", exclude = [] } = req.body || {};
+          equipment = ["stove"], diet = "", useSoon = [], request = "", exclude = [], pantryInventory, swapIndex, previousDinners, includeRecipe = "", shoppingLocation } = req.body || {};
   if (pantry !== undefined && !Array.isArray(pantry)) {
     return res.status(400).json({ ok: false, failure: { message: "pantry must be an array of strings" } });
   }
@@ -1524,10 +1673,19 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
   if (diet !== undefined && typeof diet !== "string") {
     return res.status(400).json({ ok: false, failure: { message: "diet must be a string" } });
   }
+  if (pantryInventory !== undefined && (!Array.isArray(pantryInventory) || pantryInventory.length > 100 || pantryInventory.some((item) => !item || typeof item.name !== "string" || typeof item.amount !== "string"))) {
+    return res.status(400).json({ ok: false, failure: { message: "pantryInventory must contain name and amount strings" } });
+  }
+  if (typeof includeRecipe !== "string") return res.status(400).json({ ok: false, failure: { message: "includeRecipe must be a recipe title" } });
+  const swapping = Number.isInteger(swapIndex) && Array.isArray(previousDinners) && swapIndex >= 0 && swapIndex < previousDinners.length && previousDinners.length <= 7;
+  if ((swapIndex !== undefined || previousDinners !== undefined) && !swapping) return res.status(400).json({ ok: false, failure: { message: "A swap needs a valid dinner position and previous dinners." } });
+  if (swapping && pantryInventory !== undefined && previousDinners.some((dinner, index) => index !== swapIndex && !dinner?.requirements?.length)) {
+    return res.status(400).json({ ok: false, failure: { message: "This older plan has no complete ingredient amounts. Rebuild it before swapping a dinner." } });
+  }
   const safePantry = asStringArray(pantry, []);
   const safeEquipment = asStringArray(equipment, ["stove"]);
   const safeUseSoon = asStringArray(useSoon, []);
-  const safeExclude = asStringArray(exclude, []);
+  const safeExclude = asStringArray(exclude, []).filter((name) => normalizeDietText(name) !== normalizeDietText(includeRecipe));
   const safeDiet = typeof diet === "string" ? diet : "";
   const dietRules = resolveDietRules(safeDiet);
   const dietCtx = dietRulesContext(dietRules);
@@ -1546,29 +1704,58 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
   const priceCtx = PRICES.items.map((i) => {
     const c = cheapestPack(i.name);
     const family = packSizeOf(i)?.family || "count";
-    return `${i.name} [sold by ${family}, ${i.size.amount} ${i.size.unit} per pack] (~${c.pack} @ ${c.store} $${c.packPrice})`;
+    return `${i.name} [sold by ${family}, ${i.size.amount} ${i.size.unit} per pack; one serving uses ${i.perServing.min}-${i.perServing.max} ${FAMILY_BASE_UNIT[family] || "each"}] (~${c.pack} @ ${c.store} $${c.packPrice})`;
   }).join("; ");
   const offLimitsCtx = offLimitsPantry.length
     ? ` Pantry items you must NOT cook with or mention (they break the diet): ${offLimitsPantry.join(", ")}.`
     : "";
+  const eligibleRecipes = recipesWithinTime(maxTimeMin).filter((recipe) => recipeFitsEquipment(recipe, safeEquipment));
+  if (!eligibleRecipes.length) return res.status(422).json({ ok: false, failure: { message: "No curated recipe fits your available equipment and time. Try more time or another appliance." } });
+  const inventoryMode = pantryInventory !== undefined;
+  const inventoryInstruction = inventoryMode ? " Include every ingredient's TOTAL recipe amount in needs, including pantry-owned ingredients. Set usesPantry to []. The server subtracts measured pantry supply across dinners; never omit an ingredient because it is owned." : "";
+  const requestedCount = swapping ? 1 : asDinners(dinners, 3);
   const planningMessages = [
-    { role: "system", content: buildPlanSystemPrompt(priceCtx, dietCtx, maxTimeMin) },
-    { role: "user", content: `Pantry: ${cookablePantry.join(", ") || "(empty)"}. Use soon: ${cookableUseSoon.join(", ") || "none"}. Budget total $${budget} for the whole plan. Dinners: ${dinners}. Max ${maxTimeMin} min each. Equipment: ${safeEquipment.join(", ")}. Diet/notes: ${safeDiet || "none"}.${dietGuidance}${offLimitsCtx} Do NOT use these recipes again, under any title: ${safeExclude.join(", ") || "none"}. Choose a different curated record instead. Latest request: ${request || "build the best plan"}.` },
+    { role: "system", content: inventoryMode ? buildInventoryPrompt(eligibleRecipes, priceCtx, dietCtx) : buildPlanSystemPrompt(priceCtx, dietCtx, maxTimeMin, eligibleRecipes) },
+    { role: "user", content: `Pantry: ${cookablePantry.join(", ") || "(empty)"}. Use soon: ${cookableUseSoon.join(", ") || "none"}. Budget total $${budget} for the whole plan. Dinners: ${requestedCount}. Max ${maxTimeMin} min each. Equipment: ${safeEquipment.join(", ")}. Diet/notes: ${safeDiet || "none"}.${dietGuidance}${offLimitsCtx} Do NOT use these recipes again, under any title: ${safeExclude.join(", ") || "none"}. Choose a different curated record instead. Latest request: ${request || "build the best plan"}.${inventoryInstruction}${includeRecipe ? ` MUST include this curated recipe: ${includeRecipe}.` : ""}` },
   ];
-  const out = await chat(planningMessages, { maxTokens: 1800 });
+  const schema = inventoryMode ? inventoryPlanSchema(eligibleRecipes, requestedCount, dietRules) : null;
+  const out = await chat(planningMessages, { maxTokens: Math.max(1800, requestedCount * 1400), schema });
   if (!out.ok) {
     return res.status(aiFailureStatus(out.failure)).json({ ok: false, failure: out.failure });
   }
-  const expectedDinners = asDinners(dinners, 3);
+  const expectedDinners = requestedCount;
+  const finalize = (parsed) => {
+    assertPlanEquipment(parsed, safeEquipment);
+    if (inventoryMode && !dietRules.length) assertPlanUsesExactRecipes(parsed);
+    let combined = parsed;
+    if (swapping) {
+      // Never trust a saved client plan as a way around current safety checks.
+      const retained = previousDinners.map((dinner, index) => index === swapIndex ? parsed.dinners[0] : {
+        ...dinner, usesPantry: inventoryMode ? [] : dinner.usesPantry,
+        needs: inventoryMode ? (dinner.requirements?.length ? dinner.requirements : dinner.needs) : dinner.needs
+      });
+      combined = parseAiPlan(JSON.stringify({ dinners: retained }), retained.length, { strictAmounts: false, maxTimeMin });
+      assertPlanEquipment(combined, safeEquipment);
+    }
+    // Never accept internal shortage markers supplied by clients or the model.
+    for (const dinner of combined.dinners) for (const need of dinner.needs) if (need && typeof need === "object") delete need.pantryAdjusted;
+    const owned = inventoryMode
+      ? allocatePantry(combined, pantryInventory.filter((item) => !offLimitsPantry.includes(item.name)))
+      : reconcilePantryOwnership(combined, cookablePantry);
+    const priced = groundShoppingPlan({ ...assertPlanRespectsDiet(owned, dietRules), shoppingLocation });
+    assertPlanRespectsDiet(priced, dietRules);
+    if (includeRecipe && !priced.dinners.some((dinner) => normalizeDietText(dinner.sourceRecipe) === normalizeDietText(includeRecipe))) throw new Error(`The plan did not include ${includeRecipe}`);
+    return priced;
+  };
   const content = out.data?.choices?.[0]?.message?.content;
   try {
     const parsed = parseAiPlan(content, expectedDinners, { maxTimeMin });
-    const plan = groundShoppingPlan(assertPlanRespectsDiet(reconcilePantryOwnership(parsed, cookablePantry), dietRules));
-    const repeated = findRepeatedExclusion(plan, safeExclude);
+    const plan = finalize(parsed);
+    const repeated = findRepeatedExclusion(swapping ? { dinners: [plan.dinners[swapIndex]] } : plan, safeExclude);
     if (repeated) throw new Error(repeated);
     return res.json({ ok: true, model: AIR_MODEL, diet: safeDiet, dietRules: dietRules.map((rule) => rule.id), offLimitsPantry, ...plan });
   } catch (initialError) {
-    const repaired = await repairAiPlan(chat, content, expectedDinners, initialError, `${planningMessages[1].content}\n\nPrice catalog:\n${priceCtx}${dietCtx ? `\n\nDietary restrictions (absolute):\n${dietCtx}` : ""}`, maxTimeMin, dietRules.length === 0);
+    const repaired = await repairAiPlan(chat, content, expectedDinners, initialError, `${planningMessages[1].content}\n\nPrice catalog:\n${priceCtx}${dietCtx ? `\n\nDietary restrictions (absolute):\n${dietCtx}` : ""}`, maxTimeMin, dietRules.length === 0, eligibleRecipes, schema);
     if (!repaired.ok) {
       const failure = repaired.failure || reportFailure("asu-air", "plan-repair", {
         status: "repair-failed",
@@ -1583,12 +1770,13 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
         maxTimeMin,
         deferRecipeGrounding: dietRules.length === 0
       });
-      const dietSafe = assertPlanRespectsDiet(reconcilePantryOwnership(parsed, cookablePantry), dietRules);
-      const repairedPlan = dietRules.length ? dietSafe : canonicalizeRepairedPlan(dietSafe, cookablePantry);
-      const plan = groundShoppingPlan(dietRules.length ? repairedPlan : assertPlanUsesExactRecipes(repairedPlan));
+      const dietSafe = assertPlanRespectsDiet(inventoryMode ? parsed : reconcilePantryOwnership(parsed, cookablePantry), dietRules);
+      const repairedPlan = dietRules.length ? dietSafe : canonicalizeRepairedPlan(dietSafe, inventoryMode ? [] : cookablePantry);
+      const plan = finalize(dietRules.length ? repairedPlan : assertPlanUsesExactRecipes(repairedPlan));
       // The curated catalog is small, and equipment and budget narrow it
       // further. When nothing else fits, saying so beats a silent no-op.
-      const stillRepeated = findRepeatedExclusion(plan, safeExclude);
+      const stillRepeated = findRepeatedExclusion(swapping ? { dinners: [plan.dinners[swapIndex]] } : plan, safeExclude);
+      if (swapping && stillRepeated) return res.status(422).json({ ok: false, failure: { message: "No different recipe fits this swap. Your existing plan is unchanged." } });
       return res.json({
         ok: true, model: AIR_MODEL, repaired: true, diet: safeDiet,
         dietRules: dietRules.map((rule) => rule.id), offLimitsPantry,
@@ -1607,6 +1795,18 @@ async function handlePlanRequest(req, res, { chat = airChat } = {}) {
 }
 
 app.post("/api/plan", handlePlanRequest);
+
+const { createInterpreter } = require("./lib/chat-intents");
+const interpretChat = createInterpreter({ chat: airChat, extractJson });
+app.post("/api/chat/interpret", async (req, res) => {
+  try {
+    const result = await interpretChat(req.body?.message, Array.isArray(req.body?.pantry) ? req.body.pantry : []);
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    return res.status(error.status || 502).json({ ok: false, failure: reportFailure("asu-air", "interpret", { message: error.message }) });
+  }
+});
+
 
 // The profile form renders itself from this, so a new option never has to be
 // added in two places. Dinners and minutes-per-meal are deliberately absent:
@@ -1767,10 +1967,10 @@ app.get("/api/failures", (req, res) => res.json({ ok: true, count: failures.leng
 
 // Export the Express app itself so Vercel can detect this file as an Express
 // deployment. Attach the named helpers as properties so the in-process tests
-// and the Netlify wrapper can keep using the existing module API.
+// can keep using the existing module API.
 module.exports = app;
 Object.assign(module.exports, {
-  app, cheapestPack, findPrice, extractJson, PRICES, STORES,
+  app, cheapestPack, findPrice, extractJson, PRICES, STORES, interpretChat, airChat,
   RECIPE_SOURCES, APPROVED_RECIPES, approvedRecipeForCitation, isApprovedRecipeCitation, assertDinnerMatchesRecipe,
   buildPlanSystemPrompt, reportFailure, resolveDataPath,
   DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL,

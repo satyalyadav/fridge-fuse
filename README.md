@@ -337,8 +337,22 @@ Kroger (Fry's parent) publishes a location-aware product API behind OAuth partne
 credentials; Aldi, Trader Joe's, and Walmart offer nothing comparable publicly. The
 catalog's shape leaves room for a per-chain adapter to fill later.
 
+## AI chat
+
+Every chat message goes through ASU AIR at `/api/chat/interpret`. The model returns
+separate pantry and shopping actions, retaining specific names such as almond milk,
+gluten-free pasta, corn tortillas, tamari, and foods absent from the catalog. Each
+action needs evidence copied from the message. Invalid interpretations receive one
+repair attempt; failed or ambiguous requests apply no food actions. Budget, equipment,
+and dietary preference rules remain deterministic, including preserving allergies.
+Pantry-only messages no longer generate dinners. An explicit cooking request does.
+
+Run deterministic tests with `npm test`.
+
+
 ## API
 
+- `POST /api/chat/interpret {message,pantry}` interprets food actions using AIR.
 - `GET /api/health` reports server, catalog, and diet-rule status.
 - `POST /api/vision {imageDataUrl}` returns independently verified `confirmed`
   pantry items plus `uncertain` items with bounding boxes for user review.
@@ -397,7 +411,7 @@ npx vercel@latest --prod
 ```
 
 When prompted for an environment, add the variables to `production`.
-`VOYAGER_KEY` is required for plans and photo recognition; the deployed app does
+`VOYAGER_KEY` is required for chat interpretation, plans and photo recognition; the deployed app does
 not include a local demo fallback.
 
 Set these values to enable live AI:
@@ -418,3 +432,23 @@ to the production URL. Vercel Functions have an ephemeral filesystem, so
 
 The default `vercel.app` URL is enough for a live app. You do not need to buy
 or connect a custom domain.
+
+## Planning and pantry quantities
+
+Plans use exact recipe IDs and server-validated equipment, ingredients, dietary
+restrictions, and citations. The model still creates the plan; there is no local
+fallback if Voyager fails. A microwave-only kitchen currently has one fully
+compatible curated recipe, so a multi-night plan may repeat it.
+
+The browser sends pantry names and amounts in `pantryInventory`. Enter measurable
+amounts such as `4 each`, `8 oz`, or `2 cups` in the pantry. Supplies are deducted
+once across the entire plan. Unknown amounts and cooked/raw mismatches are not
+assumed to cover a recipe; shopping includes those ingredients and explains why.
+Plan totals use a complete checkout at one store, matching the Shop comparison.
+
+Swaps replace one dinner and recalculate the full shopping list. Older saved
+plans without full ingredient quantities must be rebuilt before a swap.
+
+`npm test` includes the behavioral regressions in `test-fixes.js`, covering
+inventory allocation, request races, dietary safety, file validation, equipment,
+shopping totals, and swaps without browser automation.
