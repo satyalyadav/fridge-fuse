@@ -80,20 +80,15 @@ function safeConstraints(value = {}) {
   };
 }
 
-function safeRequirements(value) {
-  return Array.isArray(value) ? value.filter((entry) => entry && typeof entry.item === "string" && Number(entry.amount) > 0 && typeof entry.unit === "string")
-    .slice(0, 100).map((entry) => ({ item: safeText(entry.item, 80), amount: safeNumber(entry.amount), unit: safeText(entry.unit, 30) })) : [];
-}
-
 function safeMeal(meal) {
   if (!meal || typeof meal !== "object" || typeof meal.title !== "string" || !meal.title.trim()) return null;
   const sourceUrl = safeUrl(meal.sourceUrl);
   return {
     title: safeText(meal.title), sourceRecipe: safeText(meal.sourceRecipe), source: safeText(meal.source), sourceUrl,
     sourceUnavailable: !sourceUrl || isLegacyRecipeCitation(meal), adaptationNote: safeText(meal.adaptationNote),
-    timeMin: safeNumber(meal.timeMin, 0, 180), servings: Math.max(1, safeNumber(meal.servings, 1, 12)),
+    timeMin: safeNumber(meal.timeMin, 0, 180),
     steps: safeStrings(meal.steps, 30), equip: safeStrings(meal.equip, 20), usesPantry: safeStrings(meal.usesPantry),
-    needs: safeRequirements(meal.needs), requirements: safeRequirements(meal.requirements), savedAt: safeText(meal.savedAt)
+    needs: safeStrings(meal.needs), savedAt: safeText(meal.savedAt)
   };
 }
 
@@ -105,11 +100,9 @@ function sanitizeStoredPlan(plan) {
     dinners, constraints: plan.constraints ? safeConstraints(plan.constraints) : undefined, totalCost: safeNumber(plan.totalCost),
     shoppingList: (Array.isArray(plan.shoppingList) ? plan.shoppingList : []).filter((item) => item && typeof item.item === "string").slice(0, 50).map((item) => ({
       item: safeText(item.item), qty: Math.max(1, Math.floor(safeNumber(item.qty, 1, 99))), packPrice: safeNumber(item.packPrice),
-      pack: safeText(item.pack), store: safeText(item.store), requiredLabel: safeText(item.requiredLabel), sharedBy: safeStrings(item.sharedBy)
+      pack: safeText(item.pack), store: safeText(item.store), sharedBy: safeStrings(item.sharedBy)
     })),
-    leftovers: (Array.isArray(plan.leftovers) ? plan.leftovers : []).filter((item) => item && typeof item.item === "string").slice(0, 50)
-      .map((item) => ({ item: safeText(item.item), amount: safeText(item.amount), remaining: safeNumber(item.remaining), unit: safeText(item.unit) })),
-    inventoryWarnings: safeStrings(plan.inventoryWarnings), offLimitsPantry: safeStrings(plan.offLimitsPantry),
+    offLimitsPantry: safeStrings(plan.offLimitsPantry),
     checkoutStore: plan.checkoutStore && typeof plan.checkoutStore.name === "string" ? { name: safeText(plan.checkoutStore.name) } : null
   };
 }
@@ -146,7 +139,7 @@ function normaliseState(stored) {
     constraints: safeConstraints(stored.constraints),
     plan: sanitizeStoredPlan(stored.plan),
     pantry: records(stored.pantry, 100).filter((item) => typeof item.name === "string" && item.name.trim())
-      .map((item) => ({ name: item.name.trim().toLowerCase().slice(0, 80), amount: safeText(item.amount, 80) || "some", soon: item.soon === true })),
+      .map((item) => ({ name: item.name.trim().toLowerCase().slice(0, 80), soon: item.soon === true })),
     excludedTitles: safeStrings(stored.excludedTitles).slice(-MAX_EXCLUDED),
     messages: records(stored.messages, MAX_MESSAGES).filter((item) => typeof item.text === "string")
       .map((item) => ({ role: item.role === "user" ? "user" : "assistant", text: safeText(item.text, 4000), supportingText: safeText(item.supportingText, 4000), tone: item.tone === "error" ? "error" : "" })),
@@ -317,16 +310,15 @@ function scrollMessages() {
   });
 }
 
-function addPantryItem(name, amount = "some", soon = false) {
+function addPantryItem(name, soon = false) {
   const normalized = name.trim().toLowerCase();
   if (!normalized) return false;
   const existing = state.pantry.find((item) => item.name === normalized);
   if (existing) {
-    existing.amount = amount && amount !== "some" ? amount : existing.amount;
     existing.soon = Boolean(existing.soon || soon);
     return false;
   }
-  state.pantry.push({ name: normalized, amount: amount || "some", soon: Boolean(soon) });
+  state.pantry.push({ name: normalized, soon: Boolean(soon) });
   return true;
 }
 
@@ -514,8 +506,8 @@ function applyChatActions(actions) {
   const confirmations = [];
   for (const action of actions) {
     if (action.type === "pantry_set") {
-      addPantryItem(action.name, action.amount, action.soon);
-      confirmations.push(`Pantry updated: ${action.name}${action.amount !== "some" ? ` (${action.amount})` : ""}.`);
+      addPantryItem(action.name, action.soon);
+      confirmations.push(`Pantry updated: ${action.name}.`);
     } else if (action.type === "pantry_remove") {
       state.pantry = state.pantry.filter(item => item.name !== action.name);
       confirmations.push(`Removed ${action.name} from your pantry.`);
@@ -594,7 +586,6 @@ async function buildPlan(request = "") {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         pantry: snapshot.pantry.map((item) => item.name),
-        pantryInventory: snapshot.pantry.map(({ name, amount }) => ({ name, amount })),
         shoppingLocation: snapshot.location ? { lat: snapshot.location.lat, lng: snapshot.location.lng } : undefined,
         ...options,
         useSoon: soon,
@@ -657,7 +648,6 @@ async function buildPlan(request = "") {
       : `The cheapest full-package version is ${formatMoney(result.totalCost)}, which is over your ${formatMoney(snapshot.constraints.budget)} limit.`;
     const usedSoon = soon.filter((name) => result.dinners?.[0]?.usesPantry?.includes(name));
     const soonText = usedSoon.length ? ` The first dinner uses ${usedSoon.join(" and ")}.` : "";
-    if (result.inventoryWarnings?.length) addAssistantMessage("Check your pantry quantities before shopping.", result.inventoryWarnings.join(" "));
     const dietText = snapshot.constraints.diet ? ` Every dinner is ${snapshot.constraints.diet}.` : "";
     const offLimitsText = offLimits.length
       ? ` I left ${offLimits.join(" and ")} out of the cooking — ${offLimits.length === 1 ? "it does not" : "they do not"} fit ${snapshot.constraints.diet || "your food restrictions"}. If yours is a safe version, add it under its own name (for example "gluten free pasta") and I will use it.`
@@ -770,25 +760,19 @@ function renderPlan() {
     const qtyLabel = qty > 1 ? `${qty} × ` : "";
     const packLabel = escapeHtml(item.pack || "1 package");
     const storeLabel = escapeHtml(titleCase(item.store || "mock store"));
-    const usesLabel = item.requiredLabel ? ` · uses ${escapeHtml(item.requiredLabel)}` : "";
     const sharedBy = Array.isArray(item.sharedBy) ? item.sharedBy : [];
     const coversLabel = sharedBy.length > 1 ? ` · covers ${sharedBy.length} dinners` : "";
     return `
     <div class="receipt-row">
       <span class="receipt-item">
         <strong>${escapeHtml(item.item)}</strong>
-        <small>${qtyLabel}${packLabel} · ${storeLabel}${usesLabel}${coversLabel}</small>
+        <small>${qtyLabel}${packLabel} · ${storeLabel}${coversLabel}</small>
       </span>
       <span class="receipt-price">${formatMoney(Number(item.packPrice || 0) * qty)}</span>
     </div>
   `;
   }).join("") + `
     <div class="receipt-total"><span>ESTIMATED TOTAL</span><strong>${formatMoney(plan.totalCost)}</strong></div>`;
-
-  const leftovers = Array.isArray(plan.leftovers) ? plan.leftovers : [];
-  $("leftoverList").innerHTML = leftovers.length
-    ? leftovers.map((item) => `<div class="leftover-chip"><strong>${escapeHtml(item.item)}</strong><span>${escapeHtml(item.amount || item.remaining || "some left")}</span></div>`).join("")
-    : `<div class="leftover-chip"><span>No confirmed leftovers.</span></div>`;
 }
 
 // A dinner the student liked used to vanish the moment they swapped it or
@@ -884,11 +868,9 @@ function renderPantry() {
         <span class="pantry-icon" aria-hidden="true">${escapeHtml(item.name[0])}</span>
         <span class="pantry-info">
           <strong>${escapeHtml(item.name)}</strong>
-          <span>${escapeHtml(item.amount)}${item.soon ? " · use first" : ""}${offLimits.has(item.name.toLowerCase()) ? ` · not used · does not fit ${escapeHtml(state.constraints.diet || "your food restrictions")}` : ""}</span>
+          <span>${item.soon ? "use first" : "in your pantry"}${offLimits.has(item.name.toLowerCase()) ? ` · not used · does not fit ${escapeHtml(state.constraints.diet || "your food restrictions")}` : ""}</span>
         </span>
       </button>
-      <input class="pantry-amount" data-pantry-amount="${index}" value="${escapeHtml(item.amount)}"
-        aria-label="Amount of ${escapeHtml(item.name)}" placeholder="e.g. 2 each or 8 oz" maxlength="80">
       <button class="pantry-remove" data-pantry-action="remove" data-index="${index}" aria-label="Remove ${escapeHtml(item.name)}" title="Remove">&times;</button>
     </div>
   `).join("");
@@ -1248,12 +1230,12 @@ function setMobileView(view) {
 function loadSamplePantry() {
   if (state.pantry.length && !window.confirm("Replace your current pantry with the sample mini-fridge?")) return;
   state.pantry = [
-    { name: "eggs", amount: "4 left", soon: true },
-    { name: "spinach", amount: "half a bag", soon: true },
-    { name: "rice", amount: "2 cups cooked", soon: false },
-    { name: "tortillas", amount: "4 left", soon: false },
-    { name: "cheddar", amount: "some", soon: false },
-    { name: "salsa", amount: "half a jar", soon: false }
+    { name: "eggs", soon: true },
+    { name: "spinach", soon: true },
+    { name: "rice", soon: false },
+    { name: "tortillas", soon: false },
+    { name: "cheddar", soon: false },
+    { name: "salsa", soon: false }
   ];
   state.constraints = { ...state.constraints, budget: 18, dinners: 3, maxTimeMin: 20 };
   state.excludedTitles = [];
@@ -1358,7 +1340,7 @@ async function handlePhoto(file) {
 
     const confirmed = result.confirmed || [];
     const uncertain = result.uncertain || [];
-    confirmed.forEach((item) => addPantryItem(item.name, "amount unknown", false));
+    confirmed.forEach((item) => addPantryItem(item.name, false));
     await prepareVisionReview(uncertain, imageDataUrl);
     saveState();
     renderPantry();
@@ -1866,7 +1848,7 @@ $("pantryForm").addEventListener("submit", (event) => {
   const value = $("pantryInput").value.trim();
   if (!value) return;
   const items = value.split(",").map((item) => item.trim()).filter(Boolean);
-  items.forEach((item) => addPantryItem(item, "some", false));
+  items.forEach((item) => addPantryItem(item, false));
   $("pantryInput").value = "";
   saveState();
   renderPantry();
@@ -1884,16 +1866,6 @@ $("pantryList").addEventListener("click", (event) => {
   renderPantry();
 });
 
-$("pantryList").addEventListener("change", (event) => {
-  const input = event.target.closest("[data-pantry-amount]");
-  if (!input) return;
-  const item = state.pantry[Number(input.dataset.pantryAmount)];
-  if (!item) return;
-  item.amount = input.value.trim().slice(0, 80) || "some";
-  saveState();
-  renderPantry();
-});
-
 $("visionReviewList").addEventListener("click", (event) => {
   const button = event.target.closest("[data-vision-action]");
   if (!button) return;
@@ -1906,7 +1878,7 @@ $("visionReviewList").addEventListener("click", (event) => {
       toast("Type the item name before adding it.", "error");
       return;
     }
-    addPantryItem(name, "confirmed from photo", false);
+    addPantryItem(name, false);
     saveState();
     renderPantry();
     toast(`${titleCase(name)} added`);

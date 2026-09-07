@@ -32,8 +32,8 @@ function client() {
 }
 function dinner(title = "Microwave Potato") {
   const r = server.APPROVED_RECIPES.find((entry) => entry.title === title);
-  return { title, sourceRecipe: r.title, source: r.source, sourceUrl: r.url, timeMin: r.timeMin, servings: 1,
-    usesPantry: [], needs: r.ingredients.map((item) => ({ item, amount: item === "potatoes" ? 6 : 0.5, unit: item === "olive oil" ? "fl oz" : "oz" })), steps: [r.method] };
+  return { title, sourceRecipe: r.title, source: r.source, sourceUrl: r.url, timeMin: r.timeMin,
+    usesPantry: [], needs: [...r.ingredients], steps: [r.method] };
 }
 const envelope = (dinners) => ({ ok: true, data: { choices: [{ message: { content: JSON.stringify({ dinners }) } }] } });
 async function plan(body, dinners) {
@@ -62,40 +62,40 @@ async function run() {
     assert.strictEqual(result.payload.ok, true);
     assert.strictEqual(result.payload.dinners[0].source, "Food Network");
   });
-  await check("pantry supply is consumed only once across dinners", async () => {
+  await check("pantry-owned ingredients are cooked, not shopped", async () => {
     const d = dinner("Spinach Rice Breakfast Bowls");
-    d.needs = [{ item: "eggs", amount: 2, unit: "each" }, { item: "rice", amount: 3, unit: "oz" }, { item: "spinach", amount: 2, unit: "oz" }, { item: "butter", amount: 0.5, unit: "oz" }];
-    const result = await plan({ equipment: ["stove", "microwave"], pantry: ["eggs"], pantryInventory: [{ name: "eggs", amount: "1 left" }] }, [d, d]);
+    const result = await plan({ equipment: ["stove", "microwave"], pantry: ["eggs", "rice"] }, [d, d]);
     assert.strictEqual(result.payload.ok, true);
-    assert.strictEqual(result.payload.shoppingList.find((i) => i.item === "eggs").required, 3);
+    assert.deepStrictEqual(result.payload.dinners[0].usesPantry.sort(), ["eggs", "rice"]);
+    assert(!result.payload.shoppingList.some((i) => i.item === "eggs" || i.item === "rice"));
+    assert(result.payload.shoppingList.some((i) => i.item === "spinach" && i.qty === 2));
   });
-  await check("unknown pantry amounts do not erase shopping demand", async () => {
-    const result = await plan({ pantry: ["potatoes"], pantryInventory: [{ name: "potatoes", amount: "some" }] }, [dinner()]);
-    assert(result.payload.shoppingList.some((i) => i.item === "potatoes"));
-    assert(result.payload.inventoryWarnings.length);
+  await check("pantry items no recipe wants stay out of the shopping list", async () => {
+    const result = await plan({ pantry: ["potatoes"] }, [dinner()]);
+    assert(result.payload.shoppingList.some((i) => i.item === "olive oil"));
+    assert(!result.payload.shoppingList.some((i) => i.item === "potatoes"));
   });
   await check("unknown items prevent whole-list claims", () => {
     assert(server.optimizeCart({ items: ["eggs", "dragonfruit"] }).options.every((o) => !o.complete && o.missing.includes("dragonfruit")));
   });
   await check("checkout uses one store's prices", () => {
-    const p = server.groundShoppingPlan({ dinners: [{ title: "Test", needs: [{ item: "eggs", amount: 2, unit: "each" }, { item: "tamari", amount: 0.5, unit: "fl oz" }] }] });
+    const p = server.groundShoppingPlan({ dinners: [{ title: "Test", needs: ["eggs", "tamari"] }] });
     assert.strictEqual(new Set(p.shoppingList.map((i) => i.store)).size, 1);
     assert.strictEqual(p.totalCost, 6.78);
   });
   await check("vegan outputs never price a dairy substitute as milk", async () => {
     const d = dinner("Peanut Butter Banana Smoothie");
-    d.needs = [{ item: "banana", amount: 1, unit: "each" }, { item: "peanut butter", amount: 1, unit: "oz" }, { item: "almond milk", amount: 8, unit: "fl oz" }];
+    d.needs = ["banana", "peanut butter", "almond milk"];
     d.steps = ["Blend banana, peanut butter and almond milk."];
-    const result = await plan({ diet: "vegan", equipment: ["blender"], pantryInventory: [] }, [d]);
+    const result = await plan({ diet: "vegan", equipment: ["blender"] }, [d]);
     assert.strictEqual(result.payload.ok, false);
     assert(!result.payload.shoppingList);
   });
   await check("swap preserves other dinners, even when their recipe matches the exclusion", async () => {
     const previous = [dinner(), dinner(), dinner()];
-    for (const d of previous) d.requirements = d.needs;
     const replacement = dinner("Peanut Butter Banana Quesadillas");
-    replacement.needs = [{ item: "tortillas", amount: 1, unit: "each" }, { item: "peanut butter", amount: 1, unit: "oz" }, { item: "banana", amount: 1, unit: "each" }];
-    const result = await plan({ equipment: ["stove", "microwave"], pantryInventory: [], swapIndex: 1, previousDinners: previous, exclude: ["Microwave Potato"] }, [replacement]);
+    replacement.needs = ["tortillas", "peanut butter", "banana"];
+    const result = await plan({ equipment: ["stove", "microwave"], swapIndex: 1, previousDinners: previous, exclude: ["Microwave Potato"] }, [replacement]);
     assert.strictEqual(result.payload.ok, true);
     assert.strictEqual(result.payload.dinners.length, 3);
     assert.strictEqual(result.payload.dinners[0].title, previous[0].title);
@@ -104,8 +104,8 @@ async function run() {
     assert.strictEqual(result.payload.dinners[1].sourceRecipe, replacement.sourceRecipe);
   });
   await check("unavailable swap returns no replacement plan", async () => {
-    const previous = [dinner()]; previous[0].requirements = previous[0].needs;
-    const result = await plan({ pantryInventory: [], swapIndex: 0, previousDinners: previous, exclude: ["Microwave Potato"] }, [dinner()]);
+    const previous = [dinner()];
+    const result = await plan({ swapIndex: 0, previousDinners: previous, exclude: ["Microwave Potato"] }, [dinner()]);
     assert.strictEqual(result.status, 422);
     assert(!result.payload.dinners);
   });
@@ -147,13 +147,13 @@ async function run() {
     c.run('state = normaliseState({savedRecipes:[{title:"x",sourceRecipe:"x",source:"x",sourceUrl:"javascript:alert(1)"}]});');
     assert(!c.run('JSON.stringify(state.savedRecipes)').includes("javascript:"));
   });
-  await check("empty server leftovers remain empty and package counts sum quantities", () => {
+  await check("plan without leftovers renders, package counts sum quantities", () => {
     c.run('state=clone(DEFAULT_STATE);state.plan={dinners:[{title:"Test",steps:[]}],shoppingList:[{item:"eggs",qty:2,packPrice:3}],leftovers:[],totalCost:6};renderPlan();');
-    assert(!c.node("leftoverList").innerHTML.includes("most of the package"));
+    assert(!c.node("shoppingList").innerHTML.includes("uses "));
     assert(c.node("tripLabel").textContent.startsWith("2 packages"));
   });
   await check("use-first text only claims actual pantry use", () => {
-    c.run('state.pantry=[{name:"rice",amount:"some",soon:true}];renderPlan();');
+    c.run('state.pantry=[{name:"rice",soon:true}];renderPlan();');
     assert(!c.node("planLogic").textContent.includes("used first"));
   });
   await check("importing plan groceries twice is idempotent", () => {
@@ -185,10 +185,11 @@ async function run() {
     await request;
     assert.strictEqual(c.node("groceryResults").innerHTML, message);
   });
-  await check("chat preserves explicitly measured pantry amounts", () => {
-    c.run('state.pantry=[]; applyChatActions([{type:"pantry_set",name:"eggs",amount:"4",soon:false},{type:"pantry_set",name:"spinach",amount:"8 oz",soon:false}]);');
-    assert.strictEqual(c.run('state.pantry[0].amount'), "4");
-    assert.strictEqual(c.run('state.pantry[1].amount'), "8 oz");
+  await check("chat pantry updates store names, never amounts", () => {
+    c.run('state.pantry=[]; applyChatActions([{type:"pantry_set",name:"eggs",qty:1,soon:false},{type:"pantry_set",name:"spinach",qty:1,soon:true}]);');
+    assert.strictEqual(c.run('state.pantry[0].name'), "eggs");
+    assert.strictEqual(c.run('state.pantry[0].amount'), undefined);
+    assert.strictEqual(c.run('state.pantry[1].soon'), true);
   });
   await check("newest plan wins, with its own captured constraints", async () => {
     c.run('state=clone(DEFAULT_STATE);');

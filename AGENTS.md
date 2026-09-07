@@ -81,7 +81,7 @@ enumerate every source. A bad or empty file makes the server refuse to start, by
 
 **Dietary restrictions are enforced, not requested.** `data/diet-rules.json` drives
 both the prompt and a post-generation check (`assertPlanRespectsDiet()`) that scans
-titles, pantry uses, needs, steps, the shopping list, and leftovers. A violating plan
+titles, pantry uses, needs, steps, and the shopping list. A violating plan
 gets one repair attempt and is then rejected. Each rule's `allows` list is stripped
 before its `forbids` are matched — that is what keeps "peanut butter" from tripping
 dairy-free's "butter", so add a substitute there rather than loosening a `forbids`
@@ -93,20 +93,14 @@ two, so a new catalog item needs correct tags or the build fails. An allergy is 
 longest loose match. It used to take any substring hit, which meant "gluten free
 pasta" resolved to wheat `pasta` — do not reintroduce a first-match-wins lookup.
 
-**Recipes are typed requirements, not ingredient names.** `dinner.needs` is
-`[{item, amount, unit}]`. `normalizeRequirement()` validates each one against the
-catalog and its unit family; `groundShoppingPlan()` sums demand, buys whole packages,
-and computes leftovers and `totalCost`. The model's own `shoppingList`, `leftovers`,
-and `totalCost` are ignored — do not start trusting them again. Units convert only
-within a family (count/mass/volume); a cross-family requirement is refused rather
-than converted through a guessed density.
-
-**Amount checks are plausibility, not accuracy.** `perServing` bands in
-`data/prices.json` plus `MAX_PACKAGES_PER_DINNER` catch magnitude errors, scaled by
-`dinner.servings`. `parseAiPlan` is strict on the first pass so the model can correct
-itself, and lenient on the repaired pass so a stubborn amount degrades to one package
-instead of 502-ing the plan. Widen a band rather than deleting it if it fires on a
-legitimate portion.
+**Needs are ingredient names, not quantities.** `dinner.needs` is `["eggs", "rice"]`.
+`needName()` resolves each one against the catalog; `groundShoppingPlan()` buys one
+package per dinner that needs an ingredient and sums `totalCost`. The model's own
+`shoppingList`, `leftovers`, and `totalCost` are ignored — do not start trusting
+them again. Quantities were deliberately removed (the model misjudged amounts and
+the package math produced false precision); do not reintroduce amounts, units,
+per-serving bands, or leftover estimates without a design for where measured
+quantities come from.
 
 **Prices are always re-grounded server-side.** The model may propose a shopping list,
 but `groundShoppingPlan()` replaces its prices with real packs from `data/prices.json`.

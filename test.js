@@ -14,8 +14,7 @@ const {
   DIET_RULES, resolveDietRules, findForbiddenTerm, findDietViolations,
   pantryDietConflicts, dietRulesContext, catalogTagsFor, findIngredientConflict,
   DIET_OPTIONS, EQUIPMENT_OPTIONS, parseDietSelections, blockedIngredientsForDiet,
-  unitInfo, toBaseAmount, packSizeOf, normalizeRequirement, groundShoppingPlan,
-  servingBandOf, amountImplausibility, servingsOf, MAX_PACKAGES_PER_DINNER,
+  needName, groundShoppingPlan,
   findRepeatedExclusion
 } = require("./server.js");
 
@@ -74,8 +73,8 @@ ok(planPrompt.includes("NEVER") && planPrompt.includes("curated recipe records")
 ok(planPrompt.includes('"sourceRecipe"') && planPrompt.includes('"source"') && planPrompt.includes('"sourceUrl"'), "plan prompt requires the exact recipe citation triple");
 ok(!planPrompt.includes('"leftovers":[{'), "plan prompt no longer asks the model to estimate leftovers");
 ok(/Do NOT return shoppingList, leftovers, or totalCost/.test(planPrompt), "plan prompt tells the model the server does the package arithmetic");
-ok(planPrompt.includes('{"item","amount","unit"}') && /how much that dinner actually uses/.test(planPrompt), "plan prompt asks for a quantity per ingredient, not a package");
-ok(/Never answer a weight item in cups/.test(planPrompt), "plan prompt pins each amount to the catalog's unit family");
+ok(planPrompt.includes('"needs":["..."]') && /no amounts, units, or packages/.test(planPrompt), "plan prompt asks for ingredient names, not quantities");
+ok(planPrompt.includes("the server does the package arithmetic"), "plan prompt pins shopping to whole packages");
 ok(
   planPrompt.includes("adaptationNote") && planPrompt.includes("at least half") && planPrompt.includes("within 25%") &&
     planPrompt.includes("Owning an unrelated pantry item"),
@@ -100,106 +99,34 @@ ok(
   "recipe sources resolve from the serverless task root"
 );
 
-// ---------- recipes as typed requirements: quantities, packages, leftovers ----------
-const unsized = PRICES.items.filter((item) => !packSizeOf(item)).map((item) => item.name);
-ok(unsized.length === 0, `every catalog item has a usable pack size${unsized.length ? ` (missing: ${unsized.join(", ")})` : ""}`);
-ok(toBaseAmount(1, "lb").base === 16 && toBaseAmount(1, "dozen").base === 12 && toBaseAmount(1, "cup").base === 8, "units convert to their family base");
-ok(toBaseAmount(2, "tbsp").family === "volume" && toBaseAmount(2, "oz").family === "mass" && toBaseAmount(2, "each").family === "count", "units are grouped into count, mass, and volume");
-ok(unitInfo("nonsense") === null, "an unknown unit is rejected rather than assumed");
-
-// A quantity we cannot read falls back to one whole package and says so; only
-// an ingredient the catalog cannot price is fatal, because pricing it would
-// mean inventing a price.
-// Rice now states what a cup of it weighs, so the conversion is the catalog's
-// own number. An item with no such entry still refuses to guess.
-const cupOfRice = normalizeRequirement({ item: "rice", amount: 1, unit: "cup" });
-ok(!cupOfRice.assumed && cupOfRice.base === 6.5, "a cup of rice uses the weight the catalog states for it");
-const cupOfBananas = normalizeRequirement({ item: "banana", amount: 1, unit: "cup" });
-ok(cupOfBananas.assumed, "an item with no stated equivalent buys one package instead of guessing a density");
-ok(normalizeRequirement({ item: "eggs", amount: 0, unit: "each" }).assumed, "a need with no positive amount falls back to one package");
-ok(normalizeRequirement("eggs").assumed, "a bare ingredient name falls back to one package");
-ok(normalizeRequirement({ item: "eggs", amount: 3, unit: "each" }).assumed === false, "a well-formed quantity is used as given");
-assert.throws(() => normalizeRequirement({ item: "unobtainium", amount: 1, unit: "each" }), /outside the price catalog/);
+// ---------- needs are ingredient names: one package per dinner, no leftovers ----------
+// The model reliably knows which ingredients a recipe uses and reliably
+// misjudges how much, so the plan requests names and the server shops whole
+// packages: each dinner that needs an ingredient adds one package of it.
+ok(needName("eggs") === "eggs", "a bare ingredient name resolves to itself");
+ok(needName({ item: "EGGS" }) === "eggs", "needs are case-insensitive, objects included");
+ok(needName("cheese") === "cheddar", "aliases resolve through the catalog's own table");
+assert.throws(() => needName("unobtainium"), /outside the price catalog/);
 n++; console.log(`ok ${n} - an ingredient the catalog cannot price is still fatal`);
-ok(normalizeRequirement({ item: "EGGS", amount: 2, unit: "Each" }).base === 2, "requirements are case-insensitive in both name and unit");
-ok(normalizeRequirement({ item: "chicken breast", amount: 8, unit: "oz" }).base === 8, "a weight amount stays in ounces");
+assert.throws(() => needName("  "), /missing its item name/);
+n++; console.log(`ok ${n} - a need with no name is rejected rather than shopped`);
 
-// Packages are indivisible: this is the arithmetic the model used to guess.
+// Packages per plan: two dinners needing eggs buy two packages, shared across
+// both, at the store that stocks the whole list cheapest.
 const twoDinners = groundShoppingPlan({
   dinners: [
-    { title: "A", needs: [{ item: "eggs", amount: 3, unit: "each" }, { item: "spinach", amount: 2, unit: "oz" }] },
-    { title: "B", servings: 3, needs: [{ item: "eggs", amount: 11, unit: "each" }] }
+    { title: "A", needs: ["eggs", "spinach"] },
+    { title: "B", needs: ["eggs"] }
   ]
 });
 const eggLine = twoDinners.shoppingList.find((entry) => entry.item === "eggs");
-ok(eggLine.qty === 2, `14 eggs buys 2 dozen, not 1 (qty=${eggLine.qty})`);
+ok(eggLine.qty === 2, `two dinners needing eggs buy 2 packages (qty=${eggLine.qty})`);
 ok(eggLine.sharedBy.length === 2, "demand is summed across every dinner that uses the ingredient");
 ok(twoDinners.totalCost === +(eggLine.packPrice * 2 + cheapestPack("spinach").packPrice).toFixed(2), "the total pays for every package bought, not one of each");
-const eggLeftover = twoDinners.leftovers.find((entry) => entry.item === "eggs");
-ok(eggLeftover.remaining === 10, `leftovers are computed: 2 dozen minus 14 leaves ${eggLeftover.remaining}`);
-ok(twoDinners.leftovers.find((entry) => entry.item === "spinach").remaining === 3, "a partly used package reports the remainder in its own unit");
-
-const exact = groundShoppingPlan({ dinners: [{ title: "A", servings: 4, needs: [{ item: "eggs", amount: 12, unit: "each" }] }] });
-ok(exact.shoppingList[0].qty === 1 && exact.leftovers.length === 0, "a plan that uses a package exactly reports no leftovers");
-const lbs = groundShoppingPlan({ dinners: [{ title: "A", servings: 3, needs: [{ item: "chicken breast", amount: 20, unit: "oz" }] }] });
-ok(lbs.shoppingList[0].qty === 2, "a weight requirement crossing a pack boundary buys two packs");
-
-// ---------- the units people cook in ----------
-// A live plan asked for "1 potato" and "1 tbsp butter" — both natural, both
-// cross-family — and every line fell back to a whole package, so the leftovers
-// the plan promises were always empty.
-ok(PRICES.items.filter((item) => item.equivalents).length >= 15, "most catalog items say what one cooking unit of them weighs");
-for (const [item, amount, unit, expected] of [
-  ["potatoes", 1, "each", 6],
-  ["butter", 1, "tbsp", 0.5],
-  ["black beans", 1, "can", 15],
-  ["bread", 2, "slices", 2],
-  ["rice", 1, "cup", 6.5],
-  ["garlic", 2, "cloves", 0.2],
-]) {
-  const need = normalizeRequirement({ item, amount, unit });
-  ok(!need.assumed && Math.abs(need.base - expected) < 0.001, `${amount} ${unit} of ${item} is ${expected}, not a whole package`);
-}
-// The item's own table beats the generic unit family: a clove is a count, but a
-// clove of garlic is a tenth of the head a shop sells.
-ok(normalizeRequirement({ item: "garlic", amount: 1, unit: "clove" }).base === 0.1, "a clove is judged against the head, not counted as one");
-// Units nobody wrote down still degrade rather than being invented.
-ok(normalizeRequirement({ item: "spinach", amount: 1, unit: "bushel" }).assumed === true, "an unknown unit still falls back to one package");
-ok(normalizeRequirement({ item: "eggs", amount: 3, unit: "each" }).base === 3, "a unit that already matches the pack is untouched");
-
-// ---------- amount plausibility ----------
-const unbanded = PRICES.items.filter((item) => !servingBandOf(item)).map((item) => item.name);
-ok(unbanded.length === 0, `every catalog item has a per-serving band${unbanded.length ? ` (missing: ${unbanded.join(", ")})` : ""}`);
-const invertedBands = PRICES.items.filter((item) => item.perServing.max < item.perServing.min).map((item) => item.name);
-ok(invertedBands.length === 0, "no band has a maximum below its minimum");
-// A band that excluded a whole package would make every single-package plan
-// look implausible, so each band has to sit inside what a package holds.
-const impossibleBands = PRICES.items
-  .filter((item) => item.perServing.min > packSizeOf(item).base)
-  .map((item) => item.name);
-ok(impossibleBands.length === 0, `no band demands more than a whole package per serving${impossibleBands.length ? ` (${impossibleBands.join(", ")})` : ""}`);
-
-const spinach = findPrice("spinach");
-ok(amountImplausibility(spinach, 2, 1) === null, "a normal portion passes the band");
-ok(/above the plausible/.test(amountImplausibility(spinach, 40, 1) || ""), "forty ounces of spinach for one serving is caught");
-ok(/below the plausible/.test(amountImplausibility(spinach, 0.01, 1) || ""), "a fraction of an ounce of spinach is caught");
-ok(amountImplausibility(spinach, 12, 4) === null, "the same total passes when the dinner says it serves four");
-ok(servingsOf({ servings: 4 }) === 4 && servingsOf({}) === 1 && servingsOf({ servings: 0 }) === 1, "a dinner feeds one unless it says otherwise");
-
-// The backstop for an item with no band of its own.
-const unbandedItem = { name: "mystery", size: { amount: 10, unit: "oz" }, prices: {}, tags: [] };
-ok(amountImplausibility(unbandedItem, 10, 1) === null, "one package of an unbanded item is fine");
-ok(
-  /more than a dinner plausibly uses/.test(amountImplausibility(unbandedItem, 10 * (MAX_PACKAGES_PER_DINNER + 1), 1) || ""),
-  `more than ${MAX_PACKAGES_PER_DINNER} packages of an unbanded item for one serving is caught`
-);
-
-// Strict on the first pass so the model can correct itself; lenient after, so a
-// stubborn amount costs a rough estimate rather than the whole plan.
-assert.throws(() => normalizeRequirement({ item: "spinach", amount: 40, unit: "oz" }, { strict: true }), /above the plausible/);
-n++; console.log(`ok ${n} - an implausible amount is raised for correction on the first pass`);
-const degraded = normalizeRequirement({ item: "spinach", amount: 40, unit: "oz" });
-ok(degraded.assumed && /above the plausible/.test(degraded.assumedReason || ""), "an implausible amount degrades to one package and records why");
+ok(Array.isArray(twoDinners.leftovers) && twoDinners.leftovers.length === 0, "no leftovers are claimed without amounts to compute them from");
+ok(new Set(twoDinners.shoppingList.map((entry) => entry.store)).size === 1, "the whole list is quoted at one checkout store");
+assert.throws(() => groundShoppingPlan({ dinners: [{ title: "A", needs: ["unobtainium"] }] }), /outside the price catalog/);
+n++; console.log(`ok ${n} - grounding still refuses an ingredient the catalog cannot price`);
 
 // ---------- gluten-free catalog + diet tags ----------
 const untagged = PRICES.items.filter((item) => !Array.isArray(item.tags)).map((item) => item.name);
@@ -283,9 +210,8 @@ ok(findIngredientConflict("unobtainium chicken", veganRule) === "chicken", "an i
 ok(DIET_RULES.every((rule) => rule.excludesTags.length > 0), "every diet rule excludes at least one catalog tag");
 
 const violatingPlanShape = {
-  dinners: [{ title: "Cheesy rice", usesPantry: ["rice"], needs: [{ item: "cheddar", amount: 4, unit: "oz" }], steps: ["Melt the cheddar."] }],
-  shoppingList: [{ item: "cheddar" }],
-  leftovers: [{ item: "cheddar", amount: "half" }]
+  dinners: [{ title: "Cheddar rice", usesPantry: ["rice"], needs: ["cheddar"], steps: ["Melt the cheddar."] }],
+  shoppingList: [{ item: "cheddar" }]
 };
 const shapeViolations = findDietViolations(violatingPlanShape, [veganRule]);
 ok(shapeViolations.length >= 4, `violations are found in every plan field (${shapeViolations.length} found)`);
@@ -370,7 +296,7 @@ async function exerciseFrontendMessage(message, parsed, pantryAfter) {
   let buildPlanCalls = 0;
   const assistantMessages = [];
   c.context.interpretMessage = async () => ({
-    actions: pantryAfter.map(item => ({ type: "pantry_set", name: item.name, amount: "some", qty: 1, soon: false })),
+    actions: pantryAfter.map(item => ({ type: "pantry_set", name: item.name, qty: 1, soon: false })),
     requestPlan: /build a dinner plan/.test(message), swapIndex: null, clarification: ""
   });
   c.context.buildPlan = async () => { buildPlanCalls++; };
@@ -400,10 +326,9 @@ ok(
 );
 ok(
   html.includes("Your dinner plan") &&
-    html.includes("After your final dinner") &&
     !html.includes("Your next few nights") &&
     !html.includes("After dinner three"),
-  "plan and leftovers headings work for every dinner count"
+  "plan headings work for every dinner count"
 );
 ok(
   appJs.includes('plan.dinners.length === 1 ? "dinner" : "dinners"'),
@@ -949,7 +874,7 @@ const validAiPlan = {
     fiber: 5,
     equip: ["microwave"],
     usesPantry: ["spinach", "rice", "eggs"],
-    needs: [{ item: "butter", amount: 2, unit: "oz" }],
+    needs: ["butter"],
     steps: ["Microwave the spinach, rice, and eggs until the eggs are fully set."],
     sourceRecipe: "Spinach Rice Breakfast Bowls",
     source: "Budget Bytes",
@@ -1062,7 +987,6 @@ async function runRouteChecks() {
       sourceUrl: "https://www.foodnetwork.com/recipes/food-network-kitchen/microwave-potato-10076489",
       adaptationNote: "use eggs instead of potato, add rice",
       timeMin: 3,
-      servings: 1,
       usesPantry: ["eggs", "rice"],
       needs: [],
       steps: ["Microwave the eggs until set and serve them with rice."]
@@ -1088,9 +1012,8 @@ async function runRouteChecks() {
       sourceUrl: "https://www.budgetbytes.com/peanut-butter-banana-quesadillas/",
       adaptationNote: "Use the available pantry ingredients.",
       timeMin: 10,
-      servings: 1,
       usesPantry: ["rice", "black beans", "potatoes", "butter", "cheddar"],
-      needs: [{ item: "tortillas", amount: 1, unit: "each" }],
+      needs: ["tortillas"],
       steps: ["Put the pantry ingredients in a tortilla and toast it."],
     }],
     notes: ""
@@ -1120,12 +1043,11 @@ async function runRouteChecks() {
       sourceUrl: "https://www.foodnetwork.com/recipes/food-network-kitchen/microwave-potato-10076489",
       adaptationNote: "",
       timeMin: 10,
-      servings: 1,
       usesPantry: ["potatoes"],
       needs: [
-        { item: "potatoes", amount: 1, unit: "each" },
-        { item: "olive oil", amount: 1, unit: "tbsp" },
-        { item: "butter", amount: 1, unit: "tbsp" }
+        "potatoes",
+        "olive oil",
+        "butter"
       ],
       steps: ["Pierce and oil the potato, microwave until tender, then split and add butter."]
     }],
@@ -1152,11 +1074,10 @@ async function runRouteChecks() {
       sourceUrl: "https://www.foodnetwork.com/recipes/food-network-kitchen/microwave-potato-10076489",
       adaptationNote: "",
       timeMin: 7,
-      servings: 1,
       usesPantry: ["potatoes"],
       needs: [
-        { item: "olive oil", amount: 1, unit: "tbsp" },
-        { item: "butter", amount: 1, unit: "tbsp" }
+        "olive oil",
+        "butter"
       ],
       steps: ["Pierce and oil the potato, microwave until tender, then split and add butter."]
     }],
@@ -1181,7 +1102,6 @@ async function runRouteChecks() {
       sourceUrl: "https://www.noracooks.com/spanish-rice-and-beans/",
       adaptationNote: "",
       timeMin: 40,
-      servings: 1,
       usesPantry: ["rice", "black beans", "salsa", "onion", "garlic", "olive oil"],
       needs: [],
       steps: ["Saute the aromatics, add rice, beans, salsa, and liquid, then cook until the rice is tender."]
@@ -1252,7 +1172,7 @@ async function runRouteChecks() {
 
   const unpricedAiPlan = {
     ...validAiPlan,
-    dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "unobtainium", amount: 1, unit: "each" }] }))
+    dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: ["unobtainium"] }))
   };
   let unpricedCalls = 0;
   const unpriced = await callPlan(request, async () => {
@@ -1275,52 +1195,41 @@ async function runRouteChecks() {
     ...validAiPlan,
     dinners: validAiPlan.dinners.map((dinner) => ({
       ...dinner,
-      servings: 6,
       usesPantry: dinner.usesPantry.filter((item) => item !== "eggs"),
-      needs: [{ item: "eggs", amount: 18, unit: "each" }]
+      needs: ["eggs"]
     })),
     shoppingList: [{ item: "eggs", pack: "free eggs", packPrice: 0.01, store: "nowhere", qty: 1 }],
     leftovers: [{ item: "eggs", amount: "a whole lot, trust me" }],
     totalCost: 0.01
   }));
-  ok(inventedNumbers.statusCode === 200 && inventedNumbers.payload.ok, "a plan with typed quantities is accepted");
+  ok(inventedNumbers.statusCode === 200 && inventedNumbers.payload.ok, "a plan with named needs is accepted");
   ok(
-    inventedNumbers.payload.shoppingList[0].qty === 2 && inventedNumbers.payload.shoppingList[0].store !== "nowhere",
-    "the server prices from its own catalog and buys the packages the amounts require"
+    inventedNumbers.payload.shoppingList.every((entry) => entry.qty === 1 && entry.store !== "nowhere"),
+    "the server prices from its own catalog and buys one package per dinner that needs it"
   );
   ok(
-    inventedNumbers.payload.totalCost === +(cheapestPack("eggs").packPrice * 2).toFixed(2),
+    inventedNumbers.payload.totalCost === +(cheapestPack("eggs").packPrice + cheapestPack("butter").packPrice).toFixed(2),
     "the total is computed, not taken from the model"
   );
   ok(
-    inventedNumbers.payload.leftovers[0].remaining === 6 && !/trust me/.test(JSON.stringify(inventedNumbers.payload.leftovers)),
-    "leftovers are computed from the requirements, replacing the model's estimate"
+    Array.isArray(inventedNumbers.payload.leftovers) && inventedNumbers.payload.leftovers.length === 0 &&
+      !/trust me/.test(JSON.stringify(inventedNumbers.payload)),
+    "the model's leftover estimate never reaches the student"
   );
 
-  // A model that phrases an amount badly costs the student a rougher leftover
-  // estimate, not their dinner plan. This is the difference between guessing a
-  // quantity (recoverable, and labelled) and guessing a price (never).
-  let legacyCalls = 0;
-  const legacyNeeds = await callPlan(request, async () => {
-    legacyCalls++;
-    return aiEnvelope({
-      ...validAiPlan,
-      dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: ["soy sauce"] }))
-    });
-  });
+  // A need shaped like the old typed requirement still resolves by name: the
+  // server never shopped by model-supplied amounts, so nothing is lost.
+  const legacyNeeds = await callPlan(request, async () => aiEnvelope({
+    ...validAiPlan,
+    dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "butter" }] }))
+  }));
   ok(
-    legacyCalls === 1 && legacyNeeds.statusCode === 200 && legacyNeeds.payload.ok,
-    "a bare ingredient name still produces a plan instead of a 502"
+    legacyNeeds.statusCode === 200 && legacyNeeds.payload.ok &&
+      legacyNeeds.payload.shoppingList.some((entry) => entry.item === "butter"),
+    "an object-shaped need is resolved by its name, not rejected"
   );
-  ok(
-    legacyNeeds.payload.shoppingList[0].assumedWholePackage === true &&
-      /amount not given/.test(legacyNeeds.payload.shoppingList[0].requiredLabel),
-    "the receipt says the amount was assumed rather than stating a false one"
-  );
-  ok(legacyNeeds.payload.leftovers.length === 0, "no leftover is claimed for an amount nobody stated");
 
-  // A cup of rice is now the catalog's own stated weight; a cup of something
-  // that states nothing still buys the package rather than guessing.
+  // An unknown unit on a need object changes nothing: names are all the server reads.
   const cookingUnits = await callPlan({
     ...request,
     pantry: request.pantry.filter((item) => item !== "rice")
@@ -1333,17 +1242,8 @@ async function runRouteChecks() {
     }))
   }));
   ok(
-    cookingUnits.statusCode === 200 && !cookingUnits.payload.shoppingList[0].assumedWholePackage &&
-      cookingUnits.payload.shoppingList[0].required === 6.5,
-    "a plan measured in cups is priced from the weight the catalog states"
-  );
-  const noEquivalent = await callPlan(request, async () => aiEnvelope({
-    ...validAiPlan,
-    dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "banana", amount: 1, unit: "cup" }] }))
-  }));
-  ok(
-    noEquivalent.statusCode === 200 && noEquivalent.payload.shoppingList[0].assumedWholePackage === true,
-    "an item with no stated equivalent still buys the package rather than guessing a density"
+    cookingUnits.statusCode === 200 && cookingUnits.payload.shoppingList.some((entry) => entry.item === "rice"),
+    "extra fields on a need are ignored while its name is shopped"
   );
 
   // ---------- dietary restrictions on the live plan route ----------
@@ -1357,7 +1257,7 @@ async function runRouteChecks() {
         ...dinner,
         title: "Spinach rice bowl",
         usesPantry: ["spinach", "rice"],
-        needs: [{ item: "black beans", amount: 6, unit: "oz" }],
+        needs: ["black beans"],
         steps: ["Microwave the spinach and rice, then stir in the black beans."]
       }))
     });
@@ -1387,11 +1287,11 @@ async function runRouteChecks() {
       timeMin: 15,
       usesPantry: [],
       needs: [
-        { item: "black beans", amount: 8, unit: "oz" },
-        { item: "onion", amount: 2, unit: "oz" },
-        { item: "garlic", amount: 2, unit: "clove" },
-        { item: "cheddar", amount: 2, unit: "oz" },
-        { item: "corn tortillas", amount: 2, unit: "each" }
+        "black beans",
+        "onion",
+        "garlic",
+        "cheddar",
+        "corn tortillas"
       ],
       steps: ["Mix the bean filling, fill the corn tortillas, and toast both sides in a skillet."]
     }))
@@ -1416,11 +1316,11 @@ async function runRouteChecks() {
       timeMin: 15,
       usesPantry: [],
       needs: [
-        { item: "black beans", amount: 8, unit: "oz" },
-        { item: "onion", amount: 2, unit: "oz" },
-        { item: "garlic", amount: 2, unit: "clove" },
-        { item: "cheddar", amount: 2, unit: "oz" },
-        { item: "tortillas", amount: 2, unit: "each" }
+        "black beans",
+        "onion",
+        "garlic",
+        "cheddar",
+        "tortillas"
       ],
       steps: ["Fill the flour tortillas with the bean mixture and toast both sides."]
     }))
@@ -1429,53 +1329,6 @@ async function runRouteChecks() {
   ok(
     celiacBlocked.statusCode === 502 && /gluten/.test(celiacBlocked.payload.failure?.message || ""),
     "flour tortillas in a celiac plan are rejected by the catalog tag, naming gluten"
-  );
-
-  // End to end: the model's implausible amount gets one correction attempt.
-  let bandCalls = 0;
-  const amountRequest = { ...request, pantry: ["rice", "eggs"] };
-  const bandFixed = await callPlan(amountRequest, async (messages) => {
-    bandCalls++;
-    if (bandCalls === 1) {
-      return aiEnvelope({
-        ...validAiPlan,
-        dinners: validAiPlan.dinners.map((dinner) => ({
-          ...dinner,
-          usesPantry: dinner.usesPantry.filter((item) => item !== "spinach"),
-          needs: [{ item: "spinach", amount: 40, unit: "oz" }, { item: "butter", amount: 2, unit: "oz" }]
-        }))
-      });
-    }
-    assert(/above the plausible/.test(messages.map((m) => String(m.content)).join(" ")));
-    return aiEnvelope({
-      ...validAiPlan,
-      dinners: validAiPlan.dinners.map((dinner) => ({
-        ...dinner,
-        usesPantry: dinner.usesPantry.filter((item) => item !== "spinach"),
-        needs: [{ item: "spinach", amount: 3, unit: "oz" }, { item: "butter", amount: 2, unit: "oz" }]
-      }))
-    });
-  });
-  ok(bandCalls === 2 && bandFixed.statusCode === 200, "an implausible amount is sent back for correction");
-  ok(
-    bandFixed.payload.shoppingList[0].assumedWholePackage !== true && bandFixed.payload.shoppingList[0].required === 3,
-    "the corrected amount is used"
-  );
-
-  // A model that will not correct it still gets the student a usable plan.
-  const bandStubborn = await callPlan(amountRequest, async () => aiEnvelope({
-    ...validAiPlan,
-    dinners: validAiPlan.dinners.map((dinner) => ({
-      ...dinner,
-      usesPantry: dinner.usesPantry.filter((item) => item !== "spinach"),
-      needs: [{ item: "spinach", amount: 40, unit: "oz" }, { item: "butter", amount: 2, unit: "oz" }]
-    }))
-  }));
-  ok(bandStubborn.statusCode === 200 && bandStubborn.payload.ok, "a stubbornly implausible amount does not fail the plan");
-  ok(
-    bandStubborn.payload.shoppingList[0].assumedWholePackage === true &&
-      /stated amount was not usable/.test(bandStubborn.payload.shoppingList[0].requiredLabel),
-    "the receipt says the stated amount was not usable rather than repeating it"
   );
 
   // Swapping a dinner: the exclusion is on the recipe, not the display title,
@@ -1504,8 +1357,8 @@ async function runRouteChecks() {
         timeMin: 10,
         usesPantry: ["potatoes"],
         needs: [
-          { item: "olive oil", amount: 1, unit: "tbsp" },
-          { item: "butter", amount: 1, unit: "tbsp" }
+          "olive oil",
+          "butter"
         ],
         steps: ["Pierce and oil the potato, microwave it until tender, then split it and add butter."]
       }))
@@ -1536,7 +1389,7 @@ async function runRouteChecks() {
     dinners: validAiPlan.dinners.map((dinner) => ({
       ...dinner,
       usesPantry: ["rice", "eggs"],
-      needs: [{ item: "marinara", amount: 8, unit: "oz" }],
+      needs: ["marinara"],
       steps: ["Microwave the rice and eggs, then warm the marinara over them."]
     }))
   }));
@@ -1552,7 +1405,7 @@ async function runRouteChecks() {
 
   const dairyInNeeds = {
     ...validAiPlan,
-    dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "cheddar", amount: 4, unit: "oz" }] }))
+    dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: ["cheddar"] }))
   };
   let dairyCalls = 0;
   const dairy = await callPlan(veganRequest, async () => {
@@ -1586,7 +1439,7 @@ async function runRouteChecks() {
     peanutCalls++;
     return aiEnvelope({
       ...validAiPlan,
-      dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: [{ item: "peanut butter", amount: 2, unit: "oz" }] }))
+      dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: ["peanut butter"] }))
     });
   });
   ok(
@@ -1605,7 +1458,7 @@ async function runRouteChecks() {
       dinners: validAiPlan.dinners.map((dinner) => ({
         ...dinner,
         usesPantry: ["spinach", "rice"],
-        needs: [{ item: "black beans", amount: 6, unit: "oz" }],
+        needs: ["black beans"],
         steps: ["Microwave the spinach and rice, then stir in the black beans."]
       }))
     });
@@ -1765,10 +1618,10 @@ async function runRouteChecks() {
       timeMin: 25,
       usesPantry: ["spinach", "rice"],
       needs: [
-        { item: "soy sauce", amount: 2, unit: "tbsp" },
-        { item: "garlic", amount: 2, unit: "clove" },
-        { item: "carrots", amount: 3, unit: "oz" },
-        { item: "onion", amount: 2, unit: "oz" }
+        "soy sauce",
+        "garlic",
+        "carrots",
+        "onion"
       ],
       steps: ["Stir-fry the garlic, carrots, onion, and spinach, add the soy sauce, and serve over rice."]
     }))

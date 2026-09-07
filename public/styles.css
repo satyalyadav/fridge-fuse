@@ -602,7 +602,7 @@ button.mobile-pantry-button { display: none; }
 }
 .meal-actions button:hover { border-color: var(--maroon); color: var(--maroon); }
 
-.shopping-section, .leftovers-section {
+.shopping-section {
   margin-top: 34px;
   padding-top: 25px;
   border-top: 1px solid var(--line);
@@ -672,18 +672,6 @@ button.mobile-pantry-button { display: none; }
   font-size: 14px;
   font-weight: 600;
 }
-
-.leftover-list { display: flex; flex-wrap: wrap; gap: 8px; }
-.leftover-chip {
-  display: inline-flex;
-  gap: 7px;
-  padding: 8px 10px;
-  border: 1px solid #d3cbc7;
-  border-radius: 9px;
-  background: transparent;
-  font-size: 12px;
-}
-.leftover-chip span { color: var(--ink-soft); }
 
 /* ---------- groceries ---------- */
 /* The grocery tab takes the whole workspace; chat + plan stay paired. */
@@ -1196,10 +1184,14 @@ body[data-welcome-open="true"] { overflow: hidden; }
 .link-button:hover { color: var(--ink); }
 
 @media (max-width: 860px) {
-  .welcome { padding: 0; align-items: stretch; }
+  /* start, not stretch: stretching the card to the viewport squeezed the
+     form into a sliver that cut the equipment pill rows mid-pill with no
+     visible scrollbar. The card grows instead and the page scrolls. */
+  .welcome { padding: 0; align-items: start; }
   .welcome-card {
     grid-template-columns: minmax(0, 1fr);
     min-height: 100%;
+    max-height: none;
     border-radius: 0;
   }
   .welcome-hero { gap: 16px; padding: 22px 18px; }
@@ -1333,7 +1325,7 @@ body[data-welcome-open="true"] { overflow: hidden; }
 .pantry-list { display: grid; gap: 8px; }
 .pantry-item {
   display: grid;
-  grid-template-columns: 35px minmax(0, 1fr) minmax(65px, 100px) 26px;
+  grid-template-columns: 35px minmax(0, 1fr) 26px;
   align-items: center;
   gap: 10px;
   padding: 11px;
@@ -1771,4 +1763,3 @@ body[data-welcome-open="true"] { overflow: hidden; }
 }
 
 /* Keep measured pantry amounts editable without opening another form. */
-.pantry-amount { width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: inherit; }

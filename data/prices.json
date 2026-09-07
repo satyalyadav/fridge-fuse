@@ -57,14 +57,6 @@
       "tags": [],
       "codes": {
         "foodon": "FOODON:00004183"
-      },
-      "size": {
-        "amount": 6,
-        "unit": "each"
-      },
-      "perServing": {
-        "min": 0.5,
-        "max": 2
       }
     },
     {
@@ -91,18 +83,6 @@
       "tags": [],
       "codes": {
         "foodon": null
-      },
-      "size": {
-        "amount": 15,
-        "unit": "oz"
-      },
-      "perServing": {
-        "min": 2,
-        "max": 15
-      },
-      "equivalents": {
-        "can": 15,
-        "cup": 6.3
       }
     },
     {
@@ -131,18 +111,6 @@
       ],
       "codes": {
         "foodon": "FOODON:03000288"
-      },
-      "size": {
-        "amount": 20,
-        "unit": "oz"
-      },
-      "perServing": {
-        "min": 1,
-        "max": 6
-      },
-      "equivalents": {
-        "slice": 1,
-        "each": 1
       }
     },
     {
@@ -171,19 +139,6 @@
       ],
       "codes": {
         "foodon": "FOODON:03310351"
-      },
-      "size": {
-        "amount": 8,
-        "unit": "oz"
-      },
-      "perServing": {
-        "min": 0.1,
-        "max": 2
-      },
-      "equivalents": {
-        "tbsp": 0.5,
-        "stick": 4,
-        "cup": 8
       }
     },
     {
@@ -210,18 +165,6 @@
       "tags": [],
       "codes": {
         "foodon": null
-      },
-      "size": {
-        "amount": 2,
-        "unit": "lb"
-      },
-      "perServing": {
-        "min": 1,
-        "max": 8
-      },
-      "equivalents": {
-        "each": 2,
-        "cup": 4.4
       }
     },
     {
@@ -250,18 +193,6 @@
       ],
       "codes": {
         "foodon": null
-      },
-      "size": {
-        "amount": 8,
-        "unit": "oz"
-      },
-      "perServing": {
-        "min": 0.5,
-        "max": 4
-      },
-      "equivalents": {
-        "cup": 4,
-        "slice": 0.7
       }
     },
     {
@@ -291,18 +222,6 @@
       ],
       "codes": {
         "foodon": "FOODON:00002703"
-      },
-      "size": {
-        "amount": 1,
-        "unit": "lb"
-      },
-      "perServing": {
-        "min": 3,
-        "max": 10
-      },
-      "equivalents": {
-        "each": 6,
-        "breast": 6
       }
     },
     {
@@ -311,14 +230,6 @@
       "tags": [],
       "codes": {
         "foodon": null
-      },
-      "size": {
-        "amount": 18,
-        "unit": "each"
-      },
-      "perServing": {
-        "min": 1,
-        "max": 4
       },
       "prices": {
         "aldi": {
@@ -365,14 +276,6 @@
       ],
       "codes": {
         "foodon": null
-      },
-      "size": {
-        "amount": 1,
-        "unit": "dozen"
-      },
-      "perServing": {
-        "min": 1,
-        "max": 4
       }
     },
     {
@@ -399,17 +302,6 @@
       "tags": [],
       "codes": {
         "foodon": null
-      },
-      "size": {
-        "amount": 12,
-        "unit": "oz"
-      },
-      "perServing": {
-        "min": 1,
-        "max": 6
-      },
-      "equivalents": {
-        "cup": 4.9
       }
     },
     {
@@ -436,18 +328,6 @@
       "tags": [],
       "codes": {
         "foodon": null
-      },
-      "size": {
-        "amount": 3,
-        "unit": "each"
-      },
-      "perServing": {
-        "min": 0.05,
-        "max": 1
-      },
-      "equivalents": {
-        "clove": 0.1,
-        "head": 1
       }
     },
     {
@@ -456,18 +336,6 @@
       "tags": [],
       "codes": {
         "foodon": null
-      },
-      "size": {
-        "amount": 18,
-        "unit": "oz"
-      },
-      "perServing": {
-        "min": 1,
-        "max": 6
-      },
-      "equivalents": {
-        "slice": 1,
-        "each": 1
       },
       "prices": {
         "aldi": {
@@ -494,18 +362,6 @@
       "tags": [],
       "codes": {
         "foodon": "FOODON:00005437"
-      },
-      "size": {
-        "amount": 12,
-        "unit": "oz"
-      },
-      "perServing": {
-        "min": 2,
-        "max": 6
-      },
-      "equivalents": {
-        "cup": 3.5,
-        "box": 12
       },
       "prices": {
         "aldi": {
@@ -553,17 +409,6 @@
       ],
       "codes": {
         "foodon": null
-      },
-      "size": {
-        "amount": 1,
-        "unit": "lb"
-      },
-      "perServing": {
-        "min": 3,
-        "max": 10
-      },
-      "equivalents": {
-        "patty": 4
       }
     },
     {
@@ -590,18 +435,6 @@
       "tags": [],
       "codes": {
         "foodon": null
-      },
-      "size": {
-        "amount": 24,
-        "unit": "oz"
-      },
-      "perServing": {
-        "min": 2,
-        "max": 10
-      },
-      "equivalents": {
-        "cup": 8.8,
-        "jar": 24
       }
     },
     {
@@ -630,14 +463,6 @@
       ],
       "codes": {
         "foodon": null
-      },
-      "size": {
-        "amount": 1,
-        "unit": "gallon"
-      },
-      "perServing": {
-        "min": 1,
-        "max": 16
       }
     },
     {
@@ -664,17 +489,6 @@
       "tags": [],
       "codes": {
         "foodon": null
-      },
-      "size": {
-        "amount": 42,
-        "unit": "oz"
-      },
-      "perServing": {
-        "min": 1,
-        "max": 4
-      },
-      "equivalents": {
-        "cup": 3.2
       }
     },
     {
@@ -701,14 +515,6 @@
       "tags": [],
       "codes": {
         "foodon": "FOODON:03301826"
-      },
-      "size": {
-        "amount": 17,
-        "unit": "fl oz"
-      },
-      "perServing": {
-        "min": 0.1,
-        "max": 2
       }
     },
     {
@@ -735,18 +541,6 @@
       "tags": [],
       "codes": {
         "foodon": "FOODON:03316347"
-      },
-      "size": {
-        "amount": 3,
-        "unit": "lb"
-      },
-      "perServing": {
-        "min": 1,
-        "max": 8
-      },
-      "equivalents": {
-        "each": 5,
-        "cup": 5.6
       }
     },
     {
@@ -775,18 +569,6 @@
       ],
       "codes": {
         "foodon": "FOODON:03306347"
-      },
-      "size": {
-        "amount": 16,
-        "unit": "oz"
-      },
-      "perServing": {
-        "min": 2,
-        "max": 6
-      },
-      "equivalents": {
-        "cup": 3.5,
-        "box": 16
       }
     },
     {
@@ -815,18 +597,6 @@
       ],
       "codes": {
         "foodon": "FOODON:03306867"
-      },
-      "size": {
-        "amount": 16,
-        "unit": "oz"
-      },
-      "perServing": {
-        "min": 0.5,
-        "max": 3
-      },
-      "equivalents": {
-        "tbsp": 0.57,
-        "cup": 9.1
       }
     },
     {
@@ -853,18 +623,6 @@
       "tags": [],
       "codes": {
         "foodon": null
-      },
-      "size": {
-        "amount": 5,
-        "unit": "lb"
-      },
-      "perServing": {
-        "min": 4,
-        "max": 16
-      },
-      "equivalents": {
-        "each": 6,
-        "cup": 5.3
       }
     },
     {
@@ -891,17 +649,6 @@
       "tags": [],
       "codes": {
         "foodon": "FOODON:00004327"
-      },
-      "size": {
-        "amount": 2,
-        "unit": "lb"
-      },
-      "perServing": {
-        "min": 1.5,
-        "max": 8
-      },
-      "equivalents": {
-        "cup": 6.5
       }
     },
     {
@@ -928,18 +675,6 @@
       "tags": [],
       "codes": {
         "foodon": "FOODON:03310086"
-      },
-      "size": {
-        "amount": 16,
-        "unit": "oz"
-      },
-      "perServing": {
-        "min": 1,
-        "max": 10
-      },
-      "equivalents": {
-        "cup": 9,
-        "jar": 16
       }
     },
     {
@@ -970,14 +705,6 @@
       ],
       "codes": {
         "foodon": null
-      },
-      "size": {
-        "amount": 15,
-        "unit": "fl oz"
-      },
-      "perServing": {
-        "min": 0.1,
-        "max": 2
       }
     },
     {
@@ -1004,18 +731,6 @@
       "tags": [],
       "codes": {
         "foodon": null
-      },
-      "size": {
-        "amount": 5,
-        "unit": "oz"
-      },
-      "perServing": {
-        "min": 0.5,
-        "max": 4
-      },
-      "equivalents": {
-        "cup": 1,
-        "handful": 1
       }
     },
     {
@@ -1027,14 +742,6 @@
       ],
       "codes": {
         "foodon": null
-      },
-      "size": {
-        "amount": 10,
-        "unit": "fl oz"
-      },
-      "perServing": {
-        "min": 0.1,
-        "max": 2
       },
       "prices": {
         "frys": {
@@ -1077,14 +784,6 @@
       ],
       "codes": {
         "foodon": null
-      },
-      "size": {
-        "amount": 10,
-        "unit": "each"
-      },
-      "perServing": {
-        "min": 1,
-        "max": 4
       }
     },
     {
@@ -1113,17 +812,6 @@
       ],
       "codes": {
         "foodon": null
-      },
-      "size": {
-        "amount": 32,
-        "unit": "oz"
-      },
-      "perServing": {
-        "min": 2,
-        "max": 12
-      },
-      "equivalents": {
-        "cup": 8.6
       }
     }
   ],

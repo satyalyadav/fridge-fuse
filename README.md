@@ -4,13 +4,13 @@ Fuse what you have into a meal you can afford.
 
 FridgeFuse is a chat-first meal planner for a freshman cooking in a dorm. It
 turns a rough pantry, a grocery limit, and limited equipment into three simple
-dinners, one full-package shopping list, and a view of what will remain.
+dinners and one full-package shopping list.
 
 Live deployment: Vercel will provide the project URL after the first deploy.
 
 ## Prerequisites
 
-- Node.js 20+ (`package.json` pins the runtime family) and npm
+- Node.js 24+ (`package.json` pins the runtime family) and npm
 - git
 
 Check with `node --version` / `npm --version`.
@@ -131,7 +131,7 @@ The demo flow is:
 3. Open beginner cooking steps.
 4. Review the merged full-package list and estimated checkout total.
 5. Swap a meal without resetting the pantry or budget.
-6. Open the pantry to edit rough amounts or mark another item “use soon.”
+6. Open the pantry to add food or mark another item “use soon.”
 
 Photo recognition is intentionally conservative. A grocery is added
 automatically only when Voyager supplies a safe object crop, identifies the
@@ -233,48 +233,27 @@ The exported file is the state object itself under a small envelope, so if
 accounts are added later they sync the same shape rather than a second format
 that would have to be kept in step.
 
-## Recipes as typed requirements
+## Needs are ingredient names
 
-A dinner requires *quantities of ingredients*; a store sells *packages*. The plan
-keeps those separate, because conflating them is what made the old numbers guesses:
+A dinner requires *ingredients*; a store sells *packages*. The plan keeps those
+separate:
 
 ```json
-"needs": [{ "item": "eggs", "amount": 3, "unit": "each" },
-          { "item": "gluten free pasta", "amount": 8, "unit": "oz" }]
+"needs": ["eggs", "gluten free pasta"]
 ```
 
-The model supplies the amounts; the server does the arithmetic. Demand is summed
-across every dinner, packages are bought whole (`qty = ceil(total / packSize)`), the
-total is the sum of what was actually bought, and the leftover is what the packages
-exceed the demand by. Three dinners needing fourteen eggs buy two dozen and report
-ten eggs left — the plan used to buy one package of everything and let the model
-write "most of the carton" in the leftovers.
+The model names what each dinner uses; the server does the shopping. Each dinner
+that needs an ingredient adds one package of it, shared across the plan, and the
+total is the sum of what was actually bought. Amounts were deliberately removed:
+the model misjudged them and the package math produced false precision, so the
+plan buys whole packages and claims no leftovers. Do not reintroduce amounts,
+units, per-serving bands, or leftover estimates without a design for where
+measured quantities come from.
 
-Units come in three families — count, mass, volume — converted only within a family.
-`data/prices.json` gives each item its canonical pack `size`, and a requirement in
-the wrong family is refused, not converted: turning a cup of rice into ounces needs a
-per-ingredient density, and a guessed density is a wrong shopping list. The model is
-told which family each item uses in the price context.
-
-`shoppingList`, `leftovers`, and `totalCost` are no longer accepted from the model at
-all. It is asked for dinners and requirements; everything with a number in it is
-computed here.
-
-Amounts themselves cannot be verified — that would mean checking them against the
-cited recipe, and the app never fetches recipe pages. What can be checked is
-magnitude. Each catalog item carries a `perServing` band, each dinner may state
-`servings` (one student unless it says otherwise), and an amount outside its band is
-sent back to the model once with the specific complaint. Items with no band of their
-own fall back to a package-count guard: more than three packages of one ingredient
-for a single serving is a misplaced decimal whatever the ingredient. The bands are
-deliberately wide judgement calls — they catch "forty ounces of spinach", not
-someone who likes a big portion.
-
-A quantity the server cannot read — a bare `"soy sauce"`, a missing unit, a cup of
-something sold by weight — falls back to one whole package and labels the line
-"amount not given", with no leftover claimed for it. Guessing a quantity is
-recoverable and visible; guessing a price is not, so an ingredient the catalog
-cannot price is still a hard failure.
+`shoppingList`, `leftovers`, and `totalCost` are not accepted from the model at
+all. It is asked for dinners and ingredient names; everything with a number in
+it is computed here. An ingredient the catalog cannot price is a hard failure —
+pricing it would mean inventing a price.
 
 ## Dietary restrictions
 
@@ -287,7 +266,7 @@ never contain, and the server enforces it on both sides of the model call:
 - Pantry items that break the diet are named as off-limits instead of being offered
   as food to cook — they stay in the student's pantry, they just do not get planned.
 - Every generated plan is re-checked afterwards: titles, pantry uses, shopping needs,
-  cooking steps, the shopping list, and leftovers. A cooking step that says "brush
+  cooking steps, and the shopping list. A cooking step that says "brush
   with butter" fails a dairy-free plan even when the shopping list is clean.
 - A violating plan is sent back for one repair with the restrictions restated, and
   rejected if the repair still breaks them. It is never served with the violation
@@ -433,22 +412,20 @@ to the production URL. Vercel Functions have an ephemeral filesystem, so
 The default `vercel.app` URL is enough for a live app. You do not need to buy
 or connect a custom domain.
 
-## Planning and pantry quantities
+## Planning and the pantry
 
 Plans use exact recipe IDs and server-validated equipment, ingredients, dietary
 restrictions, and citations. The model still creates the plan; there is no local
 fallback if Voyager fails. A microwave-only kitchen currently has one fully
 compatible curated recipe, so a multi-night plan may repeat it.
 
-The browser sends pantry names and amounts in `pantryInventory`. Enter measurable
-amounts such as `4 each`, `8 oz`, or `2 cups` in the pantry. Supplies are deducted
-once across the entire plan. Unknown amounts and cooked/raw mismatches are not
-assumed to cover a recipe; shopping includes those ingredients and explains why.
-Plan totals use a complete checkout at one store, matching the Shop comparison.
+The browser sends pantry names only — no amounts. Shopping covers every
+ingredient the recipes need that the pantry does not have, at one package per
+dinner that uses it. Plan totals use a complete checkout at one store, matching
+the Shop comparison.
 
-Swaps replace one dinner and recalculate the full shopping list. Older saved
-plans without full ingredient quantities must be rebuilt before a swap.
+Swaps replace one dinner and recalculate the full shopping list.
 
 `npm test` includes the behavioral regressions in `test-fixes.js`, covering
-inventory allocation, request races, dietary safety, file validation, equipment,
+pantry ownership, request races, dietary safety, file validation, equipment,
 shopping totals, and swaps without browser automation.
