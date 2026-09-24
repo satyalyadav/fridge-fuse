@@ -12,34 +12,60 @@ function client() {
       classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
       addEventListener(event, fn) { this.handlers[event] = fn; },
       append(child) { this.children.push(child); }, appendChild(child) { this.append(child); },
-      remove() {}, focus() {}, setAttribute() {}, scrollTo() {}, click() { return this.handlers.click?.({ target: this }); },
+      remove() {}, focus() {}, setAttribute() {}, removeAttribute() {}, scrollTo() {}, click() { return this.handlers.click?.({ target: this }); },
       querySelector() { return node("child"); }, querySelectorAll() { return []; }, closest() { return this; }
     };
     nodes.set(id, el);
     return el;
   };
+  // The shell nav is registered at load from [data-view], so the mock must
+  // expose the four buttons or the view switch can never be exercised.
+  const navButtons = ["chat", "plan", "grocery", "pantry"].map((view) => {
+    const el = node(`nav-${view}`);
+    el.dataset.view = view;
+    return el;
+  });
   const storage = { value: JSON.stringify({ profile: { onboarded: true } }) };
   const context = { console, URL, Intl, AbortController, structuredClone,
     setTimeout: () => 0, clearTimeout() {}, requestAnimationFrame: (fn) => fn(),
-    document: { getElementById: node, querySelector: () => node("query"), querySelectorAll: () => [], createElement: () => node(`new-${nodes.size}`), addEventListener() {}, body: node("body") },
+    document: {
+      getElementById: node,
+      querySelector: () => node("query"),
+      querySelectorAll: (selector) => String(selector).includes("[data-view]") || String(selector).includes(".nav-item") ? navButtons : [],
+      createElement: () => node(`new-${nodes.size}`),
+      addEventListener() {}, body: node("body")
+    },
     window: { matchMedia: () => ({ matches: false }), confirm: () => true, location: { reload() {} }, setTimeout: () => 0 },
     localStorage: { getItem: () => storage.value, setItem: (_, value) => { storage.value = value; } },
-    fetch: async (url) => ({ ok: true, status: 200, json: async () => url === "/api/preferences" ? { ok: true, diets: server.DIET_OPTIONS, equipment: server.EQUIPMENT_OPTIONS, limits: { budget: { min: 5, max: 100 } } } : { ok: true } })
+    fetch: async (url) => ({ ok: true, status: 200, json: async () => url === "/api/preferences" ? { ok: true, diets: dietOptions(), equipment: server.EQUIPMENT_OPTIONS, limits: { budget: { min: 5, max: 100 } } } : { ok: true } })
   };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync("public/app.js", "utf8"), context);
   return { context, node, run: (code) => vm.runInContext(code, context) };
 }
+// The server maps its diet rules into the form payload the client consumes.
+const dietOptions = () => server.DIET_RULES.map(({ id, label, group, note, aliases, forbids }) => ({
+  id, label, group, note, aliases, restricts: forbids.length
+}));
+// Deterministic request-scoped candidates for the in-process route checks. The
+// production service discovers these facts through Tavily and Recipe JSON-LD;
+// this fixture only replaces that network boundary.
+const LIVE_CANDIDATES = [
+  { title: "Microwave Potato", source: "Food Network", sourceUrl: "https://www.foodnetwork.com/recipes/food-network-kitchen/microwave-potato-10076489", timeMin: 10, equipment: ["microwave"], ingredients: ["potatoes", "olive oil", "butter"], method: "Pierce and oil the potato, microwave until tender, then split and season it.", rawIngredients: ["potatoes", "olive oil", "butter"], rawInstructions: ["Pierce and oil the potato, microwave until tender, then split and season it."] },
+  { title: "Spinach Rice Breakfast Bowls", source: "Budget Bytes", sourceUrl: "https://www.budgetbytes.com/snap-challenge-spinach-rice-breakfast-bowls/", timeMin: 10, equipment: ["stove", "microwave"], ingredients: ["rice", "spinach", "eggs", "butter"], method: "Warm rice with spinach, cook an egg until set, and serve it over the rice.", rawIngredients: ["rice", "spinach", "eggs", "butter"], rawInstructions: ["Warm rice with spinach, cook an egg until set, and serve it over the rice."] },
+  { title: "Peanut Butter Banana Quesadillas", source: "Budget Bytes", sourceUrl: "https://www.budgetbytes.com/peanut-butter-banana-quesadillas/", timeMin: 10, equipment: ["stove"], ingredients: ["tortillas", "peanut butter", "banana"], method: "Fill a tortilla with peanut butter and sliced banana, fold it, and toast it in a pan.", rawIngredients: ["tortillas", "peanut butter", "banana"], rawInstructions: ["Fill a tortilla with peanut butter and sliced banana, fold it, and toast it in a pan."] },
+  { title: "Peanut Butter Banana Smoothie", source: "Budget Bytes", sourceUrl: "https://www.budgetbytes.com/peanut-butter-banana-smoothie/", timeMin: 5, equipment: ["blender"], ingredients: ["banana", "peanut butter", "milk"], method: "Blend the banana, peanut butter, and milk until smooth.", rawIngredients: ["banana", "peanut butter", "almond milk"], rawInstructions: ["Blend banana, peanut butter, and almond milk until smooth."] },
+];
 function dinner(title = "Microwave Potato") {
-  const r = server.APPROVED_RECIPES.find((entry) => entry.title === title);
-  return { title, sourceRecipe: r.title, source: r.source, sourceUrl: r.url, timeMin: r.timeMin,
+  const r = LIVE_CANDIDATES.find((entry) => entry.title === title);
+  return { title, sourceRecipe: r.title, source: r.source, sourceUrl: r.sourceUrl, timeMin: r.timeMin,
     usesPantry: [], needs: [...r.ingredients], steps: [r.method] };
 }
 const envelope = (dinners) => ({ ok: true, data: { choices: [{ message: { content: JSON.stringify({ dinners }) } }] } });
-async function plan(body, dinners) {
+async function plan(body, dinners, liveRecipeService = { findRecipes: async () => ({ ok: true, candidates: LIVE_CANDIDATES }) }) {
   let output;
   const res = { code: 200, status(n) { this.code = n; return this; }, json(payload) { output = { status: this.code, payload }; } };
-  await server.handlePlanRequest({ body: { pantry: [], dinners: dinners.length, maxTimeMin: 30, equipment: ["microwave"], ...body } }, res, { chat: async () => envelope(dinners) });
+  await server.handlePlanRequest({ body: { pantry: [], dinners: dinners.length, maxTimeMin: 30, equipment: ["microwave"], ...body } }, res, { chat: async () => envelope(dinners), liveRecipeService });
   return output;
 }
 
@@ -50,13 +76,17 @@ async function run() {
     try { await fn(); count++; console.log(`fix ok - ${name}`); }
     catch (error) { failed.push(name); console.error(`fix FAIL - ${name}: ${error.message}`); }
   }
-  await check("pricing never substitutes dairy milk for almond milk", () => assert.strictEqual(server.findPrice("almond milk"), null));
+  await check("almond milk never trips the dairy-free rule", () => {
+    const dairyFree = server.DIET_RULES.find((rule) => rule.id === "dairy-free");
+    assert.strictEqual(server.findForbiddenTerm("almond milk", dairyFree), null);
+    assert.strictEqual(server.findForbiddenTerm("milk", dairyFree), "milk");
+  });
   await check("equipment mismatch is rejected", async () => {
     const result = await plan({}, [dinner("Peanut Butter Banana Quesadillas")]);
     assert.strictEqual(result.payload.ok, false);
   });
   await check("known recipe IDs supply exact citations", async () => {
-    const d = dinner(); d.recipeId = `recipe-${server.APPROVED_RECIPES.findIndex((r) => r.url === d.sourceUrl) + 1}`;
+    const d = dinner(); d.recipeId = `recipe-${LIVE_CANDIDATES.findIndex((r) => r.sourceUrl === d.sourceUrl) + 1}`;
     delete d.source; delete d.sourceRecipe; delete d.sourceUrl;
     const result = await plan({}, [d]);
     assert.strictEqual(result.payload.ok, true);
@@ -75,21 +105,22 @@ async function run() {
     assert(result.payload.shoppingList.some((i) => i.item === "olive oil"));
     assert(!result.payload.shoppingList.some((i) => i.item === "potatoes"));
   });
-  await check("unknown items prevent whole-list claims", () => {
-    assert(server.optimizeCart({ items: ["eggs", "dragonfruit"] }).options.every((o) => !o.complete && o.missing.includes("dragonfruit")));
-  });
-  await check("checkout uses one store's prices", () => {
+  await check("the shopping list carries no catalog prices", () => {
     const p = server.groundShoppingPlan({ dinners: [{ title: "Test", needs: ["eggs", "tamari"] }] });
-    assert.strictEqual(new Set(p.shoppingList.map((i) => i.store)).size, 1);
-    assert.strictEqual(p.totalCost, 6.78);
+    assert.strictEqual(p.shoppingList.length, 2);
+    assert(p.shoppingList.every((i) => !("store" in i) && !("packPrice" in i)));
+    assert.strictEqual(p.totalCost, undefined);
   });
-  await check("vegan outputs never price a dairy substitute as milk", async () => {
+  await check("vegan allows plant milk and rejects dairy milk", async () => {
     const d = dinner("Peanut Butter Banana Smoothie");
     d.needs = ["banana", "peanut butter", "almond milk"];
     d.steps = ["Blend banana, peanut butter and almond milk."];
-    const result = await plan({ diet: "vegan", equipment: ["blender"] }, [d]);
-    assert.strictEqual(result.payload.ok, false);
-    assert(!result.payload.shoppingList);
+    const plant = await plan({ diet: "vegan", equipment: ["blender"] }, [d]);
+    assert.strictEqual(plant.payload.ok, true);
+    assert(plant.payload.shoppingList.some((i) => i.item === "almond milk"));
+    const dairy = { ...d, needs: ["banana", "peanut butter", "milk"], steps: ["Blend banana, peanut butter and milk."] };
+    const rejected = await plan({ diet: "vegan", equipment: ["blender"] }, [dairy]);
+    assert.strictEqual(rejected.payload.ok, false);
   });
   await check("swap preserves other dinners, even when their recipe matches the exclusion", async () => {
     const previous = [dinner(), dinner(), dinner()];
@@ -113,6 +144,54 @@ async function run() {
     const result = await plan({ includeRecipe: "Peanut Butter Banana Quesadillas" }, [dinner()]);
     assert.strictEqual(result.payload.ok, false);
   });
+  await check("cook again with three dinners keeps enough verified choices", async () => {
+    let searchRequest;
+    const service = {
+      findRecipes: async (request) => {
+        searchRequest = request;
+        return { ok: true, candidates: LIVE_CANDIDATES };
+      }
+    };
+    const result = await plan({ includeRecipe: "Peanut Butter Banana Quesadillas", equipment: ["stove", "microwave", "blender"] }, [
+      dinner("Peanut Butter Banana Quesadillas"),
+      dinner("Microwave Potato"),
+      dinner("Peanut Butter Banana Smoothie")
+    ], service);
+    assert.strictEqual(searchRequest.dinners, 3);
+    assert.strictEqual(result.payload.ok, true);
+    assert.strictEqual(result.payload.dinners.length, 3);
+    assert(result.payload.dinners.some((entry) => entry.sourceRecipe === "Peanut Butter Banana Quesadillas"));
+  });
+  await check("swap re-verifies retained dinners and excludes the replaced recipe", async () => {
+    const replaced = dinner("Microwave Potato");
+    const retained = dinner("Spinach Rice Breakfast Bowls");
+    const replacement = dinner("Peanut Butter Banana Quesadillas");
+    const verifiedUrls = [];
+    let searchRequest;
+    const service = {
+      findRecipes: async (request) => {
+        searchRequest = request;
+        return { ok: true, candidates: [LIVE_CANDIDATES.find((entry) => entry.title === replacement.sourceRecipe)] };
+      },
+      verifyUrl: async (url) => {
+        verifiedUrls.push(url);
+        return { ok: true, recipe: LIVE_CANDIDATES.find((entry) => entry.sourceUrl === url) };
+      }
+    };
+    const result = await plan({
+      equipment: ["stove", "microwave"],
+      swapIndex: 0,
+      previousDinners: [replaced, retained],
+      exclude: [replaced.sourceRecipe]
+    }, [replacement], service);
+    assert.deepStrictEqual(verifiedUrls, [retained.sourceUrl]);
+    assert.deepStrictEqual(searchRequest.exclude, [replaced.sourceRecipe]);
+    assert.strictEqual(result.payload.ok, true);
+    assert.strictEqual(result.payload.dinners.length, 2);
+    assert.strictEqual(result.payload.dinners[0].sourceRecipe, replacement.sourceRecipe);
+    assert.strictEqual(result.payload.dinners[1].sourceRecipe, retained.sourceRecipe);
+    assert(!result.payload.dinners.some((entry) => entry.sourceRecipe === replaced.sourceRecipe));
+  });
   const c = client();
   await c.context.loadPreferences();
   await check("adding a diet retains an existing allergy", () => {
@@ -126,7 +205,7 @@ async function run() {
   await check("a preferences outage cannot erase stored allergies", () => {
     c.run('PREFERENCES.diets=[];state.constraints.diet="peanut allergy";parseMessage("clear my diet");');
     assert.strictEqual(c.run("state.constraints.diet"), "peanut allergy");
-    c.context.restoreDiets = server.DIET_OPTIONS;
+    c.context.restoreDiets = dietOptions();
     c.run("PREFERENCES.diets=restoreDiets");
   });
   await check("sample pantry preserves dietary restrictions", () => {
@@ -147,10 +226,11 @@ async function run() {
     c.run('state = normaliseState({savedRecipes:[{title:"x",sourceRecipe:"x",source:"x",sourceUrl:"javascript:alert(1)"}]});');
     assert(!c.run('JSON.stringify(state.savedRecipes)').includes("javascript:"));
   });
-  await check("plan without leftovers renders, package counts sum quantities", () => {
-    c.run('state=clone(DEFAULT_STATE);state.plan={dinners:[{title:"Test",steps:[]}],shoppingList:[{item:"eggs",qty:2,packPrice:3}],leftovers:[],totalCost:6};renderPlan();');
+  await check("plan without leftovers renders, item counts sum quantities", () => {
+    c.run('state=clone(DEFAULT_STATE);state.plan={dinners:[{title:"Test",steps:[]}],shoppingList:[{item:"eggs",qty:2}],leftovers:[]};renderPlan();');
     assert(!c.node("shoppingList").innerHTML.includes("uses "));
-    assert(c.node("tripLabel").textContent.startsWith("2 packages"));
+    assert(!c.node("shoppingList").innerHTML.includes("packPrice"));
+    assert(c.node("tripLabel").textContent.startsWith("2 items"));
   });
   await check("use-first text only claims actual pantry use", () => {
     c.run('state.pantry=[{name:"rice",soon:true}];renderPlan();');
@@ -160,6 +240,30 @@ async function run() {
     c.run('state.groceryList=[];renderGroceryList();');
     c.node("fromPlanButton").click(); c.node("fromPlanButton").click();
     assert.strictEqual(c.run("state.groceryList[0].qty"), 2);
+  });
+  await check("the plan panel's add-to-shop button fills the same list", () => {
+    c.run('state=clone(DEFAULT_STATE);state.plan={dinners:[{title:"T",steps:[]}],shoppingList:[{item:"eggs",qty:2,sharedBy:[]},{item:"rice",qty:1,sharedBy:[]}]};state.groceryList=[];renderGroceryList();');
+    assert.strictEqual(c.node("planShopButton").disabled, false);
+    c.node("planShopButton").click();
+    assert.strictEqual(c.run("state.groceryList.map(i => i.name + ':' + i.qty).join(',')"), "eggs:2,rice:1");
+    c.run('state.plan=null;renderGroceryList();');
+    assert.strictEqual(c.node("planShopButton").disabled, true);
+  });
+  await check("nav buttons switch the visible pane", () => {
+    c.node("nav-plan").click();
+    assert.strictEqual(c.run("document.body.dataset.view"), "plan");
+    c.node("nav-grocery").click();
+    assert.strictEqual(c.run("document.body.dataset.view"), "grocery");
+    c.node("nav-chat").click();
+    assert.strictEqual(c.run("document.body.dataset.view"), "chat");
+  });
+  await check("nav clicks switch the visible pane", () => {
+    c.node("nav-plan").click();
+    assert.strictEqual(c.run("document.body.dataset.view"), "plan");
+    c.node("nav-grocery").click();
+    assert.strictEqual(c.run("document.body.dataset.view"), "grocery");
+    c.node("nav-chat").click();
+    assert.strictEqual(c.run("document.body.dataset.view"), "chat");
   });
   await check("editing groceries invalidates old comparison", () => {
     c.node("groceryResults").innerHTML = "old price";
@@ -184,6 +288,14 @@ async function run() {
     finish({ ok: true, json: async () => ({ ok: true, options: [], note: "stale response" }) });
     await request;
     assert.strictEqual(c.node("groceryResults").innerHTML, message);
+  });
+  await check("the chat can send the meal plan list to Shop", async () => {
+    c.run('state=clone(DEFAULT_STATE);state.plan={dinners:[{title:"T",steps:[]}],shoppingList:[{item:"black beans",qty:2,sharedBy:[]},{item:"rice",qty:1,sharedBy:[]}],leftovers:[]};state.groceryList=[];');
+    const originalInterpret = c.context.interpretMessage;
+    c.context.interpretMessage = async () => ({ actions: [], requestPlan: false, planToShop: true, clarification: "", swapIndex: null });
+    await c.context.handleMessage("add the list to shop");
+    c.context.interpretMessage = originalInterpret;
+    assert.strictEqual(c.run("state.groceryList.map(i => i.name + ':' + i.qty).join(',')"), "black beans:2,rice:1");
   });
   await check("chat pantry updates store names, never amounts", () => {
     c.run('state.pantry=[]; applyChatActions([{type:"pantry_set",name:"eggs",qty:1,soon:false},{type:"pantry_set",name:"spinach",qty:1,soon:true}]);');

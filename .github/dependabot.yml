@@ -1,0 +1,12 @@
+# impit carries the Walmart browser fingerprints, so its upgrades are what
+# keep the direct price read current. Weekly PRs, and the test workflow runs
+# the suite on each one.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    allow:
+      - dependency-name: "impit"

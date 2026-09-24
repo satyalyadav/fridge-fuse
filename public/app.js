@@ -22,9 +22,7 @@ const DEFAULT_STATE = {
   groceryList: [],
   savedRecipes: [],
   offLimitsPantry: [],
-  location: null,
-  // null = never asked. Only true sends coordinates to the place-name service.
-  allowPlaceLookup: null
+  location: null
 };
 
 const MAX_EXCLUDED = 20;
@@ -97,13 +95,11 @@ function sanitizeStoredPlan(plan) {
   const dinners = plan.dinners.slice(0, 7).map(safeMeal).filter(Boolean);
   if (!dinners.length) return null;
   return {
-    dinners, constraints: plan.constraints ? safeConstraints(plan.constraints) : undefined, totalCost: safeNumber(plan.totalCost),
+    dinners, constraints: plan.constraints ? safeConstraints(plan.constraints) : undefined,
     shoppingList: (Array.isArray(plan.shoppingList) ? plan.shoppingList : []).filter((item) => item && typeof item.item === "string").slice(0, 50).map((item) => ({
-      item: safeText(item.item), qty: Math.max(1, Math.floor(safeNumber(item.qty, 1, 99))), packPrice: safeNumber(item.packPrice),
-      pack: safeText(item.pack), store: safeText(item.store), sharedBy: safeStrings(item.sharedBy)
+      item: safeText(item.item), qty: Math.max(1, Math.floor(safeNumber(item.qty, 1, 99))), sharedBy: safeStrings(item.sharedBy)
     })),
-    offLimitsPantry: safeStrings(plan.offLimitsPantry),
-    checkoutStore: plan.checkoutStore && typeof plan.checkoutStore.name === "string" ? { name: safeText(plan.checkoutStore.name) } : null
+    offLimitsPantry: safeStrings(plan.offLimitsPantry)
   };
 }
 
@@ -114,7 +110,7 @@ const clone = typeof structuredClone === "function"
   : (value) => JSON.parse(JSON.stringify(value));
 
 let state = loadState();
-let activeMobileView = state.plan ? "plan" : "chat";
+let activeView = "chat";
 let visionReviewItems = [];
 
 function loadState() {
@@ -144,12 +140,11 @@ function normaliseState(stored) {
     messages: records(stored.messages, MAX_MESSAGES).filter((item) => typeof item.text === "string")
       .map((item) => ({ role: item.role === "user" ? "user" : "assistant", text: safeText(item.text, 4000), supportingText: safeText(item.supportingText, 4000), tone: item.tone === "error" ? "error" : "" })),
     groceryList: records(stored.groceryList, MAX_GROCERY_ITEMS).filter((item) => typeof item.name === "string" && item.name.trim())
-      .map((item) => ({ name: item.name.trim().toLowerCase().slice(0, 80), qty: Math.max(1, Math.floor(safeNumber(item.qty, 1, MAX_GROCERY_QTY))), pack: safeText(item.pack, 100) })),
+      .map((item) => ({ name: item.name.trim().toLowerCase().slice(0, 80), qty: Math.max(1, Math.floor(safeNumber(item.qty, 1, MAX_GROCERY_QTY))) })),
     savedRecipes: records(stored.savedRecipes, MAX_SAVED_RECIPES).map(safeMeal).filter(Boolean),
     offLimitsPantry: safeStrings(stored.offLimitsPantry),
     location: location && Number.isFinite(location.lat) && Number.isFinite(location.lng) && Math.abs(location.lat) <= 90 && Math.abs(location.lng) <= 180
-      ? { lat: location.lat, lng: location.lng, accuracyM: safeNumber(location.accuracyM), label: safeText(location.label), detail: safeText(location.detail) } : null,
-    allowPlaceLookup: typeof stored.allowPlaceLookup === "boolean" ? stored.allowPlaceLookup : null
+      ? { lat: location.lat, lng: location.lng, accuracyM: safeNumber(location.accuracyM), label: safeText(location.label) } : null
   };
 }
 
@@ -210,6 +205,12 @@ async function importKitchen(file) {
 function recordMessage(entry) {
   state.messages = [...(state.messages || []), entry].slice(-MAX_MESSAGES);
   saveState();
+  updateChatEmptyState();
+}
+
+// The greeting and starter prompts center themselves while the chat is empty.
+function updateChatEmptyState() {
+  $("chatView").classList.toggle("is-empty", !state.messages?.length);
 }
 
 // Private windows, blocked site data, and a full quota all make setItem throw.
@@ -545,10 +546,21 @@ async function handleMessage(message) {
     if (parsed.clarification) { addAssistantMessage(parsed.clarification); return; }
     const confirmation = applyChatActions(parsed.actions);
     parseMessage(clean);
+    if (parsed.planToShop) {
+      const planItems = state.plan?.shoppingList || [];
+      if (!planItems.length) {
+        addAssistantMessage("There is no meal plan yet. Build one and I will send its shopping list to Shop.");
+      } else {
+        const added = addPlanItemsToShop();
+        addAssistantMessage(added
+          ? `${added} item${added === 1 ? "" : "s"} added to Shop from your meal plan.`
+          : "Your meal plan items are already on the Shop list.");
+      }
+    }
     if (confirmation) addAssistantMessage(confirmation);
     if (!parsed.requestPlan) {
-      if (!confirmation) addAssistantMessage("Preferences noted. Ask me to build a meal plan when you want one.");
-      setMobileView("chat");
+      if (!confirmation && !parsed.planToShop) addAssistantMessage("Preferences noted. Ask me to build a meal plan when you want one.");
+      setView("chat");
       return;
     }
     if (parsed.swapIndex !== null) {
@@ -640,12 +652,9 @@ async function buildPlan(request = "") {
         "I couldn't find any recipes for that combination.",
         result.note || "Try more time, more equipment, or fewer restrictions."
       );
-      setMobileView("plan");
       return;
     }
-    const budgetStatus = result.totalCost <= snapshot.constraints.budget
-      ? `The checkout total is ${formatMoney(result.totalCost)}, under your ${formatMoney(snapshot.constraints.budget)} limit.`
-      : `The cheapest full-package version is ${formatMoney(result.totalCost)}, which is over your ${formatMoney(snapshot.constraints.budget)} limit.`;
+    const priceStatus = "Add the shopping list to Shop and compare live Walmart, ALDI, and Fry's prices.";
     const usedSoon = soon.filter((name) => result.dinners?.[0]?.usesPantry?.includes(name));
     const soonText = usedSoon.length ? ` The first dinner uses ${usedSoon.join(" and ")}.` : "";
     const dietText = snapshot.constraints.diet ? ` Every dinner is ${snapshot.constraints.diet}.` : "";
@@ -654,15 +663,15 @@ async function buildPlan(request = "") {
       : "";
     if (result.swapUnavailable) {
       addAssistantMessage(
-        "I could not find a different recipe that fits your budget, time, and equipment, so that dinner is still here.",
-        "Loosening one of those — more time, another appliance, a higher budget — usually opens up more options."
+        "I could not find a different recipe that fits your time and equipment, so that dinner is still here.",
+        "Loosening one of those — more time or another appliance — usually opens up more options."
       );
     }
     addAssistantMessage(
       `Here ${result.dinners.length === 1 ? "is" : "are"} ${result.dinners.length} dinner${result.dinners.length === 1 ? "" : "s"} you can make.${soonText}${dietText}${offLimitsText}`,
-      `${budgetStatus} ${result.dinners.length === 1 ? "Use the Swap button." : 'Do not like one? Say "swap dinner two".'}`
+      `${priceStatus} ${result.dinners.length === 1 ? "Use the Swap button." : 'Do not like one? Say "swap dinner two".'}`
     );
-    setMobileView("plan");
+    setView("plan");
   } catch (error) {
     if (requestId !== planRequestSequence) return;
     hideThinking();
@@ -686,7 +695,6 @@ function renderPlan() {
   if (!plan || !Array.isArray(plan.dinners) || !plan.dinners.length) {
     $("emptyPlan").hidden = false;
     $("planContent").hidden = true;
-    $("budgetStamp").hidden = true;
     $("tripStatus").classList.remove("ready");
     $("tripLabel").textContent = "No grocery run planned";
     return;
@@ -699,16 +707,12 @@ function renderPlan() {
 
   $("emptyPlan").hidden = true;
   $("planContent").hidden = false;
-  $("budgetStamp").hidden = false;
   $("planTitle").textContent = `${plan.dinners.length} ${plan.dinners.length === 1 ? "dinner" : "dinners"}, one small grocery run`;
   const dietSummary = String(planConstraints.diet || "").trim();
   $("planSubtitle").textContent = `Built for ${planConstraints.equipment.join(" + ") || "the equipment you have"}, ${planConstraints.maxTimeMin} minutes or less each.${dietSummary ? ` Kept ${dietSummary}.` : ""}`;
-  $("budgetTotal").textContent = formatMoney(plan.totalCost);
-  $("budgetLimit").textContent = `of ${formatMoney(planConstraints.budget)}`;
-  $("budgetStamp").classList.toggle("over", plan.totalCost > planConstraints.budget);
   $("tripStatus").classList.add("ready");
   const packages = (plan.shoppingList || []).reduce((sum, item) => sum + Math.max(1, Number(item.qty) || 1), 0);
-  $("tripLabel").textContent = `${packages} ${packages === 1 ? "package" : "packages"} · ${formatMoney(plan.totalCost)} estimated${plan.checkoutStore?.name ? ` at ${plan.checkoutStore.name}` : ""}`;
+  $("tripLabel").textContent = `${packages} ${packages === 1 ? "item" : "items"} · priced live in Shop`;
 
   const soon = state.pantry.filter((item) => item.soon).map((item) => item.name);
   const shared = (plan.shoppingList || []).filter((item) => (item.sharedBy || []).length > 1);
@@ -716,7 +720,7 @@ function renderPlan() {
   const usedFirst = soon.filter((name) => plan.dinners[0]?.usesPantry?.includes(name));
   if (usedFirst.length) logicParts.push(`The first dinner uses ${usedFirst.join(" and ")}`);
   if (shared.length) logicParts.push(`${shared.length} purchase${shared.length === 1 ? " works" : "s work"} across multiple dinners`);
-  logicParts.push(plan.totalCost <= planConstraints.budget ? `${formatMoney(planConstraints.budget - plan.totalCost)} stays in your budget` : `${formatMoney(plan.totalCost - planConstraints.budget)} over budget`);
+  logicParts.push("live totals come from the Shop comparison");
   $("planLogic").textContent = logicParts.join(". ") + ".";
 
   $("mealList").innerHTML = plan.dinners.map((meal, index) => {
@@ -758,21 +762,18 @@ function renderPlan() {
   $("shoppingList").innerHTML = shopping.map((item) => {
     const qty = Math.max(1, Number(item.qty || 1));
     const qtyLabel = qty > 1 ? `${qty} × ` : "";
-    const packLabel = escapeHtml(item.pack || "1 package");
-    const storeLabel = escapeHtml(titleCase(item.store || "mock store"));
     const sharedBy = Array.isArray(item.sharedBy) ? item.sharedBy : [];
     const coversLabel = sharedBy.length > 1 ? ` · covers ${sharedBy.length} dinners` : "";
     return `
     <div class="receipt-row">
       <span class="receipt-item">
         <strong>${escapeHtml(item.item)}</strong>
-        <small>${qtyLabel}${packLabel} · ${storeLabel}${coversLabel}</small>
+        <small>${qtyLabel}${coversLabel.replace(/^ · /, "") || "1 dinner"}</small>
       </span>
-      <span class="receipt-price">${formatMoney(Number(item.packPrice || 0) * qty)}</span>
     </div>
   `;
   }).join("") + `
-    <div class="receipt-total"><span>ESTIMATED TOTAL</span><strong>${formatMoney(plan.totalCost)}</strong></div>`;
+    <div class="receipt-total"><span>PRICES</span><strong>live in Shop</strong></div>`;
 }
 
 // A dinner the student liked used to vanish the moment they swapped it or
@@ -840,13 +841,11 @@ function renderSavedRecipes() {
 }
 
 function renderPantry() {
-  $("pantryNavCount").textContent = state.pantry.length;
   $("mobilePantryCount").textContent = state.pantry.length;
   const soon = state.pantry.filter((item) => item.soon);
   $("useFirstText").textContent = soon.length ? soon.map((item) => titleCase(item.name)).join(" · ") : "Nothing marked yet";
   // Gold is for something to act on, not for an empty list.
   document.querySelector(".use-first-strip")?.classList.toggle("is-empty", soon.length === 0);
-  $("markUseSoonButton").textContent = soon.length ? "Edit" : "Mark what to use first";
 
   if (!state.pantry.length) {
     $("pantryList").innerHTML = `
@@ -1195,7 +1194,23 @@ function closeProfile() {
   delete document.body.dataset.drawerOpen;
 }
 
+// The pantry is a drawer only where there is no room for a side panel.
+const wideShellQuery = window.matchMedia("(min-width: 981px)");
+const isWideShell = () => wideShellQuery.matches;
+wideShellQuery.addEventListener?.("change", syncPantryShell);
+
+function syncPantryShell() {
+  if (isWideShell()) {
+    $("pantryDrawer").setAttribute("aria-hidden", "false");
+    return;
+  }
+  $("pantryDrawer").classList.remove("open");
+  $("pantryDrawer").setAttribute("aria-hidden", "true");
+  delete document.body.dataset.drawerOpen;
+}
+
 function openPantry() {
+  if (isWideShell()) return;
   closeProfile();
   $("pantryDrawer").classList.add("open");
   $("pantryDrawer").setAttribute("aria-hidden", "false");
@@ -1204,31 +1219,33 @@ function openPantry() {
 }
 
 function closePantry() {
+  if (isWideShell()) return;
   $("pantryDrawer").classList.remove("open");
   $("pantryDrawer").setAttribute("aria-hidden", "true");
   delete document.body.dataset.drawerOpen;
 }
 
-// One view model for both breakpoints. Chat and plan stay paired side by side
-// on desktop (body[data-view] only splits the grocery tab out); on mobile the
-// .mobile-active class picks the single visible panel.
-function setMobileView(view) {
+// One view at a time at every width. Chat is home, the Plan is a result screen
+// that opens when a build finishes, and the nav buttons always change the pane.
+function setView(view) {
   if (view === "pantry") {
     openPantry();
     return;
   }
-  activeMobileView = view;
+  activeView = view;
   document.body.dataset.view = view;
-  $("chatView").classList.toggle("mobile-active", view === "chat");
-  $("planView").classList.toggle("mobile-active", view === "plan");
   document.querySelectorAll(".mobile-nav button, .desktop-nav .nav-item").forEach((button) => {
-    if (button.dataset.view) button.classList.toggle("active", button.dataset.view === view);
+    const isActive = button.dataset.view === view;
+    if (button.dataset.view) {
+      button.classList.toggle("active", isActive);
+      if (isActive) button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
+    }
   });
-  if (view === "grocery") loadCatalog();
 }
 
 function loadSamplePantry() {
-  if (state.pantry.length && !window.confirm("Replace your current pantry with the sample mini-fridge?")) return;
+  if (state.pantry.length && !window.confirm("Replace your pantry with the sample list?")) return;
   state.pantry = [
     { name: "eggs", soon: true },
     { name: "spinach", soon: true },
@@ -1411,40 +1428,9 @@ $("profileForm").addEventListener("submit", (event) => {
 
 /* ---------------- groceries: build a list, price it at every nearby store ---------------- */
 
-let catalogNames = [];
-let catalogLoaded = false;
 let comparing = false;
-// Where the server measures from when nobody shares a fix.
-// Both are fetched, never assumed, so the copy stays correct if
-// data/stores.json moves to another city.
-let originLabel = "the default area";
-
-// Autocomplete source. Optional: a failure here must not block adding items,
-// because the server resolves names anyway.
-async function loadCatalog() {
-  if (catalogLoaded) return;
-  catalogLoaded = true;
-  try {
-    const [pricesResponse, storesResponse] = await Promise.all([
-      fetch("/api/prices"),
-      fetch("/api/stores")
-    ]);
-    const result = await pricesResponse.json();
-    if (result.ok && Array.isArray(result.items)) {
-      catalogNames = [...result.items.map((item) => item.name), ...Object.keys(result.aliases || {})].sort();
-      $("catalogOptions").innerHTML = catalogNames
-        .map((name) => `<option value="${escapeHtml(name)}"></option>`)
-        .join("");
-    }
-    const stores = await storesResponse.json();
-    if (stores.ok) {
-      if (stores.origin?.label) originLabel = stores.origin.label;
-      renderLocation();
-    }
-  } catch {
-    catalogLoaded = false; // let the next visit retry
-  }
-}
+const DEFAULT_OFFER_AREA = "Tempe, AZ 85281";
+const MAX_ADVERTISED_OFFER_ITEMS = 5;
 
 function addGroceryItem(name, qty = 1) {
   const normalized = String(name || "").trim().toLowerCase();
@@ -1462,6 +1448,62 @@ function addGroceryItem(name, qty = 1) {
   return true;
 }
 
+function safeOfferUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
+function offerTimestamp(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "time unavailable" : date.toLocaleString();
+}
+
+function safeOfferBranch(value) {
+  if (!value || typeof value !== "object") return null;
+  const id = safeText(value.id, 120).trim();
+  const name = safeText(value.name, 240).trim();
+  const address = safeText(value.address, 400).trim();
+  const url = safeOfferUrl(value.url);
+  return {
+    id,
+    name,
+    address,
+    url,
+    valid: Boolean(id && name && url)
+  };
+}
+
+function localOfferDetails(source) {
+  const branch = safeOfferBranch(source?.branch);
+  const offerUrl = safeOfferUrl(source?.url);
+  const price = Number(source?.price);
+  const priced = Boolean(offerUrl) && Number.isFinite(price) && price > 0;
+  const retailer = safeText(source?.retailer, 80).trim();
+  if (source?.scope === "branch-advertised" && branch?.valid && priced) {
+    return { kind: "branch", branch, offerUrl, price, retailer, valid: true };
+  }
+  // A retailer-advertised price is the chain's advertised web price. It is
+  // shown with its own label because pickup at a nearby branch is not verified.
+  if (source?.scope === "retailer-advertised" && priced) {
+    return { kind: "retailer", branch: null, offerUrl, price, retailer, valid: true };
+  }
+  // The Kroger API returns the exact price for the selected store, not a page.
+  if (source?.scope === "store-api" && priced) {
+    return { kind: "retailer", branch: null, offerUrl, price, retailer, storeApi: true, valid: true };
+  }
+  return { kind: "none", branch, offerUrl, price: null, retailer, valid: false };
+}
+
+function redactUnverifiedPriceText(value) {
+  return safeText(value, 700)
+    .replace(/\$\s*\d{1,4}(?:,\d{3})*(?:\.\d{2})?/g, "[price omitted]")
+    .replace(/\b\d{1,4}(?:,\d{3})*\.\d{2}\b/g, "[price omitted]");
+}
+
 function renderGroceryList() {
   const count = state.groceryList.length;
   $("groceryNavCount").textContent = count;
@@ -1470,9 +1512,9 @@ function renderGroceryList() {
 
   const planItems = state.plan?.shoppingList?.length || 0;
   $("fromPlanButton").disabled = planItems === 0;
-  $("fromPlanButton").textContent = planItems
-    ? `Add ${planItems} meal-plan item${planItems === 1 ? "" : "s"}`
-    : "No meal plan yet";
+  $("fromPlanButton").textContent = "Add plan items";
+  $("planShopButton").disabled = planItems === 0;
+  $("planShopButton").textContent = "Add to shop";
 
   if (!count) {
     $("groceryList").innerHTML = `
@@ -1487,7 +1529,6 @@ function renderGroceryList() {
     <div class="grocery-item${item.unknown ? " unknown" : ""}">
       <span class="grocery-item-name">
         <strong>${escapeHtml(item.name)}</strong>
-        ${item.pack ? `<span>Requested package: ${escapeHtml(item.pack)}</span>` : ""}
         ${item.unknown ? "<span>No supported web price found</span>" : ""}
       </span>
       <span class="qty-stepper">
@@ -1506,62 +1547,48 @@ function renderLocation() {
   bar.classList.toggle("located", located);
   $("useLocationButton").textContent = located ? "Update location" : "Use my location";
   $("locationLabel").textContent = located
-    ? (state.location.label || `${state.location.lat.toFixed(4)}, ${state.location.lng.toFixed(4)}`)
-    : `No location shared yet — distances from ${originLabel}`;
-
-  const detail = $("locationDetail");
-  const parts = [];
-  if (located) {
-    if (state.location.detail && state.location.detail !== state.location.label) parts.push(state.location.detail);
-    if (Number.isFinite(state.location.accuracyM)) parts.push(`accurate to about ${Math.round(state.location.accuracyM)} m`);
-  }
-  detail.textContent = parts.join(" · ");
-  detail.hidden = parts.length === 0;
+    ? (state.location.label || "Your location")
+    : "No location shared yet";
 }
 
-// Asks the server to put the fix in words. The local description is always
-// computed here; the third-party name lookup only runs with explicit consent.
-async function describeCurrentLocation(allowLookup) {
+// Sharing a location is the consent: the request always asks for the name, and
+// the server rounds the fix to ~110 m before OpenStreetMap sees it. The label
+// stays usable when the lookup fails, so the name is never load-bearing.
+const LOCATION_PENDING_LABEL = "Working out where that is…";
+let locationRevision = 0;
+
+async function describeCurrentLocation() {
   if (!state.location) return;
+  const revision = locationRevision;
+  const settle = (label) => {
+    if (!state.location) return;
+    state.location.label = label;
+    saveState();
+    renderLocation();
+  };
   try {
     const response = await fetch("/api/geo/describe", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ lat: state.location.lat, lng: state.location.lng, allowLookup })
+      body: JSON.stringify({ lat: state.location.lat, lng: state.location.lng, allowLookup: true })
     });
     const result = await response.json();
-    if (!result.ok) return;
-    if (result.placeName) {
-      state.location.label = result.placeName;
-      state.location.detail = result.local?.text || "";
-    } else {
-      state.location.label = result.local?.text || "Your current location";
-      state.location.detail = "";
-      if (allowLookup && result.failure) {
-        toast("Could not reach the place-name service — showing the local estimate instead.", "error");
-      }
+    if (revision !== locationRevision) return;
+    if (!result.ok) {
+      settle("Your location");
+      return;
     }
-    saveState();
-    renderLocation();
+    if (result.placeName) {
+      settle(result.placeName);
+      return;
+    }
+    settle("Your location");
+    if (result.failure) toast("Could not reach the place-name service. Showing your location instead.", "error");
   } catch {
-    // The label is cosmetic: a failure here must not disturb the comparison.
+    // A failed lookup must not leave the label stuck mid-sentence.
+    if (revision !== locationRevision || state.location?.label !== LOCATION_PENDING_LABEL) return;
+    settle("Your location");
   }
-}
-
-function showLookupConsent() {
-  // Only ask when there is no standing answer.
-  $("lookupConsent").hidden = state.allowPlaceLookup !== null;
-}
-
-function answerLookupConsent(allow) {
-  state.allowPlaceLookup = allow;
-  saveState();
-  $("lookupConsent").hidden = true;
-
-  describeCurrentLocation(allow);
-  toast(allow
-    ? "Place-name lookup enabled. Reset the demo to change this."
-    : "Place-name lookup declined. Only the FridgeFuse server receives your coordinates for distances.");
 }
 
 function requestLocation() {
@@ -1569,7 +1596,7 @@ function requestLocation() {
   const reportLocationFailure = (message) => {
     const suffix = hadPreviousLocation
       ? " Keeping your previous location."
-      : ` Distances will use ${originLabel} instead.`;
+      : "";
     toast(`${message}${suffix}`, "error");
   };
   if (!navigator.geolocation) {
@@ -1588,20 +1615,18 @@ function requestLocation() {
   button.textContent = "Locating…";
   navigator.geolocation.getCurrentPosition(
     (position) => {
+      locationRevision += 1;
       state.location = {
         lat: position.coords.latitude,
         lng: position.coords.longitude,
         accuracyM: Number(position.coords.accuracy),
-        label: "Working out where that is…",
-        detail: ""
+        label: LOCATION_PENDING_LABEL
       };
       saveState();
       renderLocation();
       button.disabled = false;
       toast("Location set. Distances are measured from here.");
-      // Local description first — it needs no network and cannot fail.
-      describeCurrentLocation(state.allowPlaceLookup === true);
-      showLookupConsent();
+      describeCurrentLocation();
       invalidateGroceryResults();
       if (state.groceryList.length) compareStores();
     },
@@ -1631,30 +1656,31 @@ async function compareStores() {
   const revision = groceryRevision;
   const button = $("compareButton");
   button.disabled = true;
-  button.textContent = "Comparing…";
-  $("groceryResults").innerHTML = `<p class="results-note">Pricing your list at every nearby store…</p>`;
+  button.textContent = "Checking live prices…";
+  const area = $("offerAreaInput").value.trim() || DEFAULT_OFFER_AREA;
+  const names = state.groceryList.map((item) => item.name);
+  // The server checks each chain with one search per item, so a cart over the
+  // per-request cap runs in sequential batches and the results are merged.
+  $("groceryResults").innerHTML = `<p class="results-note">Checking live store pages near ${escapeHtml(area)}. This searches each store once per item and can take a few seconds.</p>`;
 
   try {
-    const response = await fetch("/api/grocery/optimize", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        items: state.groceryList.map((item) => ({ name: item.name, qty: item.qty })),
-        lat: state.location?.lat,
-        lng: state.location?.lng
-      })
-    });
-    const result = await response.json();
-    if (!response.ok || !result.ok) {
-      throw new Error(result.failure?.message || `Comparison returned HTTP ${response.status}`);
+    const results = [];
+    for (let index = 0; index < names.length; index += MAX_ADVERTISED_OFFER_ITEMS) {
+      const batch = names.slice(index, index + MAX_ADVERTISED_OFFER_ITEMS);
+      const response = await fetch("/api/grocery/offers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: batch, area })
+      });
+      const result = await response.json();
+      if (revision !== groceryRevision) return;
+      if (!response.ok || !result.ok) {
+        throw new Error(result.failure?.message || `Live comparison returned HTTP ${response.status}`);
+      }
+      results.push(result);
     }
-    if (revision !== groceryRevision) return;
-    // Flag list entries the catalog could not price so the user can fix them.
-    const unmatched = new Set((result.unmatched || []).map((name) => String(name).toLowerCase()));
-    for (const item of state.groceryList) item.unknown = unmatched.has(item.name);
-    saveState();
-    renderGroceryList();
-    renderGroceryResults(result);
+    const estimates = mergeStoreEstimates(results, names);
+    renderLiveComparison({ area, estimates, failures: results.flatMap((result) => result.failures || []) });
   } catch (error) {
     if (revision !== groceryRevision) return;
     $("groceryResults").innerHTML = `<p class="results-note warn">${escapeHtml(error.message)}</p>`;
@@ -1662,73 +1688,134 @@ async function compareStores() {
   } finally {
     comparing = false;
     button.disabled = state.groceryList.length === 0;
-    button.textContent = "Compare nearby stores";
+    button.textContent = "Find the cheapest store";
   }
 }
 
-function renderGroceryResults(result) {
-  const options = result.options || [];
-  const notes = [];
-  if (result.note) notes.push({ text: result.note, warn: !options.length });
+// The server sends one storeEstimates entry per chain per batch. Merging them
+// keeps a full-cart ballpark without a second round of searches.
+function mergeStoreEstimates(results, requestedNames) {
+  const requestedCount = requestedNames.length;
+  const byChain = new Map();
+  for (const result of results) {
+    for (const estimate of result.storeEstimates || []) {
+      const entry = byChain.get(estimate.chain) || { chain: estimate.chain, label: estimate.label, lines: [], missing: [], branch: null };
+      entry.lines.push(...(Array.isArray(estimate.lines) ? estimate.lines : []));
+      entry.missing.push(...(Array.isArray(estimate.missing) ? estimate.missing : []));
+      entry.branch = entry.branch || estimate.branch || null;
+      entry.label = entry.label || estimate.label;
+      byChain.set(estimate.chain, entry);
+    }
+  }
+  const merged = [...byChain.values()].map((entry) => {
+    const missing = requestedNames.filter((name) => !entry.lines.some((line) => line.item === name));
+    return {
+      ...entry,
+      missing,
+      itemCount: entry.lines.length,
+      requestedCount,
+      advertisedCount: entry.lines.length,
+      total: +entry.lines.reduce((sum, line) => sum + (Number(line.price) || 0), 0).toFixed(2),
+      complete: requestedCount > 0 && entry.lines.length === requestedCount && missing.length === 0,
+    };
+  });
+  merged.sort((a, b) =>
+    Number(b.complete) - Number(a.complete) ||
+    b.itemCount - a.itemCount ||
+    a.total - b.total ||
+    a.label.localeCompare(b.label)
+  );
+  merged.forEach((entry, index) => { entry.cheapest = index === 0 && entry.itemCount > 0; });
+  return merged;
+}
 
-  if (!options.length) {
-    $("groceryResults").innerHTML = notes
-      .map((note) => `<p class="results-note${note.warn ? " warn" : ""}">${escapeHtml(note.text)}</p>`)
-      .join("");
+function renderLiveComparison({ area, estimates, failures }) {
+  const section = renderStoreEstimates(estimates, area);
+  if (!section) {
+    $("groceryResults").innerHTML = '<p class="results-note warn">No advertised prices came back. Try again, or check the search area.</p>';
     return;
   }
+  const failureNotes = (failures || [])
+    .slice(0, 3)
+    .map((entry) => `<p class="results-note warn">${escapeHtml(entry.item ? `${titleCase(entry.item)}: ${entry.message}` : entry.message)}</p>`)
+    .join("");
+  $("groceryResults").innerHTML = section + failureNotes;
+}
 
-  const best = options[0];
-  const savings = Number(result.savingsVsWorst) || 0;
-  const completeOptions = options.filter((option) => option.complete);
-  const priciest = completeOptions[completeOptions.length - 1] || options[options.length - 1];
-  const summary = savings > 0
-    ? `${titleCase(best.name)} on ${best.area.replace(/^.*—\s*/, "")} fills the whole list for ${formatMoney(best.subtotal)} — ${formatMoney(savings)} less than the priciest nearby option, ${priciest.distanceMi} miles away.`
-    : best.complete
-      ? `${titleCase(best.name)} fills the list for ${formatMoney(best.subtotal)}, ${best.distanceMi} miles away.`
-      : `${titleCase(best.name)} covers ${best.itemCount} of ${result.requestedCount ?? ((result.requested || []).length + (result.unmatched || []).length)} items for ${formatMoney(best.subtotal)}, ${best.distanceMi} miles away.`;
-
-  const cards = options.map((option, index) => {
-    const rows = (option.lineItems || []).map((line) => `
+function renderStoreEstimates(estimates, area) {
+  if (!Array.isArray(estimates) || !estimates.length) return "";
+  const cards = estimates.map((estimate, index) => {
+    const lines = (Array.isArray(estimate.lines) ? estimate.lines : []).map((line) => {
+      const validTo = safeText(line.validTo, 40).trim();
+      const weeklyUntil = validTo && !Number.isNaN(new Date(validTo).getTime())
+        ? ` through ${new Date(validTo).toLocaleDateString()}`
+        : "";
+      const priceNote = line.origin === "weekly-ad"
+        ? `weekly ad${weeklyUntil}`
+        : line.origin === "store-api"
+          ? "store price"
+          : line.scope === "branch-advertised" ? "branch page" : "advertised web price";
+      return `
       <tr>
         <td>
-          ${escapeHtml(line.item)}${line.qty > 1 ? ` ×${line.qty}` : ""}
-          <div class="pack-note">${escapeHtml(line.pack || "1 package")}</div>
+          ${escapeHtml(titleCase(line.item))}
+          <div class="pack-note">${escapeHtml(safeText(line.product, 200) || "Advertised package")}</div>
         </td>
-        <td>${formatMoney(line.lineTotal)}</td>
-      </tr>`).join("");
-    return `
-      <article class="store-card${option.best ? " best" : ""}">
-        <div>
-          <span class="store-rank">${option.best ? "CHEAPEST" : `#${index + 1}`}</span>
-          <h3 class="store-name">${escapeHtml(option.name)}</h3>
-          <p class="store-meta">${escapeHtml(option.area)} · ${option.distanceMi} mi away · ${option.itemCount} of ${result.requestedCount ?? ((result.requested || []).length + (result.unmatched || []).length)} items</p>
-          ${option.missing?.length ? `<p class="store-missing">Does not stock: ${escapeHtml(option.missing.join(", "))}</p>` : ""}
-        </div>
-        <div class="store-total">
-          <strong>${formatMoney(option.subtotal)}</strong>
-          <small>${option.complete ? "WHOLE LIST" : "PARTIAL"}</small>
-        </div>
-        <details class="store-breakdown">
-          <summary>Price breakdown</summary>
-          <table>
-            <thead><tr><th>Item</th><th>Cost</th></tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
-        </details>
-      </article>`;
-  }).join("");
-
-  $("groceryResults").innerHTML = `
-    <div class="results-heading">
+        <td>
+          ${escapeHtml(formatMoney(Number(line.price) || 0))}
+          <div class="pack-note">${escapeHtml(priceNote)}</div>
+        </td>
+      </tr>`;
+    }).join("");
+    const label = safeText(estimate.label, 120).trim() || "Store";
+    const branchName = safeText(estimate.branch?.name, 240).trim();
+    const meta = [
+      `${Number(estimate.itemCount) || 0} of ${Number(estimate.requestedCount) || 0} items priced`,
+      branchName
+    ].filter(Boolean).join(" · ");
+    const missing = Array.isArray(estimate.missing) && estimate.missing.length
+      ? `<p class="store-missing">No live price found: ${escapeHtml(estimate.missing.join(", "))}</p>`
+      : "";
+    const rankLabel = estimate.cheapest
+      ? estimate.complete ? "CHEAPEST LIVE BALLPARK" : "BEST LIVE BALLPARK SO FAR"
+      : `#${index + 1}`;
+    return `<article class="store-card${estimate.cheapest ? " best" : ""}">
       <div>
-        <p class="eyebrow">Ranked cheapest first</p>
-        <h3>${options.length} nearby option${options.length === 1 ? "" : "s"}</h3>
+        <span class="store-rank">${rankLabel}</span>
+        <h3 class="store-name">${escapeHtml(label)}</h3>
+        <p class="store-meta">${escapeHtml(meta)}</p>
+        ${missing}
       </div>
-    </div>
-    <p class="results-note">${escapeHtml(summary)}</p>
-    ${notes.map((note) => `<p class="results-note${note.warn ? " warn" : ""}">${escapeHtml(note.text)}</p>`).join("")}
-    <div class="store-list">${cards}</div>`;
+      <div class="store-total">
+        <strong>${escapeHtml(formatMoney(Number(estimate.total) || 0))}</strong>
+        <small>${estimate.complete ? "BALLPARK" : "PARTIAL"}</small>
+      </div>
+      <details class="store-breakdown">
+        <summary>Price breakdown</summary>
+        <table>
+          <thead><tr><th>Item</th><th>Price</th></tr></thead>
+          <tbody>${lines}</tbody>
+        </table>
+      </details>
+    </article>`;
+  }).join("");
+  const areaLabel = safeText(area, 120).trim();
+  // The profile budget applies here now: it compares against the cheapest
+  // complete live ballpark, not against any precomputed catalog total.
+  const budget = Number(state.constraints.budget);
+  const winner = estimates.find((estimate) => estimate.cheapest);
+  const budgetNote = winner && winner.complete && Number.isFinite(budget) && budget > 0
+    ? `<p class="results-note${winner.total > budget ? " warn" : ""}">${escapeHtml(formatMoney(Math.abs(budget - winner.total)))} ${winner.total <= budget ? "under" : "over"} your ${escapeHtml(formatMoney(budget))} budget at ${escapeHtml(safeText(winner.label, 120).trim() || "the cheapest store")}.</p>`
+    : "";
+  return `
+    <section class="advertised-basket">
+      <div class="advertised-results-heading">
+        <div><h3>Where to buy this list</h3><small>Live advertised prices${areaLabel ? ` near ${escapeHtml(areaLabel)}` : ""}, ranked by items priced, then total</small></div>
+      </div>
+      <p class="results-note">Live prices found on each store's own pages. Package sizes, pickup availability, and in-store prices are not verified.</p>
+      ${budgetNote}
+      <div class="store-list">${cards}</div>
+    </section>`;
 }
 
 $("groceryForm").addEventListener("submit", (event) => {
@@ -1763,9 +1850,11 @@ $("groceryList").addEventListener("click", (event) => {
   invalidateGroceryResults();
 });
 
-$("fromPlanButton").addEventListener("click", () => {
+// Copies the meal plan's shopping list into the Shop list. Shared by the plan
+// panel button and the "add the list to shop" chat command.
+function addPlanItemsToShop() {
   const planItems = state.plan?.shoppingList || [];
-  if (!planItems.length) return;
+  if (!planItems.length) return 0;
   let added = 0;
   for (const entry of planItems) {
     const existing = state.groceryList.find((item) => item.name === entry.item.toLowerCase());
@@ -1773,14 +1862,21 @@ $("fromPlanButton").addEventListener("click", () => {
     if (existing) {
       if (existing.qty < required) { existing.qty = required; added++; }
     } else if (addGroceryItem(entry.item, required)) added++;
-    const grocery = state.groceryList.find(item => item.name === entry.item.toLowerCase());
-    if (grocery) grocery.pack = entry.pack || "";
   }
   saveState();
   renderGroceryList();
   invalidateGroceryResults();
+  return added;
+}
+
+function addPlanItemsToShopMessage() {
+  if (!(state.plan?.shoppingList || []).length) return;
+  const added = addPlanItemsToShop();
   toast(added ? `${added} item${added === 1 ? "" : "s"} added from your meal plan` : "Those items are already on the list");
-});
+}
+
+$("fromPlanButton").addEventListener("click", addPlanItemsToShopMessage);
+$("planShopButton").addEventListener("click", addPlanItemsToShopMessage);
 
 /* ----- welcome wizard wiring ----- */
 $("welcomeNext").addEventListener("click", advanceWelcome);
@@ -1808,8 +1904,10 @@ bindOptionToggles($("profileForm"), "profile");
 
 $("useLocationButton").addEventListener("click", requestLocation);
 $("compareButton").addEventListener("click", compareStores);
-$("allowLookupButton").addEventListener("click", () => answerLookupConsent(true));
-$("declineLookupButton").addEventListener("click", () => answerLookupConsent(false));
+$("offerAreaInput").addEventListener("input", () => {
+  groceryRevision += 1;
+  $("groceryResults").innerHTML = '<p class="results-note">Search area changed. Compare stores again for updated totals.</p>';
+});
 
 $("chatForm").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -1840,7 +1938,6 @@ $("photoButton").addEventListener("click", () => $("photoInput").click());
 $("drawerPhotoButton").addEventListener("click", () => $("photoInput").click());
 $("photoInput").addEventListener("change", () => handlePhoto($("photoInput").files[0]));
 $("openPantryButton").addEventListener("click", openPantry);
-$("markUseSoonButton").addEventListener("click", openPantry);
 document.querySelectorAll("[data-close-drawer]").forEach((button) => button.addEventListener("click", closePantry));
 
 $("pantryForm").addEventListener("submit", (event) => {
@@ -1911,7 +2008,7 @@ $("mealList").addEventListener("click", async (event) => {
     addExclusion(meal.sourceRecipe || meal.title);
     planningOptions = { swapIndex: index, previousDinners: clone(state.plan.dinners) };
     saveState();
-    setMobileView("chat");
+    setView("chat");
     addUserMessage(`Swap ${meal.title}. Keep the same budget and equipment.`);
     await buildPlan(`Replace ${meal.title} with a different beginner-friendly dinner. Keep the same budget and equipment.`);
   }
@@ -1924,9 +2021,7 @@ document.querySelectorAll("[data-view]").forEach((button) => {
       openPantry();
       return;
     }
-    setMobileView(view);
-    // Desktop keeps chat and plan side by side, so those clicks only move focus.
-    if (window.matchMedia("(max-width: 980px)").matches) return;
+    setView(view);
     if (view === "chat") $("chatInput").focus();
     if (view === "plan") $("planView").querySelector(".plan-scroll").scrollTo({ top: 0, behavior: "smooth" });
   });
@@ -1948,13 +2043,13 @@ $("savedRecipeList").addEventListener("click", (event) => {
   state.excludedTitles = state.excludedTitles.filter((title) => normaliseKey(title) !== normaliseKey(named));
   planningOptions = { includeRecipe: named };
   saveState();
-  setMobileView("chat");
+  setView("chat");
   addUserMessage(`Put ${named} back in the plan.`);
   buildPlan(`Include ${named} as one of the dinners. Keep the same budget and equipment.`);
 });
 
 function resetDemo() {
-  const warning = "Reset the demo? This clears your profile, pantry, meal plan, chat history, Shop list, and saved location.";
+  const warning = "Reset the demo? This clears your kitchen, including your profile, pantry, plan, chat history, Shop list, and saved location.";
   if (!window.confirm(warning)) return;
   state = clone(DEFAULT_STATE);
   saveState();
@@ -1984,13 +2079,15 @@ if (state.messages?.length) {
   firstMessage.innerHTML = "<p>Your last plan and pantry are still here. Tell me what changed.</p><p class=\"message-example\">Try \"lower my budget to $15\" or swap a meal from the plan.</p>";
 }
 
+updateChatEmptyState();
+syncPantryShell();
 renderProfile();
 renderPantry();
 renderPlan();
 renderGroceryList();
 renderSavedRecipes();
 renderLocation();
-setMobileView(activeMobileView);
+setView(activeView);
 
 // The welcome wizard is a one-time landing experience: it runs once, ever,
 // on the very first visit. After that, preferences are only ever changed by

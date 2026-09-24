@@ -5,9 +5,10 @@ Guidance for AI coding agents working in this repository.
 ## What this is
 
 FridgeFuse — a chat-first meal planner for a student cooking in a dorm. It turns a
-rough pantry + a grocery budget + limited equipment into dinners, a full-package
-shopping list, and a cheapest-store comparison. Hackathon prototype, no build step,
-no framework.
+rough pantry + a grocery budget + limited equipment into dinners, a shopping list,
+and a cheapest-store comparison of live advertised prices. There is no mock price
+catalog anymore: every price the app shows comes from a live store source. Hackathon
+prototype, no build step, no framework.
 
 ## Working on this repo
 
@@ -39,19 +40,18 @@ a failing test blocks the deploy.
 ## Layout
 
 - `server.js` (~1100 lines) — the entire backend: Express app, Voyager/ASU AIR proxy,
-  price + store catalog loading, grocery optimizer, geocoding. Exports the `app`
+  meal-plan grounding, live-offer service wiring, geocoding. Exports the `app`
   itself (so Vercel detects an Express deployment) with named helpers attached via
   `Object.assign` for tests.
 - `public/` — `index.html`, `app.js` (~1300 lines), `styles.css`. Plain DOM, no
-  bundler; `app.js` is served as-is.
-- `data/prices.json` — mock Tempe 85281 catalog: `aliases`, `items[].prices[chain]`,
-  `stores`. Prices are development estimates, labeled as such in the UI.
-- `data/stores.json` — approximate neighborhood-level branch coordinates + `origin`.
-- `data/recipe-sources.json` — the recipe citation allowlist (versioned).
-- `data/diet-rules.json` — dietary restrictions: student phrasings → excluded
-  catalog tags plus a word-level net, with per-rule `allows` exceptions.
-- `scripts/propose-food-codes.js` — maintenance only, never runtime. Proposes
-  FoodOn/FDC codes for review; `npm run codes:propose`.
+  bundler; `app.js` is served as-is. One view shows at a time at every width:
+  Chat is home, Plan opens when a build finishes, Shop is the comparison view.
+  The pantry is a permanent side panel on wide screens and a drawer on phones.
+  `body[data-view]` is the only view switch.
+- `lib/live-recipes.js` — request-scoped Tavily discovery, public-page fetch,
+  Recipe JSON-LD verification, and bounded safety filters.
+- `data/diet-rules.json` — dietary restrictions: student phrasings → a word-level
+  `forbids` net with per-rule `allows` exceptions and advisory `notes`.
 - `test.js` — one flat script of `ok(...)` assertions, run in-process.
 
 ## Things that will bite you
@@ -74,47 +74,93 @@ plan or demo data. Do not add a fallback that invents plans or prices — earlie
 commits deliberately removed those. Failures go to `reportFailure()` and surface at
 `/api/failures`.
 
-**Recipes are grounded to an allowlist.** The plan system prompt is built from
-`data/recipe-sources.json` at startup and the server rejects citations that do not
-match it exactly. Changing the allowlist changes the prompt and the tests that
-enumerate every source. A bad or empty file makes the server refuse to start, by design.
+**Recipes are grounded to live verified candidates.** Each planning request uses
+Tavily discovery, a public HTTPS page fetch, recursive schema.org Recipe JSON-LD
+extraction, and time/equipment/diet filtering before Voyager sees a candidate.
+The prompt and repair call reuse that exact request-scoped candidate set. Source
+titles, ingredients, and instructions are bounded untrusted facts; unsafe URLs,
+redirects, malformed pages, prompt-injection text, and diet-violating source facts
+are rejected. There is no static recipe catalog or model-invented URL fallback.
 
 **Dietary restrictions are enforced, not requested.** `data/diet-rules.json` drives
 both the prompt and a post-generation check (`assertPlanRespectsDiet()`) that scans
 titles, pantry uses, needs, steps, and the shopping list. A violating plan
 gets one repair attempt and is then rejected. Each rule's `allows` list is stripped
 before its `forbids` are matched — that is what keeps "peanut butter" from tripping
-dairy-free's "butter", so add a substitute there rather than loosening a `forbids`
-entry. An ingredient the catalog knows is judged by its `tags` alone (exact); only
-unknown ingredients and free-text steps reach the word net. A test cross-checks the
-two, so a new catalog item needs correct tags or the build fails. An allergy is a safety constraint: do not add a path that serves a violation.
+dairy-free's "butter" and "almond milk" from tripping its "milk", so add a
+substitute there rather than loosening a `forbids` entry. Every ingredient now goes
+through that same word net; there is no catalog to answer for known items, so an
+alias like "gf pasta" is conservatively flagged. An allergy is a safety constraint:
+do not add a path that serves a violation.
 
-**`findPrice()` resolves most-specific-first.** Exact name, then alias, then the
-longest loose match. It used to take any substring hit, which meant "gluten free
-pasta" resolved to wheat `pasta` — do not reintroduce a first-match-wins lookup.
-
-**Needs are ingredient names, not quantities.** `dinner.needs` is `["eggs", "rice"]`.
-`needName()` resolves each one against the catalog; `groundShoppingPlan()` buys one
-package per dinner that needs an ingredient and sums `totalCost`. The model's own
-`shoppingList`, `leftovers`, and `totalCost` are ignored — do not start trusting
-them again. Quantities were deliberately removed (the model misjudged amounts and
-the package math produced false precision); do not reintroduce amounts, units,
-per-serving bands, or leftover estimates without a design for where measured
+**Needs are ingredient names, not quantities or packages.** `dinner.needs` is
+`["eggs", "rice"]`. `needName()` lowercases and singularizes each name;
+`groundShoppingPlan()` turns the names into one shopping line per ingredient, shared
+across the dinners that need it, and returns no prices, no packages, no total. The
+model's own `shoppingList`, `leftovers`, and `totalCost` are discarded — do not start
+trusting them again. Quantities were deliberately removed (the model misjudged
+amounts and the package math produced false precision); do not reintroduce amounts,
+units, per-serving bands, or leftover estimates without a design for where measured
 quantities come from.
 
-**Prices are always re-grounded server-side.** The model may propose a shopping list,
-but `groundShoppingPlan()` replaces its prices with real packs from `data/prices.json`.
-Never let model-supplied prices reach the client.
+**All prices are live and always come from the offer pipeline.** The meal plan's
+shopping list is priced in the Shop tab through `/api/grocery/offers`; the profile
+budget is compared against the cheapest complete live ballpark. Never add a local
+price fallback, a mock catalog, or a model-supplied price. `lib/grocery-offers.js`
+is the only source of prices, and `describeLocation()` returns a coordinate label
+with no branch data behind it; the Nominatim lookup names the place when the
+client shares a fix.
 
-**The grocery optimizer is deterministic.** `optimizeCart()`, `haversineMiles()`,
-`describeLocation()` and friends use only local JSON — no model call, no API key.
-Keep it that way; it is the part of the demo that works offline.
+**Advertised offers are a separate, unverified view.** `lib/grocery-offers.js`
+is the only price source and every chain runs through one adapter: Walmart reads
+its public search page through `lib/walmart-direct.js`, ALDI reads its
+storefront GraphQL, and Fry's uses the official Kroger API when
+`KROGER_CLIENT_ID`/`KROGER_CLIENT_SECRET` are set. There is no web-search or
+model fallback: an adapter that fails reports a failure and its store column
+stays partial. Each price keeps its scope (`retailer-advertised` for Walmart's
+advertised web price, `store-api` for the Kroger/ALDI APIs), and
+`groundShoppingPlan()` never reads these prices. The Shop compare view calls
+`/api/grocery/offers` from one button and renders `storeEstimates`; a missing
+item makes the store partial, and no invented price may fill it. Fry's without
+credentials reports the missing configuration and must not fall back to a web
+search. API adapters have their own quotas (Kroger: 10,000 product and 1,600
+location calls per day) and nothing else makes outbound price calls.
 
-**Third-party geocoding is consent-gated.** `/api/geo/describe` and `/api/geo/postal`
-only call Nominatim when the client sends literal `true` for `allowLookup`. Requests
-are throttled server-side (`NOMINATIM_MIN_INTERVAL_MS`, ~1/sec) and never made from
-the browser, to honor Nominatim's policy. The catalog's own ZIP resolves locally with
-no lookup at all.
+Walmart item search reads the public search page directly through
+`lib/walmart-direct.js`: the parser reads the
+page's embedded `__NEXT_DATA__`, and impit supplies a browser TLS fingerprint
+because a plain server fetch gets the CAPTCHA. Keep the fingerprint version
+and the header set in sync (`chrome151` today); a mismatched pair returns the
+robot page with HTTP 200. The profile matters more than the IP: chrome131 and
+chrome136 are challenged from Vercel's AWS IP while chrome151, chrome142, and
+ios18 pass there, so the default list is `chrome151, chrome142, ios18`.
+`WALMART_BROWSERS` overrides the list and `WALMART_WARMUP=1` visits the
+homepage first, which the code keeps for the day the WAF starts demanding
+session cookies. The default list comes from impit's shipped typings at
+startup (newest two Chrome profiles plus the newest iOS one), so an impit
+upgrade modernizes the fingerprints with no code edit; `DEFAULT_BROWSERS` is
+only the fallback for when those typings cannot be read. `/api/walmart/canary`
+tests every profile from the deployment and Vercel Cron calls it daily, so a
+Walmart block shows up in the failure log before a demo does. Dependabot opens
+the weekly impit bump and the GitHub test workflow gates it. When the direct
+read fails, the failure is reported for that item; there is no search fallback.
+ALDI search and prices come from
+its storefront GraphQL with a cached guest session (in-flight dedupe included):
+weight-priced items use the per-pound unit price, packaged goods the package
+price. When `KROGER_CLIENT_ID` and `KROGER_CLIENT_SECRET` are set, the Fry's
+chain uses the official Kroger Products and Locations APIs:
+cache the 30-minute token and the location per ZIP, never log the secret, keep
+the daily quotas in mind (10,000 product and 1,600 location calls), and label
+those prices `store-api`. Without credentials the Fry's chain reports no
+prices; it must not fall back to a web search.
+
+**Third-party geocoding needs an explicit `allowLookup: true`.** Sharing a location
+is the consent: `public/app.js` sends the flag with the fix, and the server keeps the
+literal `true` check so no other caller can reach Nominatim. Coordinates are rounded
+to three decimals (~110 m) before they leave, requests are throttled server-side
+(`NOMINATIM_MIN_INTERVAL_MS`, ~1/sec), and the browser never makes the call, to honor
+Nominatim's policy. When the lookup fails the label falls back to "Your location".
+The OpenStreetMap credit lives in the Shop fine print, not under the name.
 
 **One deploy target.** `server.js` runs on Vercel (Express export,
 `data/*.json` via `includeFiles`). `resolveDataPath()` exists so data files
@@ -122,9 +168,17 @@ resolve from `LAMBDA_TASK_ROOT` as well as `__dirname` — use it for any new
 data file, and add the file to `vercel.json`.
 
 **Frontend state lives in localStorage** under `fridgefuse-state-v2` (pantry,
-constraints, messages, grocery list, profile, location consent). Changing the shape of
+constraints, messages, grocery list, profile, location). Changing the shape of
 `DEFAULT_STATE` in a breaking way means bumping the key; `loadState()` and
-`sanitizeStoredPlan()` defend against stale stored plans (e.g. legacy recipe citations).
+`sanitizeStoredPlan()` defend against stale stored plans (e.g. legacy recipe citations
+or the removed package fields).
+
+**One word per job.** Fridge is the appliance, the fridge photo, and the brand.
+Pantry is the food list. Kitchen is the saved bundle you download or restore.
+Visible copy must not mix them: no "mini-fridge" for the food list, no "pantry"
+for the export file. Nav labels, headings, and buttons use the same noun for the
+same thing. Button labels stay fixed while counts and states move to a count,
+chip, or disabled state; "No meal plan yet" as a label is the pattern to avoid.
 
 ## Models
 
@@ -141,6 +195,7 @@ issue #1.
 ## Style
 
 Match what is there: CommonJS, double quotes, 2-space indent, no semicolon-free style,
-no TypeScript, no new dependencies without a reason (the whole runtime is express +
-serverless-http + dotenv). Comments in this codebase explain *why* a constraint exists
+no TypeScript, no new dependencies without a reason (the runtime is express, dotenv,
+and impit, whose browser TLS fingerprint is what gets the Walmart page read past the
+CAPTCHA). Comments in this codebase explain *why* a constraint exists
 — keep that habit rather than narrating what the code does.

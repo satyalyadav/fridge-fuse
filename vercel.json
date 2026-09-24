@@ -9,6 +9,12 @@
       "maxDuration": 120
     }
   },
+  "crons": [
+    {
+      "path": "/api/walmart/canary",
+      "schedule": "0 15 * * *"
+    }
+  ],
   "headers": [
     {
       "source": "/(.*)",

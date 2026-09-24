@@ -4,16 +4,16 @@ const assert = require("assert");
 const path = require("path");
 const vm = require("vm");
 const {
-  cheapestPack, findPrice, extractJson, PRICES,
+  extractJson,
   DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL,
-  resolveDataPath, RECIPE_SOURCES, APPROVED_RECIPES, isApprovedRecipeCitation, buildPlanSystemPrompt,
+  resolveDataPath, isApprovedRecipeCitation, buildPlanSystemPrompt, recipeSourcesContext,
+  normalizeLiveRecipeCandidates,
   handlePlanRequest, handleVisionRequest, normalizeVisionResult,
-  haversineMiles, isValidCoordinate, resolveCatalogItem, optimizeCart,
+  isValidCoordinate, normalizeIngredient,
   describeLocation, handleGeoDescribe,
-  STORE_DATA, BRANCHES, DEFAULT_ORIGIN, ITEM_ALIASES,
   DIET_RULES, resolveDietRules, findForbiddenTerm, findDietViolations,
-  pantryDietConflicts, dietRulesContext, catalogTagsFor, findIngredientConflict,
-  DIET_OPTIONS, EQUIPMENT_OPTIONS, parseDietSelections, blockedIngredientsForDiet,
+  pantryDietConflicts, dietRulesContext, findIngredientConflict,
+  EQUIPMENT_OPTIONS,
   needName, groundShoppingPlan,
   findRepeatedExclusion
 } = require("./server.js");
@@ -25,127 +25,81 @@ const toSlashes = (p) => p.split(path.sep).join("/");
 let n = 0;
 const ok = (cond, msg) => { n++; assert(cond, msg); console.log(`ok ${n} - ${msg}`); };
 
-ok(PRICES.zip === "85281", "prices scoped to 85281");
-ok(PRICES.items.length >= 20, `price DB has ${PRICES.items.length} items`);
-ok(Object.keys(PRICES.stores).length === 4, "4 stores");
-ok(
-  typeof resolveDataPath === "function" &&
-    toSlashes(resolveDataPath("/var/task/server/functions", "/var/task", (candidate) => toSlashes(candidate) === "/var/task/data/prices.json")) === "/var/task/data/prices.json",
-  "price data resolves from the serverless task root"
-);
 ok(AIR_VISION_MODEL === "qwen3-vl-32b-instruct", "photo requests use the dedicated vision model");
 ok(DEFAULT_AIR_MODEL === "llama4-scout-17b", "tracked text-model default uses the verified fast model");
 ok(AIR_VISION_MODEL !== AIR_MODEL, "text and photo requests do not silently share a model");
 ok(AIR_VISION_VERIFY_MODEL === AIR_MODEL, "photo verification uses the tested fast multimodal model");
 
-const eggs = cheapestPack("eggs");
-ok(eggs && eggs.store === "aldi" && eggs.packPrice === 2.99, `cheapest eggs = aldi 2.99 (${JSON.stringify(eggs)})`);
-ok(findPrice("EGGS").name === "eggs", "price lookup case-insensitive");
-ok(findPrice("xyz-nope") === null, "unknown item returns null");
-ok(cheapestPack("spinach") && cheapestPack("spinach").packPrice > 0, "spinach is in the mock catalog");
 
 ok(extractJson('```json\n{"a":1}\n```').a === 1, "fenced JSON parsed");
 ok(extractJson('{"a":2}').a === 2, "raw JSON parsed");
 
-// Approved recipes: the AI planner prompt is grounded to exact recipe pages.
-ok(Array.isArray(RECIPE_SOURCES.sources) && RECIPE_SOURCES.sources.length >= 3, `approved sources DB has ${RECIPE_SOURCES.sources.length} sources`);
-ok(RECIPE_SOURCES.sources.every((s) => s.name && /^https?:\/\//.test(s.url)), "every approved source has a name and URL");
-ok(Array.isArray(APPROVED_RECIPES) && APPROVED_RECIPES.length >= 10, `approved recipe DB has ${APPROVED_RECIPES.length} exact recipes`);
-ok(
-  APPROVED_RECIPES.every((recipe) =>
-    recipe.title && /^https?:\/\//.test(recipe.url) && Number(recipe.timeMin) > 0 &&
-    recipe.equipment.length && recipe.ingredients.length && recipe.method
-  ),
-  "every approved recipe has an exact title, page URL, and verified facts"
-);
-const priceIngredientNames = new Set(PRICES.items.map((item) => item.name));
-ok(
-  APPROVED_RECIPES.every((recipe) => recipe.ingredients.every((ingredient) => priceIngredientNames.has(ingredient))),
-  "every curated recipe ingredient can be fulfilled by the price catalog"
-);
-ok(new Set(APPROVED_RECIPES.map((recipe) => recipe.url)).size === APPROVED_RECIPES.length, "approved recipe page URLs are unique");
-ok(
-  APPROVED_RECIPES.every((recipe) => !RECIPE_SOURCES.sources.some((source) => recipe.url.replace(/\/$/, "") === source.url.replace(/\/$/, ""))),
-  "publisher homepages are not accepted as recipe pages"
-);
-const planPrompt = buildPlanSystemPrompt("(price context)");
-ok(planPrompt.includes("NEVER") && planPrompt.includes("curated recipe records"), "plan prompt restricts generation to curated recipes");
+// Live recipe candidates are request-scoped. These fixtures exercise the same
+// citation and grounding contract without recreating a production catalog.
+const liveRecipeFixtures = [
+  { title: "Hearty Black Bean Quesadillas", source: "Budget Bytes", sourceUrl: "https://www.budgetbytes.com/hearty-black-bean-quesadillas/", timeMin: 15, equipment: ["stove"], ingredients: ["black beans", "onion", "garlic", "cheddar", "tortillas"], method: "Mix the seasoned bean filling, fill folded tortillas, and toast both sides in a pan.", rawIngredients: ["black beans", "onion", "garlic", "cheddar", "tortillas"], rawInstructions: ["Mix the seasoned bean filling, fill folded tortillas, and toast both sides in a pan."] },
+  { title: "Spinach Rice Breakfast Bowls", source: "Budget Bytes", sourceUrl: "https://www.budgetbytes.com/snap-challenge-spinach-rice-breakfast-bowls/", timeMin: 10, equipment: ["stove", "microwave"], ingredients: ["rice", "spinach", "eggs", "butter"], method: "Warm rice with spinach, cook an egg until set, and serve it over the rice.", rawIngredients: ["rice", "spinach", "eggs", "butter"], rawInstructions: ["Warm rice with spinach, cook an egg until set, and serve it over the rice."] },
+  { title: "Microwave Potato", source: "Food Network", sourceUrl: "https://www.foodnetwork.com/recipes/food-network-kitchen/microwave-potato-10076489", timeMin: 10, equipment: ["microwave"], ingredients: ["potatoes", "olive oil", "butter"], method: "Pierce and oil the potato, microwave until tender, then split and season it.", rawIngredients: ["potatoes", "olive oil", "butter"], rawInstructions: ["Pierce and oil the potato, microwave until tender, then split and season it."] },
+  { title: "Peanut Butter Banana Quesadillas", source: "Budget Bytes", sourceUrl: "https://www.budgetbytes.com/peanut-butter-banana-quesadillas/", timeMin: 10, equipment: ["stove"], ingredients: ["tortillas", "peanut butter", "banana"], method: "Fill a tortilla with peanut butter and sliced banana, fold it, and toast it in a pan.", rawIngredients: ["tortillas", "peanut butter", "banana"], rawInstructions: ["Fill a tortilla with peanut butter and sliced banana, fold it, and toast it in a pan."] },
+  { title: "Easy Vegetable Stir Fry", source: "Budget Bytes", sourceUrl: "https://www.budgetbytes.com/easy-vegetable-stir-fry/", timeMin: 25, equipment: ["stove"], ingredients: ["soy sauce", "garlic", "carrots", "frozen peas", "onion", "olive oil"], method: "Mix the sauce, stir-fry vegetables in stages, then add the sauce in a pan.", rawIngredients: ["soy sauce", "garlic", "carrots", "frozen peas", "onion", "olive oil"], rawInstructions: ["Mix the sauce, stir-fry vegetables in stages, then add the sauce in a pan."] },
+  { title: "Mexican Rice and Beans", source: "Nora Cooks", sourceUrl: "https://www.noracooks.com/spanish-rice-and-beans/", timeMin: 40, equipment: ["stove"], ingredients: ["rice", "black beans", "salsa", "onion", "garlic", "olive oil"], method: "Saute aromatics, add rice, beans, salsa, and liquid, then cook until tender in a pot.", rawIngredients: ["rice", "black beans", "salsa", "onion", "garlic", "olive oil"], rawInstructions: ["Saute aromatics, add rice, beans, salsa, and liquid, then cook until tender in a pot."] },
+];
+const planPrompt = buildPlanSystemPrompt("", 30, liveRecipeFixtures);
+ok(planPrompt.includes("NEVER") && planPrompt.includes("verified live candidates"), "plan prompt restricts generation to request-scoped verified candidates");
 ok(planPrompt.includes('"sourceRecipe"') && planPrompt.includes('"source"') && planPrompt.includes('"sourceUrl"'), "plan prompt requires the exact recipe citation triple");
 ok(!planPrompt.includes('"leftovers":[{'), "plan prompt no longer asks the model to estimate leftovers");
-ok(/Do NOT return shoppingList, leftovers, or totalCost/.test(planPrompt), "plan prompt tells the model the server does the package arithmetic");
+ok(/Do NOT return shoppingList, leftovers, or totalCost/.test(planPrompt), "plan prompt tells the model the server builds the shopping list");
 ok(planPrompt.includes('"needs":["..."]') && /no amounts, units, or packages/.test(planPrompt), "plan prompt asks for ingredient names, not quantities");
-ok(planPrompt.includes("the server does the package arithmetic"), "plan prompt pins shopping to whole packages");
+ok(planPrompt.includes("Shop tab prices it live"), "plan prompt points at the live Shop comparison for prices");
 ok(
-  planPrompt.includes("adaptationNote") && planPrompt.includes("at least half") && planPrompt.includes("within 25%") &&
+  planPrompt.includes("adaptationNote") && planPrompt.includes("at least half") && planPrompt.includes("verified time exactly") &&
     planPrompt.includes("Owning an unrelated pantry item"),
   "plan prompt limits recipe adaptations by ingredients and verified time"
 );
-ok(planPrompt.includes("NEVER invent a source recipe"), "plan prompt forbids invented recipe citations");
-const twentyFiveMinutePrompt = buildPlanSystemPrompt("(price context)", "", 25);
+ok(planPrompt.includes("NEVER invent a source recipe") && planPrompt.includes("untrusted web data"), "plan prompt forbids invented citations and treats source text as untrusted");
+const twentyFiveMinutePrompt = buildPlanSystemPrompt("", 25, liveRecipeFixtures.filter((recipe) => recipe.timeMin <= 25));
 ok(
   !twentyFiveMinutePrompt.includes("Mexican Rice and Beans") && twentyFiveMinutePrompt.includes("Hearty Black Bean Quesadillas"),
   "a 25-minute prompt does not offer recipes with longer verified times"
 );
-for (const recipe of APPROVED_RECIPES) {
+for (const recipe of liveRecipeFixtures) {
   ok(
-    planPrompt.includes(recipe.title) && planPrompt.includes(recipe.source) && planPrompt.includes(recipe.url) && planPrompt.includes(recipe.method),
-    `plan prompt includes verified recipe facts: ${recipe.source} / ${recipe.title}`
+    planPrompt.includes(recipe.title) && planPrompt.includes(recipe.source) && planPrompt.includes(recipe.sourceUrl) && planPrompt.includes(recipe.method),
+    `plan prompt includes verified live recipe facts: ${recipe.source} / ${recipe.title}`
   );
 }
-ok(!isApprovedRecipeCitation("Budget Bytes", "Invented Recipe", "https://www.budgetbytes.com"), "a publisher homepage cannot validate an invented recipe");
+ok(!isApprovedRecipeCitation("Budget Bytes", "Invented Recipe", "https://www.budgetbytes.com", liveRecipeFixtures), "a publisher homepage cannot validate an invented recipe");
 ok(
   typeof resolveDataPath === "function" &&
-    toSlashes(resolveDataPath("/var/task/server/functions", "/var/task", (candidate) => toSlashes(candidate) === "/var/task/data/recipe-sources.json", "recipe-sources.json")) === "/var/task/data/recipe-sources.json",
-  "recipe sources resolve from the serverless task root"
+    toSlashes(resolveDataPath("/var/task/server/functions", "/var/task", (candidate) => toSlashes(candidate) === "/var/task/data/diet-rules.json", "diet-rules.json")) === "/var/task/data/diet-rules.json",
+  "diet rules resolve from the serverless task root"
 );
 
-// ---------- needs are ingredient names: one package per dinner, no leftovers ----------
+// ---------- needs are ingredient names; the shopping list is live-priced ----------
 // The model reliably knows which ingredients a recipe uses and reliably
-// misjudges how much, so the plan requests names and the server shops whole
-// packages: each dinner that needs an ingredient adds one package of it.
-ok(needName("eggs") === "eggs", "a bare ingredient name resolves to itself");
-ok(needName({ item: "EGGS" }) === "eggs", "needs are case-insensitive, objects included");
-ok(needName("cheese") === "cheddar", "aliases resolve through the catalog's own table");
-assert.throws(() => needName("unobtainium"), /outside the price catalog/);
-n++; console.log(`ok ${n} - an ingredient the catalog cannot price is still fatal`);
+// misjudges how much, so the plan requests names. Each name becomes one
+// shopping-list line, shared across the dinners that need it, with no package
+// or price: those come from the live Shop comparison.
+ok(normalizeIngredient("EGGS") === "egg", "ingredient names normalize to lowercase singulars");
+ok(normalizeIngredient("  Black Beans  ") === "black bean", "punctuation and whitespace collapse before matching");
+ok(needName("EGGS") === "egg", "a bare ingredient name normalizes to itself");
+ok(needName({ item: "Spinach" }) === "spinach", "object needs read the item field");
 assert.throws(() => needName("  "), /missing its item name/);
 n++; console.log(`ok ${n} - a need with no name is rejected rather than shopped`);
+assert.throws(() => needName("x".repeat(90)), /unusable ingredient name/);
+n++; console.log(`ok ${n} - an unusable ingredient name is rejected rather than shopped`);
 
-// Packages per plan: two dinners needing eggs buy two packages, shared across
-// both, at the store that stocks the whole list cheapest.
 const twoDinners = groundShoppingPlan({
   dinners: [
     { title: "A", needs: ["eggs", "spinach"] },
-    { title: "B", needs: ["eggs"] }
+    { title: "B", needs: ["egg"] }
   ]
 });
-const eggLine = twoDinners.shoppingList.find((entry) => entry.item === "eggs");
-ok(eggLine.qty === 2, `two dinners needing eggs buy 2 packages (qty=${eggLine.qty})`);
-ok(eggLine.sharedBy.length === 2, "demand is summed across every dinner that uses the ingredient");
-ok(twoDinners.totalCost === +(eggLine.packPrice * 2 + cheapestPack("spinach").packPrice).toFixed(2), "the total pays for every package bought, not one of each");
-ok(Array.isArray(twoDinners.leftovers) && twoDinners.leftovers.length === 0, "no leftovers are claimed without amounts to compute them from");
-ok(new Set(twoDinners.shoppingList.map((entry) => entry.store)).size === 1, "the whole list is quoted at one checkout store");
-assert.throws(() => groundShoppingPlan({ dinners: [{ title: "A", needs: ["unobtainium"] }] }), /outside the price catalog/);
-n++; console.log(`ok ${n} - grounding still refuses an ingredient the catalog cannot price`);
-
-// ---------- gluten-free catalog + diet tags ----------
-const untagged = PRICES.items.filter((item) => !Array.isArray(item.tags)).map((item) => item.name);
-ok(untagged.length === 0, `every catalog item declares a tags array${untagged.length ? ` (missing: ${untagged.join(", ")})` : ""}`);
-for (const glutenFree of ["gluten free bread", "gluten free pasta", "corn tortillas", "tamari"]) {
-  const pack = cheapestPack(glutenFree);
-  ok(pack && pack.item === glutenFree && pack.packPrice > 0, `catalog prices ${glutenFree} (${pack ? `$${pack.packPrice} @ ${pack.store}` : "missing"})`);
-}
-// The reason the lookup had to change: "gluten free pasta" contains "pasta", and
-// pricing a celiac's dinner as wheat pasta is the one outcome to rule out.
-ok(findPrice("gluten free pasta").name === "gluten free pasta", "a gluten-free item never resolves to its wheat namesake");
-ok(findPrice("corn tortillas").name === "corn tortillas" && findPrice("tortillas").name === "tortillas", "corn and flour tortillas stay distinct");
-ok(findPrice("pasta").name === "pasta" && findPrice("bread").name === "bread", "the plain catalog names still resolve to themselves");
-ok(findPrice("gf pasta").name === "gluten free pasta" && findPrice("gluten-free soy sauce").name === "tamari", "gluten-free aliases resolve to the substitute, not the original");
-ok(cheapestPack("tamari").store === "traderjoes", "a chain that does not stock an item is skipped rather than guessed at");
-
-ok(catalogTagsFor("pasta").includes("gluten") && catalogTagsFor("gluten free pasta").length === 0, "catalog tags separate wheat pasta from its substitute");
-ok(catalogTagsFor("cheese").includes("dairy"), "an alias inherits the catalog item's tags");
-ok(catalogTagsFor("a splash of almond milk") === null, "prose does not resolve to a catalog item");
+const eggLine = twoDinners.shoppingList.find((entry) => entry.item === "egg");
+ok(eggLine && eggLine.qty === 2, `two dinners needing eggs share one line with qty 2 (qty=${eggLine?.qty})`);
+ok(eggLine.sharedBy.length === 2, "sharedBy names every dinner that needs the ingredient");
+ok(!("pack" in eggLine) && !("packPrice" in eggLine) && twoDinners.totalCost === undefined, "the shopping list carries no package or price");
+ok(twoDinners.shoppingList.length === 2, "one shopping line per distinct ingredient");
 
 // ---------- dietary restrictions (enforced server-side, not just prompted) ----------
 ok(Array.isArray(DIET_RULES) && DIET_RULES.length >= 5, `diet rules DB has ${DIET_RULES.length} rules`);
@@ -153,11 +107,8 @@ ok(
   DIET_RULES.every((rule) => rule.id && rule.label && rule.aliases.length && rule.forbids.length),
   "every diet rule has an id, label, aliases, and forbidden ingredients"
 );
-const dietIds = DIET_RULES.map((rule) => rule.id);
-for (const required of DIET_OPTIONS.map((option) => option.id)) {
-  ok(dietIds.includes(required), `every profile option is an enforceable rule: ${required}`);
-}
-ok(dietIds.length === DIET_OPTIONS.length, "the profile catalog and the enforcement rules are the same list");
+ok(new Set(DIET_RULES.map((rule) => rule.id)).size === DIET_RULES.length, "diet rule ids are unique");
+ok(DIET_RULES.every((rule) => rule.group && rule.aliases.length && rule.forbids.length), "every diet rule carries a group, aliases, and forbidden terms");
 ok(resolveDietRules("peanut allergy").map((r) => r.id).join(",") === "peanut allergy", "a peanut allergy resolves to the peanut rule");
 ok(resolveDietRules("vegan, no peanuts").map((r) => r.id).sort().join(",") === "peanut allergy,vegan", "a combined diet string resolves to every matching rule");
 ok(resolveDietRules("").length === 0 && resolveDietRules("   ").length === 0, "an empty diet string enforces nothing");
@@ -184,30 +135,18 @@ ok(
 );
 ok(pantryDietConflicts(["spinach", "cheddar"], []).length === 0, "no restrictions means no pantry conflicts");
 
-const dietPrompt = buildPlanSystemPrompt("(price context)", dietRulesContext([veganRule, peanutRule]));
+const dietPrompt = buildPlanSystemPrompt(dietRulesContext([veganRule, peanutRule]));
 ok(dietPrompt.includes("Dietary restrictions (STRICT"), "the plan prompt states the restrictions as strict");
 ok(dietPrompt.includes("peanut") && dietPrompt.includes("honey"), "the plan prompt lists the forbidden ingredients");
 ok(/pantry/i.test(dietPrompt) && dietPrompt.includes("stays forbidden"), "the plan prompt forbids cooking a restricted pantry item");
-ok(!buildPlanSystemPrompt("(price context)").includes("Dietary restrictions"), "an unrestricted plan prompt carries no diet section");
+ok(!buildPlanSystemPrompt().includes("Dietary restrictions"), "an unrestricted plan prompt carries no diet section");
 
-// The catalog's tags and the word net must agree about every item the catalog
-// knows — a disagreement means a mis-tagged item or a missing allows phrase.
-const tagDisagreements = [];
-for (const item of PRICES.items) {
-  for (const rule of DIET_RULES) {
-    const byTag = (item.tags || []).some((tag) => rule.excludesTags.includes(tag));
-    const byWord = findForbiddenTerm(item.name, rule) !== null;
-    if (byTag !== byWord) tagDisagreements.push(`${item.name}/${rule.label} (tag:${byTag} word:${byWord})`);
-  }
-}
-ok(
-  tagDisagreements.length === 0,
-  `catalog tags and word matching agree on all ${PRICES.items.length} items${tagDisagreements.length ? ` — ${tagDisagreements.join(", ")}` : ""}`
-);
-ok(findIngredientConflict("gf pasta", glutenRule) === null, "a known-safe alias is not failed for containing a forbidden word");
-ok(/gluten/.test(findIngredientConflict("pasta", glutenRule) || ""), "a known ingredient is rejected by its tag, naming the tag");
-ok(findIngredientConflict("unobtainium chicken", veganRule) === "chicken", "an ingredient the catalog does not know still falls to the word net");
-ok(DIET_RULES.every((rule) => rule.excludesTags.length > 0), "every diet rule excludes at least one catalog tag");
+// Without the catalog, every ingredient goes through the same word net with
+// the same allowed-substitute stripping.
+ok(findIngredientConflict("gluten free pasta", glutenRule) === null, "the allowed-substitute list clears gluten-free pasta");
+ok(findIngredientConflict("pasta", glutenRule) === "pasta", "plain wheat pasta is still caught by the word net");
+ok(findIngredientConflict("unobtainium chicken", veganRule) === "chicken", "an unknown ingredient falls to the word net");
+ok(DIET_RULES.every((rule) => rule.forbids.length > 0), "every diet rule forbids at least one term");
 
 const violatingPlanShape = {
   dinners: [{ title: "Cheddar rice", usesPantry: ["rice"], needs: ["cheddar"], steps: ["Melt the cheddar."] }],
@@ -220,7 +159,7 @@ ok(findDietViolations(violatingPlanShape, []).length === 0, "a plan with no rest
 
 // Frontend files exist and wire up.
 const fs = require("fs");
-for (const f of ["public/index.html", "public/app.js", "public/styles.css", "data/prices.json", "data/recipe-sources.json", ".env.example"]) {
+for (const f of ["public/index.html", "public/app.js", "public/styles.css", ".env.example"]) {
   ok(fs.existsSync(f), `${f} exists`);
 }
 ok(!fs.existsSync("public/designs.html"), "the obsolete designs.html prototype is removed");
@@ -231,7 +170,7 @@ ok(vercelConfig.framework === "express", "Vercel uses the Express framework pres
 ok(vercelConfig.buildCommand === "npm test", "Vercel runs the contract checks during builds");
 ok(
   vercelFunction.includeFiles === "data/*.json",
-  "Vercel bundles the catalog JSON files with the API"
+  "Vercel bundles the dietary rules JSON with the API"
 );
 ok(/geolocation=\(self\)/.test(JSON.stringify(vercelConfig)), "Vercel allows browser geolocation");
 ok(typeof vercelServer === "function" && vercelServer === vercelServer.app, "Vercel receives the Express app export");
@@ -239,7 +178,6 @@ const html = fs.readFileSync("public/index.html", "utf8");
 ok(html.includes("app.js") && html.includes("api/plan") === false, "index.html loads app.js");
 const appJs = fs.readFileSync("public/app.js", "utf8");
 const serverSrc = fs.readFileSync("server.js", "utf8");
-const recipeSourcesJson = fs.readFileSync("data/recipe-sources.json", "utf8");
 
 ok(appJs.includes("/api/chat/interpret"), "chat uses server-side AI interpretation");
 ok(!appJs.includes("KNOWN_INGREDIENTS"), "arbitrary foods do not depend on a frontend ingredient dictionary");
@@ -304,11 +242,26 @@ async function exerciseFrontendMessage(message, parsed, pantryAfter) {
   await c.context.handleMessage(message);
   return { assistantMessages, buildPlanCalls };
 }
+// ---------- chat interpretation: the plan-to-shop command ----------
+const { validateInterpretation } = require("./lib/chat-intents");
+const shopIntent = validateInterpretation({ actions: [], requestPlan: false, planToShop: true, clarification: "", swapIndex: null }, "add the list to shop");
+ok(shopIntent.planToShop === true && shopIntent.actions.length === 0 && shopIntent.requestPlan === false, "the plan-to-shop command is a validated intent, not a food action");
+const notShopIntent = validateInterpretation({ actions: [], requestPlan: true, planToShop: false, clarification: "", swapIndex: null }, "what can I cook");
+ok(notShopIntent.planToShop === false, "a cooking request does not trigger the plan-to-shop copy");
+const clarifiedIntent = validateInterpretation({ actions: [], requestPlan: false, planToShop: true, clarification: "Which list?", swapIndex: null }, "add it");
+ok(clarifiedIntent.planToShop === false && clarifiedIntent.clarification === "Which list?", "a clarification suppresses the plan-to-shop copy");
+const chatIntentsSrc = fs.readFileSync("lib/chat-intents.js", "utf8");
+ok(
+  /never one merged name/.test(chatIntentsSrc) && chatIntentsSrc.includes("add salmon rice bean spinach to my fridge"),
+  "the interpreter splits a run of foods and carries the example that used to merge"
+);
+ok(/ask one short clarification question/.test(chatIntentsSrc), "the interpreter may ask when one food or two is genuinely unclear");
+
 ok(appJs.includes("/api/plan"), "app.js calls /api/plan");
 ok(!/catalogOnly\s*:\s*true/.test(appJs), "frontend planning requests do not bypass the text model");
-ok(!/\b(?:localPlan|RECIPES|catalogOnly|FALLBACK_PACK_PRICE|FALLBACK_STORE|estimatedLeftover)\b/.test(serverSrc), "server has no local recipe planner or demo price fallback");
-ok(!recipeSourcesJson.includes("FridgeFuse Demo Catalog"), "approved sources contain no demo catalog entry");
-ok(!recipeSourcesJson.toLowerCase().includes("github.com"), "approved recipe sources do not link to GitHub");
+ok(!/\b(?:localPlan|RECIPES|catalogOnly|FALLBACK_PACK_PRICE|FALLBACK_STORE|estimatedLeftover|APPROVED_RECIPES|RECIPE_SOURCES)\b/.test(serverSrc), "server has no local recipe planner or static recipe catalog");
+ok(!fs.existsSync("data/recipe-sources.json"), "the static recipe catalog is removed");
+ok(/TAVILY_API_KEY/.test(fs.readFileSync(".env.example", "utf8")), "environment guidance documents the live recipe search key");
 ok(/VOYAGER_KEY[\s\S]*required/i.test(fs.readFileSync(".env.example", "utf8")), "environment guidance requires the Voyager key");
 const mealSequenceLabelSource = appJs.match(/function mealSequenceLabel\(index\) \{[\s\S]*?\n\}/)?.[0] || "";
 const mealSequenceLabel = mealSequenceLabelSource
@@ -382,12 +335,12 @@ ok(
   "legacy saved recipe citations are removed instead of linking to the project repository"
 );
 
-const grocerySummaryBlock = appJs.match(/const best = options\[0\];[\s\S]*?const cards =/)?.[0] || "";
 ok(
-  /const completeOptions/.test(grocerySummaryBlock) &&
-    /const priciest/.test(grocerySummaryBlock) &&
-    /priciest\.distanceMi/.test(grocerySummaryBlock),
-  "grocery savings summary uses the priciest complete store's distance"
+  /function mergeStoreEstimates/.test(appJs) &&
+    /function renderLiveComparison/.test(appJs) &&
+    /renderStoreEstimates\(estimates, area\)/.test(appJs) &&
+    !/function renderGroceryResults/.test(appJs),
+  "the compare view renders merged live store estimates instead of static optimizer totals"
 );
 const locationFailureBlock = appJs.match(/function requestLocation\([\s\S]*?async function compareStores/)?.[0] || "";
 ok(
@@ -407,7 +360,7 @@ ok(
 ok(
   appJs.includes('$("resetDemoButton").addEventListener("click", resetDemo)') &&
     appJs.includes('$("resetMobileButton").addEventListener("click", resetDemo)') &&
-    appJs.includes("Reset the demo? This clears your profile, pantry, meal plan, chat history, Shop list, and saved location."),
+    appJs.includes("Reset the demo? This clears your kitchen, including your profile, pantry, plan, chat history, Shop list, and saved location."),
   "desktop and mobile reset controls share the full-data confirmation handler"
 );
 const resetSource = appJs.match(/function resetDemo\(\) \{[\s\S]*?\n\}/)?.[0] || "";
@@ -417,91 +370,24 @@ ok(
   "reset cancellation is checked before saved state changes"
 );
 
-// ---------- grocery optimizer ----------
-ok(fs.existsSync("data/stores.json"), "data/stores.json exists");
-ok(
-  resolveDataPath("/var/task/server/functions", "/var/task", (c) => c === "/var/task/data/stores.json", "stores.json") === "/var/task/data/stores.json",
-  "store data resolves from the serverless task root"
-);
+// ---------- store geometry ----------
 // geolocation=() silently disables the browser location API — the Shop tab needs it.
 ok(/geolocation=\(self\)/.test(fs.readFileSync("server.js", "utf8")), "server Permissions-Policy allows geolocation");
 
-ok(BRANCHES.length >= 4, `store catalog has ${BRANCHES.length} branches`);
-ok(BRANCHES.every((b) => PRICES.stores[b.chain]), "every branch maps to a chain with prices");
-ok(new Set(BRANCHES.map((b) => b.id)).size === BRANCHES.length, "branch ids are unique");
-ok(BRANCHES.every((b) => Math.abs(b.lat) <= 90 && Math.abs(b.lng) <= 180), "branch coordinates are in range");
-ok(new Set(BRANCHES.map((b) => b.chain)).size === Object.keys(PRICES.stores).length, "every priced chain has at least one branch");
-ok(Object.values(ITEM_ALIASES).every((target) => PRICES.items.some((i) => i.name === target)), "every alias points at a real catalog item");
-
-// 1 degree of latitude is ~69 miles anywhere on the globe.
-ok(Math.abs(haversineMiles(33, -111, 34, -111) - 69) < 0.5, `haversine 1deg lat = ${haversineMiles(33, -111, 34, -111).toFixed(2)} mi`);
-ok(haversineMiles(33.42, -111.93, 33.42, -111.93) === 0, "distance to the same point is zero");
-ok(haversineMiles(33, -111, 34, -111) === haversineMiles(34, -111, 33, -111), "distance is symmetric");
 ok(!isValidCoordinate(0, 0) && !isValidCoordinate(NaN, 5) && !isValidCoordinate(91, 0), "null island and out-of-range coordinates are rejected");
 ok(isValidCoordinate(33.42, -111.93), "a real coordinate is accepted");
 
-ok(resolveCatalogItem("cheese").name === "cheddar", "alias resolves cheese to cheddar");
-ok(resolveCatalogItem("  EGGS  ").name === "eggs", "lookup trims and ignores case");
-ok(resolveCatalogItem("unobtainium") === null, "unknown item does not resolve");
-
-const campus = { lat: 33.4242, lng: -111.9281 };
-const basket = optimizeCart({ items: [{ name: "eggs", qty: 2 }, { name: "milk" }, { name: "cheese" }], ...campus });
-ok(basket.options.length === BRANCHES.length, "every branch is priced");
-ok(basket.options[0].best === true, "the winner is flagged");
-ok(basket.options.every((o, i, all) => i === 0 || all[i - 1].subtotal <= o.subtotal), "options are ranked cheapest first");
-// aldi: eggs 2.99*2 + milk 3.49 + cheddar 2.29
-ok(basket.options[0].chain === "aldi" && basket.options[0].subtotal === 11.76, `cheapest basket is aldi at $${basket.options[0].subtotal}`);
-ok(basket.options[0].distanceMi <= basket.options.find((o) => o.chain === "aldi" && o.storeId !== basket.options[0].storeId).distanceMi, "the nearer branch of the winning chain ranks first");
-ok(basket.savingsVsWorst > 0, `savings vs the priciest store reported ($${basket.savingsVsWorst})`);
-ok(basket.options.every((o) => o.complete), "all four chains stock the sample basket");
-ok(basket.requested.every((r) => r.prices === undefined), "internal price tables are not leaked to the client");
-
-const qtyOne = optimizeCart({ items: [{ name: "eggs", qty: 1 }], ...campus }).options[0].subtotal;
-const qtyThree = optimizeCart({ items: [{ name: "eggs", qty: 3 }], ...campus }).options[0].subtotal;
-ok(Math.abs(qtyThree - qtyOne * 3) < 0.01, "quantity multiplies the line total");
-ok(optimizeCart({ items: ["eggs", { name: "egg", qty: 3 }, "EGGS"] }).requested.length === 1, "duplicate and aliased entries merge into one line");
-ok(optimizeCart({ items: ["eggs", { name: "egg", qty: 3 }] }).requested[0].qty === 4, "merged duplicates sum their quantities");
-
-const withJunk = optimizeCart({ items: ["eggs", "unobtainium"], ...campus });
-ok(withJunk.unmatched.length === 1 && withJunk.options[0].lineItems.length === 1, "unmatched items are reported, never silently priced");
-ok(/not in the catalog/i.test(withJunk.note), "the note names the unpriced items");
-
-const nothing = optimizeCart({ items: ["unobtainium"] });
-ok(nothing.options.length === 0, "an unpriceable list returns no stores instead of $0 ones");
-
-const noFix = optimizeCart({ items: ["eggs"] });
-ok(noFix.usedFallbackLocation && noFix.origin.lat === DEFAULT_ORIGIN.lat, "missing coordinates fall back to campus");
-ok(!optimizeCart({ items: ["eggs"], ...campus }).usedFallbackLocation, "a real fix is used as-is");
-ok(optimizeCart({ items: ["eggs"], lat: "abc", lng: null }).options.length > 0, "junk coordinates do not throw");
-ok(optimizeCart({ items: [{ name: "eggs", qty: -5 }] }).requested[0].qty === 1, "negative quantity clamps to 1");
-ok(optimizeCart({ items: [{ name: "eggs", qty: 1e9 }] }).requested[0].qty === 99, "absurd quantity is capped");
-ok(optimizeCart({ items: [null, undefined, "", {}, { name: "eggs" }] }).requested.length === 1, "malformed entries are skipped");
-ok(optimizeCart({ items: Array(80).fill("eggs") }).requested[0].qty === 50, "oversized lists are capped at 50 entries");
-ok(optimizeCart().options.length === 0 && optimizeCart({ items: "nope" }).options.length === 0, "no-argument and non-array calls do not throw");
-
-const tight = optimizeCart({ items: ["eggs"], ...campus, maxDistanceMi: 0.01 });
-ok(tight.widenedSearch && tight.options.length > 0, "an over-tight radius widens instead of returning nothing");
-const near = optimizeCart({ items: ["eggs"], ...campus, maxDistanceMi: 2 });
-ok(near.options.length < BRANCHES.length && near.options.every((o) => o.distanceMi <= 2), "the distance filter excludes far branches");
-
 // ---------- preference catalogs + onboarding ----------
-const catalogNames = new Set(PRICES.items.map((item) => item.name));
-
-ok(DIET_OPTIONS.length >= 15, `diet catalog offers ${DIET_OPTIONS.length} options`);
+ok(DIET_RULES.length >= 15, `diet catalog offers ${DIET_RULES.length} options`);
 ok(EQUIPMENT_OPTIONS.length >= 10, `equipment catalog offers ${EQUIPMENT_OPTIONS.length} options`);
-ok(new Set(DIET_OPTIONS.map((d) => d.id)).size === DIET_OPTIONS.length, "diet ids are unique");
+ok(new Set(DIET_RULES.map((d) => d.id)).size === DIET_RULES.length, "diet ids are unique");
 ok(new Set(EQUIPMENT_OPTIONS.map((e) => e.id)).size === EQUIPMENT_OPTIONS.length, "equipment ids are unique");
-ok(DIET_OPTIONS.every((d) => d.id && d.label && d.group && Array.isArray(d.blocks)), "every diet option is fully formed");
+ok(DIET_RULES.every((d) => d.id && d.label && d.group && d.forbids.length), "every diet option is fully formed");
 ok(EQUIPMENT_OPTIONS.every((e) => e.id && e.label), "every equipment option is fully formed");
-// A restriction that names an ingredient the catalog does not have would silently do nothing.
-const strayBlocks = [...new Set(DIET_OPTIONS.flatMap((d) => d.blocks).filter((item) => !catalogNames.has(item)))];
-ok(strayBlocks.length === 0, `every diet block names a real catalog item${strayBlocks.length ? ` (stray: ${strayBlocks})` : ""}`);
-// An option that blocks nothing must say why, so it never looks broken.
-ok(DIET_OPTIONS.every((d) => d.blocks.length > 0 || d.note), "diet options that restrict nothing explain why");
-const dietGroups = new Set(DIET_OPTIONS.map((d) => d.group));
+const dietGroups = new Set(DIET_RULES.map((d) => d.group));
 ok(dietGroups.has("Diet") && dietGroups.has("Allergy") && dietGroups.has("Avoid"), "diet options are grouped for the form");
 for (const required of ["halal", "kosher", "pescatarian", "egg allergy", "soy allergy", "shellfish allergy", "no beef"]) {
-  ok(DIET_OPTIONS.some((d) => d.id === required), `catalog covers "${required}"`);
+  ok(DIET_RULES.some((d) => d.id === required), `catalog covers "${required}"`);
 }
 
 // Every equipment option has a short "vibe" phrase — the client's live note
@@ -527,7 +413,7 @@ if (preferenceMentionSource) {
   );
   const dietMentions = preferenceContext.preferenceMentions(
     "Please make it halal and gluten free",
-    DIET_OPTIONS
+    DIET_RULES
   );
   ok(
     equipmentMentions.map((mention) => mention.id).sort().join(",") === "pressure cooker,rice cooker",
@@ -540,14 +426,12 @@ if (preferenceMentionSource) {
 }
 
 // Saved profiles predate the id scheme, so old spellings must still resolve.
-ok(parseDietSelections("no peanuts")[0]?.id === "peanut allergy", "legacy \"no peanuts\" still maps to the peanut option");
-ok(parseDietSelections("gluten free")[0]?.id === "gluten-free", "unhyphenated \"gluten free\" resolves");
-ok(parseDietSelections("Vegetarian")[0]?.id === "vegetarian", "diet matching ignores case");
-ok(parseDietSelections("lactose intolerant")[0]?.id === "dairy-free", "an alias resolves to its option");
-ok(parseDietSelections("vegan, gluten-free").length === 2, "multiple selections all resolve");
-ok(parseDietSelections("").length === 0 && parseDietSelections(null).length === 0, "empty diet input resolves to nothing");
-ok(blockedIngredientsForDiet("vegan").has("eggs") && !blockedIngredientsForDiet("vegetarian").has("eggs"), "vegan restricts more than vegetarian");
-ok(blockedIngredientsForDiet("egg allergy").has("eggs"), "an allergy blocks its ingredient");
+ok(resolveDietRules("no peanuts")[0]?.id === "peanut allergy", "legacy \"no peanuts\" still maps to the peanut rule");
+ok(resolveDietRules("gluten free")[0]?.id === "gluten-free", "unhyphenated \"gluten free\" resolves");
+ok(resolveDietRules("Vegetarian")[0]?.id === "vegetarian", "diet matching ignores case");
+ok(resolveDietRules("lactose intolerant")[0]?.id === "dairy-free", "an alias resolves to its rule");
+ok(resolveDietRules("vegan, gluten-free").length === 2, "multiple selections all resolve");
+ok(resolveDietRules("").length === 0 && resolveDietRules(null).length === 0, "empty diet input resolves to nothing");
 
 // Onboarding wiring: a one-time wizard, not a recurring login screen.
 ok(html.includes('id="welcomeScreen"'), "the welcome screen exists");
@@ -569,18 +453,12 @@ ok(/if\s*\(dinners\)\s*state\.constraints\.dinners/.test(appJs) && /if\s*\(time\
 ok(appJs.includes("equipmentVibeText") && appJs.includes("dietVibeText"), "the live note describes cooking style instead of a recipe count");
 ok(!/\bmatching\/total\b|dinners fit/i.test(appJs), "no leftover copy claims a specific recipe match count");
 
-// ---------- location description + third-party consent ----------
-// The wording is derived from stores.json, never a hardcoded place string.
-const onCampus = describeLocation(DEFAULT_ORIGIN.lat, DEFAULT_ORIGIN.lng);
-ok(onCampus.text === `At ${DEFAULT_ORIGIN.label}` && onCampus.distanceMi === 0, "a fix on the origin is described as being there");
-const nearBranch = describeLocation(BRANCHES[1].lat, BRANCHES[1].lng);
-ok(nearBranch.nearest === (BRANCHES[1].area || BRANCHES[1].name), "the nearest reference point comes from the store data");
-ok(describeLocation(33.43, -111.95).text.includes("mi from"), "a fix between references is described by measured distance");
-ok(/2\d{3} mi from/.test(describeLocation(40.7128, -74.006).text), "a far fix falls back to distance from the origin");
+// ---------- location description + third-party lookup gate ----------
+// With no branch catalog, the local description is the coordinate pair; the
+// Nominatim lookup is what supplies a place name.
+const described = describeLocation(33.4242, -111.9281);
+ok(described.text === "Your location" && described.coords === "33.4242, -111.9281" && described.source === "coordinates", "a fix is labeled as the user's location with its coordinates alongside");
 ok(describeLocation(NaN, 5) === null && describeLocation(0, 0) === null, "invalid coordinates produce no description");
-// Every label the user can see must exist in the data file, not in the code.
-const labels = [DEFAULT_ORIGIN.label, ...BRANCHES.map((b) => b.area)];
-ok(labels.every((label) => !serverSrc.includes(`"${label}"`)), "no place label is hardcoded in server.js");
 
 async function callGeo(body, geocode) {
   let payload = null;
@@ -593,15 +471,16 @@ async function callGeo(body, geocode) {
   return { status, payload };
 }
 
-// Consent gating is the security-relevant part, so it gets its own checks.
-async function runGeoConsentChecks() {
+// The allowLookup gate is the security-relevant part, so it gets its own
+// checks. app.js sends a literal true when the user shares a location.
+async function runGeoLookupChecks() {
   let geocodeCalls = 0;
   const fakeGeocode = async () => { geocodeCalls++; return { ok: true, placeName: "Tempe, Arizona" }; };
   const at = { lat: 33.4242, lng: -111.9281 };
 
-  const noConsent = await callGeo({ ...at }, fakeGeocode);
-  ok(noConsent.payload.lookupUsed === false && geocodeCalls === 0, "without consent no coordinates are sent to the third party");
-  ok(noConsent.payload.local.text.length > 0, "the local description is returned even without consent");
+  const noFlag = await callGeo({ ...at }, fakeGeocode);
+  ok(noFlag.payload.lookupUsed === false && geocodeCalls === 0, "without the allowLookup flag no coordinates are sent to the third party");
+  ok(noFlag.payload.local.text.length > 0, "the local description is returned even without the lookup");
 
   for (const value of [false, "true", 1, null, undefined]) {
     await callGeo({ ...at, allowLookup: value }, fakeGeocode);
@@ -609,7 +488,7 @@ async function runGeoConsentChecks() {
   ok(geocodeCalls === 0, "only a literal true unlocks the lookup (truthy values do not)");
 
   const consented = await callGeo({ ...at, allowLookup: true }, fakeGeocode);
-  ok(geocodeCalls === 1 && consented.payload.placeName === "Tempe, Arizona", "explicit consent performs the lookup");
+  ok(geocodeCalls === 1 && consented.payload.placeName === "Tempe, Arizona", "an explicit allowLookup performs the lookup");
 
   const lookupFailed = await callGeo({ ...at, allowLookup: true }, async () => ({ ok: false, failure: { message: "down" } }));
   ok(lookupFailed.payload.ok && lookupFailed.payload.placeName === null && lookupFailed.payload.local.text, "a failed lookup still returns the local description");
@@ -622,8 +501,9 @@ async function runGeoConsentChecks() {
 ok(!/postalCode|welcomeZip|profilePostalCode|useProfileZipButton/.test(appJs), "the client asks for no ZIP code");
 ok(!/ZIP code/i.test(html), "the profile and onboarding forms have no ZIP field");
 ok(!/geo\/postal/.test(appJs) && !/geo\/postal/.test(serverSrc), "the postal lookup endpoint is gone with its only caller");
-ok(/allowPlaceLookup:\s*null/.test(appJs), "the client defaults to never sending coordinates");
-ok(html.includes('id="lookupConsent"'), "the consent disclaimer exists in the markup");
+ok(!/allowPlaceLookup|lookupConsent/.test(appJs) && !html.includes("lookupConsent"), "sharing a location is the consent; there is no separate card left");
+ok(appJs.includes("allowLookup: true"), "sharing a location asks the server for the place name");
+ok(!appJs.includes("Place name from OpenStreetMap") && html.includes("OpenStreetMap"), "the location label is name-only; the OpenStreetMap credit stays in the Shop fine print");
 ok(/nominatim/i.test(serverSrc) && !/nominatim/i.test(appJs), "the third-party call is proxied by the server, not the browser");
 
 // app.js wires listeners at module scope, so one missing id throws on load and
@@ -636,9 +516,57 @@ ok(missingIds.length === 0, `every element app.js touches exists in the HTML${mi
 
 ok(html.includes('id="groceryView"'), "index.html has the grocery panel");
 ok(html.includes('data-view="grocery"'), "index.html has the grocery nav entry");
-ok(appJs.includes("/api/grocery/optimize"), "app.js prices the list against nearby stores");
+ok(html.includes('id="planShopButton"') && appJs.includes('$("planShopButton")'), "the meal plan's shopping list has its own add-to-shop button");
+ok(appJs.includes("/api/grocery/offers") && !appJs.includes("/api/grocery/optimize"), "the compare button uses live advertised prices, not the static optimizer");
 ok(appJs.includes("navigator.geolocation"), "app.js asks the browser for a location");
 ok(fs.readFileSync("public/styles.css", "utf8").includes("repeat(4, 1fr)"), "mobile nav has room for the fourth tab");
+
+// ---------- chat-first shell: one pane at every width ----------
+{
+  const styles = fs.readFileSync("public/styles.css", "utf8");
+  ok(
+    /body\[data-view="chat"\] \.conversation-panel/.test(styles) &&
+      /body\[data-view="plan"\] \.plan-panel/.test(styles) &&
+      /body\[data-view="grocery"\] \.grocery-panel/.test(styles),
+    "the workspace shows one pane at a time at every width"
+  );
+  ok(!/mobile-active/.test(appJs) && !/mobile-active/.test(styles), "the mobile-only view switch is gone");
+  ok(!/max-width: 980px/.test(appJs), "a nav click changes the pane instead of only moving focus");
+  ok(/let activeView = "chat"/.test(appJs), "chat is the home view");
+  ok(html.indexOf('id="useFirstStrip"') > html.indexOf('id="pantryDrawer"'), "the use-first strip lives in the pantry drawer");
+}
+// Wide screens use the spare space: a centered chat column and a pantry panel.
+{
+  const styles = fs.readFileSync("public/styles.css", "utf8");
+  const desktopNav = html.match(/<nav class="desktop-nav"[\s\S]*?<\/nav>/)?.[0] || "";
+  const mobileNav = html.match(/<nav class="mobile-nav"[\s\S]*?<\/nav>/)?.[0] || "";
+  ok(!desktopNav.includes('data-view="pantry"'), "the desktop rail drops the pantry tab because the panel is always there");
+  ok(mobileNav.includes('data-view="pantry"'), "mobile keeps its pantry tab");
+  const wideShellCss = styles.match(/@media \(min-width: 981px\) \{[\s\S]*?\n\}/)?.[0] || "";
+  ok(
+    /grid-template-columns: 76px minmax\(0, 1fr\) minmax\(270px, 320px\)/.test(wideShellCss) &&
+      /\.pantry-drawer:not\(\.profile-drawer\) \.drawer-scrim \{ display: none/.test(wideShellCss) &&
+      /\.pantry-drawer:not\(\.profile-drawer\) \.drawer-sheet \{[\s\S]{0,120}transform: none/.test(wideShellCss),
+    "wide screens show the pantry as a static side column, not a drawer"
+  );
+  ok(!/\.pantry-drawer \.drawer-sheet/.test(wideShellCss), "the shared drawer class does not drag the profile overlay into the column");
+  ok(/\.conversation-heading,[\s\S]{0,120}max-width: 760px/.test(styles), "the chat column is capped and centered");
+  ok(/\.conversation-panel\.is-empty \.messages/.test(styles) && /updateChatEmptyState/.test(appJs), "an empty chat centers its greeting and prompts");
+  ok(/function openPantry\(\) \{\s*\n\s*if \(isWideShell\(\)\) return;/.test(appJs), "the drawer only opens where the pantry is not a panel");
+}
+// Fridge, pantry, and kitchen each keep one job in visible copy.
+ok(!/mini-fridge/.test(appJs) && !/mini-fridge/.test(html), "the food list is never called a mini-fridge");
+ok(
+  html.includes("Add from a fridge photo") && html.includes('id="pantryTitle">Your pantry') && html.includes("Your kitchen data"),
+  "fridge is the appliance, pantry is the list, kitchen is the saved bundle"
+);
+// Labels stay fixed; counts and states move to a count or a disabled state.
+ok(
+  appJs.includes('$("fromPlanButton").textContent = "Add plan items"') &&
+    appJs.includes('$("planShopButton").textContent = "Add to shop"') &&
+    !/No meal plan yet|meal-plan item/.test(appJs),
+  "the add-to-shop buttons keep fixed labels"
+);
 
 const PROFILE_EXTRA_DIET_TERMS_SOURCE = (appJs.match(/const PROFILE_EXTRA_DIET_TERMS = \[([^\]]*)\]/)?.[1] || "")
   .split(",")
@@ -831,6 +759,25 @@ function aiEnvelope(plan) {
   };
 }
 
+// In-process route checks inject a deterministic live-service boundary. The
+// production service performs the Tavily/page/JSON-LD work; this fixture keeps
+// those tests focused on citation, diet, swap, and shopping behavior.
+const testLiveRecipeService = {
+  async findRecipes() {
+    return {
+      ok: true,
+      candidates: liveRecipeFixtures.map((recipe) => ({
+        ...recipe,
+        // The fixture service represents candidates already filtered by the
+        // live source verifier; keep raw facts neutral so each route test can
+        // exercise the model's post-generation diet check independently.
+        rawIngredients: ["rice", "spinach", "beans"],
+        rawInstructions: ["Cook the verified ingredients in the listed equipment."],
+      }))
+    };
+  }
+};
+
 function callPlan(body, chat) {
   return new Promise((resolve, reject) => {
     let statusCode = 200;
@@ -844,7 +791,7 @@ function callPlan(body, chat) {
         resolve({ statusCode, payload });
       }
     };
-    Promise.resolve(handlePlanRequest(req, res, { chat })).catch(reject);
+    Promise.resolve(handlePlanRequest(req, res, { chat, liveRecipeService: testLiveRecipeService })).catch(reject);
   });
 }
 
@@ -999,9 +946,13 @@ async function runRouteChecks() {
     return aiEnvelope(groundingCalls === 1 ? unrelatedPotatoAdaptation : validAiPlan);
   });
   ok(
-    groundingCalls === 2 && grounded.payload.ok && grounded.payload.repaired === true &&
-      grounded.payload.dinners[0].sourceRecipe === "Spinach Rice Breakfast Bowls",
-    "an egg-and-rice dinner cannot retain the Microwave Potato citation"
+    groundingCalls === 1 && grounded.payload.ok && grounded.payload.repaired === undefined &&
+      grounded.payload.dinners[0].sourceRecipe === "Microwave Potato" &&
+      grounded.payload.dinners[0].timeMin === 10 &&
+      grounded.payload.dinners[0].needs.join(",") === "potatoes,olive oil,butter" &&
+      grounded.payload.dinners[0].steps.join(" ") === "Cook the verified ingredients in the listed equipment." &&
+      !JSON.stringify(grounded.payload.dinners[0]).includes("eggs"),
+    "contradictory model fields are discarded in favor of the cited Microwave Potato facts"
   );
 
   const unrelatedPantryQuesadilla = {
@@ -1026,13 +977,12 @@ async function runRouteChecks() {
     return aiEnvelope(cleanRepairCalls === 1 ? unrelatedPantryQuesadilla : validAiPlan);
   });
   ok(
-    cleanRepairCalls === 2 && cleanRepair.payload.ok && cleanRepair.payload.repaired === true,
-    "an unrelated pantry mixture cannot retain the peanut-butter-banana quesadilla citation"
-  );
-  ok(
-    !cleanRepairPrompt.includes("Everything-in-the-pantry quesadilla") &&
-      /start (?:a new plan|over)/i.test(cleanRepairPrompt) && /adaptations? (?:are|is) not allowed/i.test(cleanRepairPrompt),
-    "recipe repair starts fresh with an exact recipe instead of anchoring on the rejected meal"
+    cleanRepairCalls === 1 && cleanRepair.payload.ok && cleanRepair.payload.repaired === undefined &&
+      cleanRepair.payload.dinners[0].sourceRecipe === "Peanut Butter Banana Quesadillas" &&
+      cleanRepair.payload.dinners[0].needs.join(",") === "tortillas,peanut butter,banana" &&
+      cleanRepair.payload.dinners[0].steps.join(" ") === "Cook the verified ingredients in the listed equipment." &&
+      cleanRepairPrompt === "",
+    "contradictory pantry fields are discarded in favor of the cited quesadilla facts"
   );
 
   const duplicatePantryNeed = {
@@ -1059,7 +1009,7 @@ async function runRouteChecks() {
     return aiEnvelope(duplicatePantryNeed);
   });
   ok(
-    duplicateNeedCalls === 2 && duplicateNeedRepair.payload.ok && duplicateNeedRepair.payload.repaired === true &&
+    duplicateNeedCalls === 1 && duplicateNeedRepair.payload.ok && duplicateNeedRepair.payload.repaired === undefined &&
       duplicateNeedRepair.payload.dinners[0].usesPantry.join(",") === "potatoes,butter" &&
       duplicateNeedRepair.payload.dinners[0].needs.map((need) => typeof need === "string" ? need : need.item).join(",") === "olive oil" &&
       duplicateNeedRepair.payload.shoppingList.map((need) => need.item).join(",") === "olive oil",
@@ -1089,9 +1039,9 @@ async function runRouteChecks() {
     return aiEnvelope(implausiblyFastPotato);
   });
   ok(
-    timeValidationCalls === 2 && timeRejected.statusCode === 200 && timeRejected.payload.repaired === true &&
+    timeValidationCalls === 1 && timeRejected.statusCode === 200 && timeRejected.payload.repaired === undefined &&
       timeRejected.payload.dinners[0].timeMin === 10,
-    "a cited recipe's implausible time is repaired to its verified time"
+    "a cited recipe's implausible time is canonicalized to its verified time"
   );
 
   const tooSlowForRequest = {
@@ -1156,7 +1106,7 @@ async function runRouteChecks() {
     return aiEnvelope(unapprovedAiPlan);
   });
   ok(
-    unapprovedCalls === 2 && unapproved.statusCode === 502 && unapproved.payload.ok === false && /approved recipe catalog/.test(unapproved.payload.failure?.message || ""),
+    unapprovedCalls === 2 && unapproved.statusCode === 502 && unapproved.payload.ok === false && /verified live recipe candidates/.test(unapproved.payload.failure?.message || ""),
     "unapproved AI recipe citations are rejected after repair"
   );
 
@@ -1180,9 +1130,9 @@ async function runRouteChecks() {
     return aiEnvelope(unpricedAiPlan);
   });
   ok(
-    unpricedCalls === 2 && unpriced.statusCode === 200 && unpriced.payload.repaired === true &&
+    unpricedCalls === 1 && unpriced.statusCode === 200 && unpriced.payload.repaired === undefined &&
       !unpriced.payload.shoppingList.some((item) => item.item === "unobtainium"),
-    "repair removes an unpriced ingredient that is not part of the cited recipe"
+    "canonical grounding removes an unpriced ingredient that is not part of the cited recipe"
   );
 
   // The model's own shoppingList/leftovers/totalCost are ignored: the server owns
@@ -1204,13 +1154,10 @@ async function runRouteChecks() {
   }));
   ok(inventedNumbers.statusCode === 200 && inventedNumbers.payload.ok, "a plan with named needs is accepted");
   ok(
-    inventedNumbers.payload.shoppingList.every((entry) => entry.qty === 1 && entry.store !== "nowhere"),
-    "the server prices from its own catalog and buys one package per dinner that needs it"
+    inventedNumbers.payload.shoppingList.every((entry) => entry.qty === 1 && !("store" in entry) && !("packPrice" in entry)),
+    "the server builds one shopping line per dinner from the model's names, with no model prices"
   );
-  ok(
-    inventedNumbers.payload.totalCost === +(cheapestPack("eggs").packPrice + cheapestPack("butter").packPrice).toFixed(2),
-    "the total is computed, not taken from the model"
-  );
+  ok(inventedNumbers.payload.totalCost === undefined, "no plan total is invented from model numbers");
   ok(
     Array.isArray(inventedNumbers.payload.leftovers) && inventedNumbers.payload.leftovers.length === 0 &&
       !/trust me/.test(JSON.stringify(inventedNumbers.payload)),
@@ -1302,8 +1249,8 @@ async function runRouteChecks() {
     "a celiac plan built from gluten-free substitutes is accepted and priced"
   );
   ok(
-    celiac.payload.shoppingList.some((entry) => entry.item === "corn tortillas" && entry.packPrice > 0),
-    "the gluten-free substitute is priced as itself, not as flour tortillas"
+    celiac.payload.shoppingList.some((entry) => entry.item === "corn tortilla"),
+    "the gluten-free substitute keeps its own name on the live shopping list"
   );
 
   const wheatForCeliac = {
@@ -1327,8 +1274,8 @@ async function runRouteChecks() {
   };
   const celiacBlocked = await callPlan(celiacRequest, async () => aiEnvelope(wheatForCeliac));
   ok(
-    celiacBlocked.statusCode === 502 && /gluten/.test(celiacBlocked.payload.failure?.message || ""),
-    "flour tortillas in a celiac plan are rejected by the catalog tag, naming gluten"
+    celiacBlocked.statusCode === 502 && /gluten/i.test(celiacBlocked.payload.failure?.message || ""),
+    "flour tortillas in a celiac plan are rejected by the word net, naming the gluten rule"
   );
 
   // Swapping a dinner: the exclusion is on the recipe, not the display title,
@@ -1602,7 +1549,7 @@ async function runRouteChecks() {
   ok(bounded.savedRecipes.length <= 40 && bounded.messages.length <= 30, "a restored file cannot grow the stored state without limit");
   ok(client.normaliseState({ location: { lat: "x", lng: 4 } }).location === null, "a restored location with no usable coordinates is dropped");
 
-  await runGeoConsentChecks();
+  await runGeoLookupChecks();
 
   // With planning fully AI-driven and no local recipe filter, a diet
   // restriction only means something if it reaches the model as a concrete
@@ -1632,9 +1579,9 @@ async function runRouteChecks() {
     return aiEnvelope(veganSafePlan);
   });
   ok(dietPlan.payload.ok, "a plan request with diet restrictions still succeeds");
-  ok(/Hard exclusions/.test(dietPrompt), "the prompt states hard exclusions for an active diet");
-  for (const item of blockedIngredientsForDiet("vegan")) {
-    ok(dietPrompt.includes(item), `the exclusion list names "${item}" for a vegan request`);
+  ok(/never use, buy, or mention/.test(dietPrompt), "the prompt states the forbidden terms as strict exclusions");
+  for (const term of veganRule.forbids) {
+    ok(dietPrompt.includes(term), `the exclusion list names "${term}" for a vegan request`);
   }
   ok(dietPrompt.includes("No pork or alcohol"), "an advisory-only restriction's note reaches the prompt");
 
@@ -1659,6 +1606,11 @@ async function runRouteChecks() {
   ok(!/Hard exclusions/.test(noDietPrompt), "no diet means no fabricated exclusion list");
 
   n += await require("./test-fixes")();
+  n += await require("./test-grocery-offers")();
+  n += await require("./test-sitemap-recipe-discovery")();
+  n += await require("./test-rcp-recipe-discovery")();
+  n += await require("./test-curated-recipe-discovery")();
+  n += await require("./test-local-offer-ui")();
   console.log(`\nALL ${n} CHECKS PASSED`);
 }
 

@@ -108,23 +108,18 @@
     </header>
 
     <nav class="desktop-nav" aria-label="Main navigation">
-      <button class="nav-item active" data-view="plan" aria-current="page">
-        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 3h10M5 6h14v15H5zM8 10h8M8 14h5"/></svg>
-        <span>Plan</span>
-      </button>
-      <button class="nav-item" data-view="chat">
+      <button class="nav-item active" data-view="chat" aria-current="page">
         <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v12H8l-4 3z"/></svg>
         <span>Chat</span>
+      </button>
+      <button class="nav-item" data-view="plan">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 3h10M5 6h14v15H5zM8 10h8M8 14h5"/></svg>
+        <span>Plan</span>
       </button>
       <button class="nav-item" data-view="grocery">
         <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 5h2.2l2.3 10h9.4l2.1-7H6.4"/><circle cx="9" cy="19" r="1.4"/><circle cx="17" cy="19" r="1.4"/></svg>
         <span>Shop</span>
         <span class="nav-count" id="groceryNavCount">0</span>
-      </button>
-      <button class="nav-item" data-view="pantry">
-        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 3h12v18H6zM6 9h12M15 6h.01M15 13h.01"/></svg>
-        <span>Pantry</span>
-        <span class="nav-count" id="pantryNavCount">0</span>
       </button>
       <div class="nav-spacer"></div>
       <button class="nav-item" id="resetDemoButton">
@@ -180,25 +175,12 @@
       </section>
 
       <section class="plan-panel" id="planView" aria-label="Meal plan">
-        <div class="use-first-strip" id="useFirstStrip">
-          <div class="tape-label">
-            <span class="tape-kicker">USE FIRST</span>
-            <strong id="useFirstText">Nothing marked yet</strong>
-          </div>
-          <button id="markUseSoonButton">Mark an item</button>
-        </div>
-
         <div class="plan-scroll">
           <div class="plan-header">
             <div>
               <p class="eyebrow">Your dinner plan</p>
               <h2 id="planTitle">Build your first plan</h2>
-              <p id="planSubtitle">Your dinners and full-package grocery cost will show up here.</p>
-            </div>
-            <div class="budget-stamp" id="budgetStamp" hidden>
-              <span>CHECKOUT</span>
-              <strong id="budgetTotal">$0.00</strong>
-              <small id="budgetLimit">of $20</small>
+              <p id="planSubtitle">Your dinners and shopping list will show up here.</p>
             </div>
           </div>
 
@@ -207,8 +189,8 @@
               <span></span><span></span><span></span>
               <b>TOTAL&nbsp;&nbsp; $—</b>
             </div>
-            <h3>Tell me what food you have</h3>
-            <p>Two or three things is enough. Say how much you can spend, and I will do the rest.</p>
+            <h3>No plan yet</h3>
+            <p>Ask in Chat for dinners and a shopping list.</p>
           </div>
 
           <div id="planContent" hidden>
@@ -220,7 +202,7 @@
                 <div>
                   <h3>What to buy</h3>
                 </div>
-                <span class="mock-label">Mock Tempe prices</span>
+                <button class="ghost-button plan-shop-button" id="planShopButton" type="button">Add to shop</button>
               </div>
               <div class="receipt" id="shoppingList"></div>
             </section>
@@ -232,55 +214,38 @@
           <div class="plan-header">
             <div>
               <h2>Shopping list</h2>
-              <p>Add what you need to buy, then see which nearby store is cheapest for the whole list.</p>
+              <p>Add what you need to buy, then see which store is cheapest for the whole list.</p>
             </div>
-            <span class="mock-label">Mock Tempe prices</span>
           </div>
 
           <div class="location-bar" id="locationBar">
             <div class="tape-label">
               <span class="tape-kicker">SHOPPING NEAR</span>
               <strong id="locationLabel">No location shared yet</strong>
-              <small id="locationDetail" hidden></small>
             </div>
             <div class="location-actions">
               <button id="useLocationButton" type="button">Use my location</button>
             </div>
           </div>
 
-          <div class="consent-card" id="lookupConsent" hidden>
-            <div>
-              <p class="eyebrow">Before we look that up</p>
-              <p class="consent-copy">
-                FridgeFuse worked out your area from its own store list, entirely on
-                this machine. To show a real place name instead, it would send your
-                coordinates — rounded to about 110 metres — to OpenStreetMap's free
-                Nominatim service. That is a third party outside this app.
-              </p>
-              <p class="consent-copy subtle">
-                Say no and nothing leaves your machine. Store distances and prices are
-                calculated locally either way, so the comparison works exactly the same.
-              </p>
-            </div>
-            <div class="consent-actions">
-              <button class="ghost-button" id="declineLookupButton" type="button">No, keep it local</button>
-              <button class="primary-button" id="allowLookupButton" type="button">Look up the name</button>
-            </div>
-          </div>
-
           <form class="grocery-add" id="groceryForm">
             <label class="sr-only" for="groceryInput">Add an item to buy</label>
-            <input id="groceryInput" type="text" list="catalogOptions" placeholder="Add eggs, milk, rice…" autocomplete="off">
-            <datalist id="catalogOptions"></datalist>
+            <input id="groceryInput" type="text" placeholder="Add eggs, milk, rice…" autocomplete="off">
             <button type="submit">Add</button>
           </form>
 
           <div class="grocery-list" id="groceryList"></div>
 
+          <label class="offer-area-field" for="offerAreaInput">
+            <span>Search area</span>
+            <input id="offerAreaInput" type="text" value="Tempe, AZ 85281" maxlength="120" autocomplete="postal-code">
+          </label>
+
           <div class="grocery-actions">
             <button class="ghost-button" id="fromPlanButton" type="button">Add what my plan needs</button>
             <button class="primary-button" id="compareButton" type="button">Find the cheapest store</button>
           </div>
+          <p class="grocery-live-note">Live search: checks Walmart, ALDI, and Fry's/Kroger once per item, then ranks the ballpark totals. Results are cached for six hours. Place names © OpenStreetMap contributors.</p>
 
           <div class="grocery-results" id="groceryResults" aria-live="polite"></div>
         </div>
@@ -299,6 +264,12 @@
           </button>
         </div>
         <p class="drawer-intro">Type what food you have. Tap an item to mark what needs eating first.</p>
+        <div class="use-first-strip" id="useFirstStrip">
+          <div class="tape-label">
+            <span class="tape-kicker">USE FIRST</span>
+            <strong id="useFirstText">Nothing marked yet</strong>
+          </div>
+        </div>
         <form class="pantry-add" id="pantryForm">
           <label class="sr-only" for="pantryInput">Add pantry item</label>
           <input id="pantryInput" type="text" placeholder="Add eggs, some rice…" autocomplete="off">
@@ -440,8 +411,8 @@
       </div>
     </aside>
     <nav class="mobile-nav" aria-label="Mobile navigation">
-      <button class="active" data-view="plan"><span>Plan</span></button>
-      <button data-view="chat"><span>Chat</span></button>
+      <button class="active" data-view="chat"><span>Chat</span></button>
+      <button data-view="plan"><span>Plan</span></button>
       <button data-view="grocery"><span>Shop</span><b id="mobileGroceryCount">0</b></button>
       <button data-view="pantry"><span>Pantry</span><b id="mobilePantryCount">0</b></button>
     </nav>

@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "note": "The single source of truth for dietary preferences: the profile form (via /api/preferences), the plan prompt, and the post-generation check are all built from this file. 'excludesTags' is matched against a catalog item's own tags in data/prices.json and is exact — it is how a known ingredient is judged, and it is why adding a catalog item never means editing a list of names here. 'forbids' is the word-level net for free text with no catalog entry: a cooking step, or an ingredient the catalog has never heard of. 'allows' phrases are removed before 'forbids' is matched, so 'peanut butter' does not trip dairy-free's 'butter'. Word matching is boundary-safe and plural-tolerant: 'egg' catches 'eggs' but never 'eggplant'. 'group' places the option in the profile form; 'note' explains an option the Tempe catalog cannot enforce, so it never looks broken. A bad or empty file makes the server refuse to start, by design.",
+  "note": "The single source of truth for dietary preferences: the profile form (via /api/preferences), the plan prompt, and the post-generation check are all built from this file. 'forbids' is the word-level net checked against ingredient names, cooking steps, and titles. 'allows' phrases are removed before 'forbids' is matched, so 'peanut butter' does not trip dairy-free's 'butter' and 'almond milk' does not trip its 'milk'. Word matching is boundary-safe and plural-tolerant: 'egg' catches 'eggs' but never 'eggplant'. 'group' places the option in the profile form; 'note' carries the advisory text shown for that option. A bad or empty file makes the server refuse to start, by design.",
   "rules": [
     {
       "id": "vegetarian",
@@ -12,13 +12,6 @@
         "no meat",
         "meat free",
         "meat-free"
-      ],
-      "excludesTags": [
-        "meat",
-        "poultry",
-        "seafood",
-        "fish",
-        "shellfish"
       ],
       "forbids": [
         "meat",
@@ -92,16 +85,6 @@
         "plant based",
         "plant-based",
         "no animal products"
-      ],
-      "excludesTags": [
-        "meat",
-        "poultry",
-        "seafood",
-        "fish",
-        "shellfish",
-        "dairy",
-        "egg",
-        "honey"
       ],
       "forbids": [
         "meat",
@@ -237,10 +220,6 @@
         "pescatarian",
         "pescetarian"
       ],
-      "excludesTags": [
-        "meat",
-        "poultry"
-      ],
       "forbids": [
         "meat",
         "beef",
@@ -283,7 +262,7 @@
         "vegan fish sauce",
         "vegetarian worcestershire sauce"
       ],
-      "note": "Fish is allowed; the catalog has none yet.",
+      "note": "Fish is allowed.",
       "reason": "pescatarian plans exclude meat and poultry but allow seafood"
     },
     {
@@ -293,10 +272,6 @@
       "aliases": [
         "halal",
         "halaal"
-      ],
-      "excludesTags": [
-        "pork",
-        "alcohol"
       ],
       "forbids": [
         "pork",
@@ -318,7 +293,7 @@
         "mirin",
         "cooking wine"
       ],
-      "note": "No pork or alcohol is in the catalog. Choose certified meat in store.",
+      "note": "No pork or alcohol. Choose certified meat in store.",
       "reason": "halal plans exclude pork and alcohol; certification cannot be checked from a price catalog"
     },
     {
@@ -327,10 +302,6 @@
       "group": "Diet",
       "aliases": [
         "kosher"
-      ],
-      "excludesTags": [
-        "pork",
-        "shellfish"
       ],
       "forbids": [
         "pork",
@@ -354,7 +325,7 @@
         "crawfish",
         "krill"
       ],
-      "note": "No pork or shellfish is in the catalog. Certification is not tracked.",
+      "note": "No pork or shellfish. Certification is not tracked.",
       "reason": "kosher plans exclude pork and shellfish; certification is not tracked here"
     },
     {
@@ -369,9 +340,6 @@
         "peanut-free",
         "allergic to peanuts",
         "peanuts",
-        "peanut"
-      ],
-      "excludesTags": [
         "peanut"
       ],
       "forbids": [
@@ -404,10 +372,6 @@
         "tree nuts",
         "no nuts",
         "no tree nuts"
-      ],
-      "excludesTags": [
-        "tree-nut",
-        "peanut"
       ],
       "forbids": [
         "almond",
@@ -454,9 +418,6 @@
         "lactose-free",
         "lactose intolerant",
         "lactose"
-      ],
-      "excludesTags": [
-        "dairy"
       ],
       "forbids": [
         "milk",
@@ -526,9 +487,6 @@
         "coeliac",
         "gluten allergy"
       ],
-      "excludesTags": [
-        "gluten"
-      ],
       "forbids": [
         "bread",
         "breadcrumbs",
@@ -578,7 +536,7 @@
         "tamari",
         "coconut aminos"
       ],
-      "reason": "gluten-free plans exclude wheat, barley, and rye — including flour tortillas and wheat-brewed soy sauce"
+      "reason": "gluten-free plans exclude wheat, barley, and rye \u2014 including flour tortillas and wheat-brewed soy sauce"
     },
     {
       "id": "egg allergy",
@@ -589,9 +547,6 @@
         "no eggs",
         "egg free",
         "no egg"
-      ],
-      "excludesTags": [
-        "egg"
       ],
       "forbids": [
         "egg",
@@ -623,9 +578,6 @@
         "soy free",
         "soya"
       ],
-      "excludesTags": [
-        "soy"
-      ],
       "forbids": [
         "soy",
         "soy sauce",
@@ -652,9 +604,6 @@
         "no shellfish",
         "shellfish"
       ],
-      "excludesTags": [
-        "shellfish"
-      ],
       "forbids": [
         "shrimp",
         "prawns",
@@ -668,7 +617,7 @@
         "crawfish",
         "krill"
       ],
-      "note": "No shellfish is in the catalog.",
+      "note": "Shellfish is excluded.",
       "reason": "a shellfish allergy excludes crustaceans and molluscs"
     },
     {
@@ -678,9 +627,6 @@
       "aliases": [
         "fish allergy",
         "no fish"
-      ],
-      "excludesTags": [
-        "fish"
       ],
       "forbids": [
         "fish",
@@ -699,7 +645,7 @@
         "vegan fish sauce",
         "vegetarian worcestershire sauce"
       ],
-      "note": "No fish is in the catalog.",
+      "note": "Fish is excluded.",
       "reason": "a fish allergy excludes finned fish and the sauces made from them"
     },
     {
@@ -709,9 +655,6 @@
       "aliases": [
         "sesame allergy",
         "no sesame",
-        "sesame"
-      ],
-      "excludesTags": [
         "sesame"
       ],
       "forbids": [
@@ -724,7 +667,7 @@
         "zaatar",
         "hummus"
       ],
-      "note": "No sesame is in the catalog.",
+      "note": "Sesame is excluded.",
       "reason": "a sesame allergy excludes sesame and the pastes and blends made from it"
     },
     {
@@ -735,9 +678,6 @@
         "no pork",
         "pork free",
         "pork-free"
-      ],
-      "excludesTags": [
-        "pork"
       ],
       "forbids": [
         "pork",
@@ -750,7 +690,7 @@
         "pepperoni",
         "salami"
       ],
-      "note": "No pork is in the catalog.",
+      "note": "Pork is excluded.",
       "reason": "pork is avoided for religious, health, or personal reasons"
     },
     {
@@ -761,9 +701,6 @@
         "no beef",
         "beef free",
         "beef-free"
-      ],
-      "excludesTags": [
-        "beef"
       ],
       "forbids": [
         "beef",
@@ -783,9 +720,6 @@
         "low salt",
         "less sodium",
         "low-sodium"
-      ],
-      "excludesTags": [
-        "high-sodium"
       ],
       "forbids": [
         "soy sauce",

@@ -236,18 +236,35 @@ button.mobile-reset-button { display: none; }
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(340px, 0.82fr) minmax(510px, 1.18fr);
+  grid-template-columns: minmax(0, 1fr);
 }
+
+/* One pane at a time at every width. body[data-view] is the single switch. */
+.conversation-panel,
+.plan-panel,
+.grocery-panel { display: none; }
+body[data-view="chat"] .conversation-panel { display: flex; }
+body[data-view="plan"] .plan-panel { display: block; }
+body[data-view="grocery"] .grocery-panel { display: block; }
 
 .conversation-panel {
   min-width: 0;
   min-height: 0;
-  display: flex;
   flex-direction: column;
+  align-items: center;
   padding: 32px clamp(22px, 3vw, 46px) 24px;
-  border-right: 1px solid var(--line);
   background: var(--paper);
 }
+
+/* A conversation reads best as a column, not a full-width sheet. */
+.conversation-heading,
+.messages,
+.starter-prompts,
+.composer { width: 100%; max-width: 760px; }
+
+/* Before the first message, the greeting and prompts sit in the middle. */
+.conversation-panel.is-empty .messages { flex: 0 0 auto; margin: auto -8px 14px; }
+.conversation-panel.is-empty .starter-prompts { margin-bottom: auto; }
 
 .conversation-heading {
   display: flex;
@@ -466,17 +483,19 @@ button.mobile-pantry-button { display: none; }
 }
 .tape-label strong { font-size: 14px; }
 
-.use-first-strip button {
-  padding: 8px 11px;
-  border: 1px solid rgba(23, 36, 33, 0.28);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.28);
-  font-size: 11px;
-  font-weight: 700;
+/* In the pantry drawer the strip is a card, not a full-width band. */
+.pantry-drawer .use-first-strip,
+.pantry-drawer .use-first-strip.is-empty {
+  min-height: 0;
+  margin: 0 0 18px;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
 }
+.pantry-drawer .use-first-strip:not(.is-empty) { border-color: var(--gold-edge); }
 
 .plan-scroll {
-  height: calc(100% - 76px);
+  height: 100%;
   overflow-y: auto;
   padding: 34px clamp(22px, 4vw, 54px) 60px;
   scrollbar-width: thin;
@@ -497,20 +516,6 @@ button.mobile-pantry-button { display: none; }
   line-height: 1.45;
 }
 
-.budget-stamp {
-  flex: 0 0 auto;
-  min-width: 112px;
-  padding: 10px 12px;
-  transform: rotate(1.2deg);
-  border: 2px solid var(--maroon);
-  border-radius: 9px;
-  color: var(--maroon);
-  font-family: var(--utility);
-  text-align: right;
-}
-.budget-stamp span, .budget-stamp small { display: block; font-size: 9px; }
-.budget-stamp strong { display: block; margin: 2px 0; font-size: 21px; }
-.budget-stamp.over { border-color: var(--alert); color: var(--alert); }
 
 .empty-plan {
   max-width: 370px;
@@ -616,15 +621,7 @@ button.mobile-pantry-button { display: none; }
 }
 .section-heading.compact { margin-bottom: 12px; }
 .section-heading h3 { font-size: 23px; }
-.mock-label {
-  padding: 5px 7px;
-  border: 1px solid #c9c0bc;
-  border-radius: 6px;
-  color: var(--ink-soft);
-  font-family: var(--utility);
-  font-size: 9px;
-  text-transform: uppercase;
-}
+.plan-shop-button { padding: 9px 13px; font-size: 12px; }
 
 .receipt {
   position: relative;
@@ -664,7 +661,6 @@ button.mobile-pantry-button { display: none; }
 .receipt-row input:checked { border-color: var(--maroon); background: var(--maroon); box-shadow: inset 0 0 0 3px white; }
 .receipt-item strong { display: block; font-size: 12px; text-transform: uppercase; }
 .receipt-item small { display: block; margin-top: 3px; color: var(--ink-soft); font-family: var(--body); font-size: 11px; }
-.receipt-price { font-weight: 600; }
 .receipt-total {
   display: flex;
   justify-content: space-between;
@@ -674,12 +670,7 @@ button.mobile-pantry-button { display: none; }
 }
 
 /* ---------- groceries ---------- */
-/* The grocery tab takes the whole workspace; chat + plan stay paired. */
-.grocery-panel { display: none; min-width: 0; min-height: 0; overflow: hidden; background: var(--enamel); }
-body[data-view="grocery"] .workspace { grid-template-columns: minmax(0, 1fr); }
-body[data-view="grocery"] .conversation-panel,
-body[data-view="grocery"] .plan-panel { display: none; }
-body[data-view="grocery"] .grocery-panel { display: block; }
+.grocery-panel { min-width: 0; min-height: 0; overflow: hidden; background: var(--enamel); }
 
 .grocery-scroll {
   height: 100%;
@@ -712,33 +703,6 @@ body[data-view="grocery"] .grocery-panel { display: block; }
 .location-bar button:hover { background: rgba(255, 255, 255, 0.6); }
 .location-bar.located { border-color: var(--maroon); background: var(--maroon-wash); }
 .location-bar.located .tape-kicker { color: var(--maroon); }
-
-.location-bar .tape-label small {
-  margin-top: 3px;
-  font-size: 11px;
-  opacity: 0.75;
-}
-
-.consent-card {
-  display: grid;
-  gap: 14px;
-  margin-top: 12px;
-  padding: 16px 18px;
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--maroon);
-  border-radius: 12px;
-  background: white;
-}
-.consent-copy {
-  max-width: 62ch;
-  margin: 0 0 8px;
-  font-size: 13px;
-  line-height: 1.5;
-}
-.consent-copy:last-child { margin-bottom: 0; }
-.consent-copy.subtle { color: var(--ink-soft); }
-.consent-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.consent-actions button { padding: 10px 15px; font-size: 12px; }
 
 .grocery-add {
   display: grid;
@@ -825,6 +789,7 @@ body[data-view="grocery"] .grocery-panel { display: block; }
 }
 
 .grocery-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 4px; }
+.grocery-live-note { margin: 0 0 10px; color: var(--ink-soft); font-size: 11px; line-height: 1.4; }
 .primary-button {
   padding: 12px 18px;
   border: 0;
@@ -847,6 +812,143 @@ body[data-view="grocery"] .grocery-panel { display: block; }
 }
 .ghost-button:hover:not(:disabled) { border-color: var(--maroon); color: var(--maroon); }
 .ghost-button:disabled { opacity: 0.5; cursor: default; }
+
+.advertised-offers {
+  margin-top: 30px;
+  padding: 20px;
+  border: 1px solid #d8c9c4;
+  border-radius: 15px;
+  background: #fffdfb;
+}
+.advertised-heading,
+.advertised-results-heading,
+.offer-selection-heading,
+.advertised-item-heading,
+.advertised-source-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.advertised-heading h2 { margin: 0; font-size: 23px; }
+.advertised-copy {
+  max-width: 720px;
+  margin: 8px 0 17px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.offer-area-field {
+  display: grid;
+  gap: 6px;
+  max-width: 420px;
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 700;
+}
+.offer-area-field input {
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid #c8bfbb;
+  border-radius: 9px;
+  background: white;
+  color: var(--ink);
+  outline: 0;
+}
+.offer-area-field input:focus { border-color: var(--maroon); }
+.offer-selection-heading { margin: 18px 0 8px; color: var(--ink); font-size: 12px; }
+.offer-selection-heading span { color: var(--ink-soft); font-family: var(--utility); font-size: 10px; }
+.offer-item-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+}
+.offer-item-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: white;
+  color: var(--ink-soft);
+  font-size: 12px;
+  cursor: pointer;
+}
+.offer-item-choice:has(input:checked) { border-color: var(--maroon); color: var(--maroon); }
+.offer-item-choice input { accent-color: var(--maroon); }
+.offer-selection-note,
+.offer-empty {
+  flex: 1 1 100%;
+  margin: 2px 0 0;
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.advertised-search-button { margin-top: 15px; }
+.offer-results { margin-top: 22px; }
+.advertised-results-heading { padding-top: 18px; border-top: 1px solid var(--line); }
+.advertised-results-heading h3 { margin: 0; font-size: 18px; }
+.advertised-results-heading small { color: var(--ink-soft); font-size: 10px; }
+.advertised-results-heading + .results-note { margin-top: 10px; }
+.advertised-branches {
+  margin: 17px 0;
+  padding: 12px 0 15px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.advertised-branches-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.advertised-branches-heading h3 { margin: 0; font-size: 14px; }
+.advertised-branches-heading small { color: var(--ink-soft); font-family: var(--utility); font-size: 10px; }
+.advertised-branch-list { display: grid; gap: 7px; margin: 10px 0 0; padding: 0; list-style: none; }
+.advertised-branch-card { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 9px 10px; border-radius: 9px; background: #faf7f5; }
+.advertised-branch-card div { display: grid; gap: 2px; min-width: 0; }
+.advertised-branch-card strong { font-size: 12px; }
+.advertised-branch-card span { color: var(--ink-soft); font-size: 11px; line-height: 1.35; }
+.advertised-branch-card a,
+.advertised-source-links a { color: var(--maroon); font-size: 11px; font-weight: 700; white-space: nowrap; }
+.advertised-branch-empty { margin: 9px 0 0; color: var(--ink-soft); font-size: 11px; }
+.advertised-item-list { display: grid; gap: 10px; }
+.advertised-item {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: white;
+}
+.advertised-item-heading h3 { margin: 0; font-size: 16px; text-transform: capitalize; }
+.advertised-item-heading small { display: block; margin-top: 3px; color: var(--ink-soft); font-size: 10px; }
+.advertised-item-heading span { color: var(--ink-soft); font-family: var(--utility); font-size: 10px; text-transform: uppercase; }
+.advertised-item-explanation { margin: 10px 0 0; color: var(--ink-soft); font-size: 11px; line-height: 1.4; }
+.advertised-source-list { display: grid; gap: 7px; margin: 11px 0 0; padding: 0; list-style: none; }
+.advertised-source {
+  padding: 10px 11px;
+  border-radius: 9px;
+  background: #faf7f5;
+}
+.advertised-source-heading { align-items: start; }
+.advertised-source-heading strong { max-width: 75%; font-size: 12px; line-height: 1.35; }
+.advertised-source-heading a { color: var(--maroon); font-size: 11px; font-weight: 700; white-space: nowrap; }
+.advertised-price { margin: 7px 0 0; color: var(--maroon); font-family: var(--utility); font-size: 16px; font-weight: 700; }
+.advertised-price-note { display: block; margin-top: 2px; color: var(--ink-soft); font-size: 10px; }
+.advertised-source-branch { display: grid; gap: 2px; margin-top: 6px; color: var(--ink-soft); font-size: 11px; line-height: 1.35; }
+.advertised-source-branch strong { color: var(--ink); font-size: 11px; }
+.advertised-source-links { min-height: 15px; margin-top: 5px; }
+.advertised-source-unverified { background: #fcfaf9; }
+.advertised-source-unverified .advertised-price { color: var(--ink-soft); font-family: var(--body); font-size: 12px; }
+.advertised-source-retailer { background: #f7f9f8; }
+.advertised-source-retailer .advertised-price-note { color: var(--ink-soft); }
+.advertised-source-branch { overflow-wrap: anywhere; }
+.advertised-product,
+.advertised-qualifier,
+.advertised-evidence,
+.advertised-snippet { margin: 4px 0 0; color: var(--ink-soft); font-size: 11px; line-height: 1.35; }
+.advertised-evidence { color: var(--ink); }
+.advertised-snippet { max-height: 4.2em; overflow: hidden; }
+.advertised-cached { margin: 9px 0 0; color: var(--ink-soft); font-size: 10px; font-style: italic; }
+.advertised-basket { margin-top: 22px; }
+.advertised-basket .store-list { margin-top: 10px; }
+.advertised-basket .store-meta { margin: 4px 0 0; }
 
 .grocery-results { margin-top: 30px; }
 .results-heading {
@@ -1036,7 +1138,10 @@ body[data-welcome-open="true"] { overflow: hidden; }
   display: flex;
   gap: 8px;
   margin: 0 0 20px;
-  padding: 0;
+  /* The form below is a vertical scroll container, which also clips
+     horizontally at its padding box. The inline padding on all three
+     children keeps pills and their focus rings off that clip edge. */
+  padding: 0 6px;
   list-style: none;
 }
 .welcome-progress li {
@@ -1053,7 +1158,7 @@ body[data-welcome-open="true"] { overflow: hidden; }
 .welcome-progress li.done { border-top-color: var(--gold-edge); color: var(--ink-soft); }
 .welcome-progress li.current { border-top-color: var(--maroon); color: var(--maroon); }
 
-.welcome-form { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.welcome-form { flex: 1; min-height: 0; padding-inline: 6px; overflow-y: auto; scrollbar-width: thin; }
 .welcome-step h2 { font-size: clamp(21px, 2vw, 27px); }
 .step-intro {
   max-width: 48ch;
@@ -1168,7 +1273,7 @@ body[data-welcome-open="true"] { overflow: hidden; }
   align-items: center;
   gap: 10px;
   margin-top: 18px;
-  padding-top: 16px;
+  padding: 16px 6px 0;
   border-top: 1px solid var(--line);
 }
 .welcome-spacer { flex: 1; }
@@ -1234,6 +1339,31 @@ body[data-welcome-open="true"] { overflow: hidden; }
 .pantry-drawer.open .drawer-sheet { transform: translateX(0); }
 .drawer-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .drawer-intro { margin: 13px 0 22px; color: var(--ink-soft); font-size: 14px; line-height: 1.45; }
+
+/* Wide screens already have the room, so the pantry is a permanent column
+   beside the conversation instead of a drawer that covers it. */
+@media (min-width: 981px) {
+  .app-shell { grid-template-columns: 76px minmax(0, 1fr) minmax(270px, 320px); }
+  .pantry-drawer:not(.profile-drawer) {
+    position: static;
+    grid-column: 3;
+    grid-row: 2;
+    visibility: visible;
+    border-left: 1px solid var(--line);
+    background: var(--paper);
+  }
+  .pantry-drawer:not(.profile-drawer) .drawer-scrim { display: none; }
+  .pantry-drawer:not(.profile-drawer) .drawer-sheet {
+    position: static;
+    width: 100%;
+    height: 100%;
+    padding: 26px 22px;
+    transform: none;
+    box-shadow: none;
+    transition: none;
+  }
+  .pantry-drawer:not(.profile-drawer) .drawer-header .icon-button { display: none; }
+}
 
 .icon-button {
   width: 39px;
@@ -1642,6 +1772,8 @@ body[data-welcome-open="true"] { overflow: hidden; }
     width: 36px;
     height: 36px;
     display: grid;
+    /* The topbar inherits paper text, which is invisible on the white chip. */
+    color: var(--maroon);
   }
   .workspace { display: block; }
   .conversation-panel, .plan-panel {
@@ -1649,26 +1781,19 @@ body[data-welcome-open="true"] { overflow: hidden; }
     min-height: calc(100dvh - 130px);
   }
   .conversation-panel {
-    display: none;
     padding: 27px 17px 18px;
-    border: 0;
   }
-  .conversation-panel.mobile-active { display: flex; }
   button.mobile-pantry-button { display: grid; }
   h1 { font-size: 34px; }
   .messages { min-height: 260px; margin-top: 24px; }
   .composer-hint { display: none; }
-  .plan-panel { display: none; }
-  .plan-panel.mobile-active { display: block; }
   .grocery-panel {
     min-height: calc(100vh - 130px);
     min-height: calc(100dvh - 130px);
   }
   .grocery-scroll { height: auto; padding: 28px 17px 48px; }
-  .use-first-strip { min-height: 68px; padding: 10px 17px; }
   .plan-scroll { height: auto; min-height: calc(100dvh - 198px); padding: 28px 17px 48px; }
   .plan-header { gap: 14px; }
-  .budget-stamp { min-width: 101px; }
   .empty-plan { margin-top: 10vh; }
   .mobile-nav {
     position: fixed;
@@ -1723,8 +1848,6 @@ body[data-welcome-open="true"] { overflow: hidden; }
   .starter-prompts { margin-right: -17px; }
   .plan-header { align-items: flex-start; }
   .plan-header h2 { font-size: 27px; }
-  .budget-stamp { padding: 8px 9px; }
-  .budget-stamp strong { font-size: 18px; }
   .meal-card {
     grid-template-columns: 55px minmax(0, 1fr);
     gap: 8px;
@@ -1735,6 +1858,9 @@ body[data-welcome-open="true"] { overflow: hidden; }
   .receipt { padding-right: 14px; padding-left: 14px; }
   .drawer-sheet { padding: 25px 18px 90px; }
   .location-bar { flex-direction: column; align-items: stretch; gap: 10px; }
+  .advertised-offers { padding: 16px 14px; }
+  .advertised-heading { align-items: flex-start; flex-direction: column; }
+  .advertised-results-heading { align-items: flex-start; flex-direction: column; }
   .grocery-actions button { flex: 1 1 100%; }
   .store-card { grid-template-columns: minmax(0, 1fr) auto; padding: 15px 13px; }
   .store-total strong { font-size: 18px; }
