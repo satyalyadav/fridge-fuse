@@ -123,6 +123,9 @@ ok(findForbiddenTerm("chicken breast", veganRule) && findForbiddenTerm("cheddar"
 ok(findForbiddenTerm("soy sauce", glutenRule) === "soy sauce" && findForbiddenTerm("tortillas", glutenRule), "gluten-free rejects the catalog's wheat items");
 ok(findForbiddenTerm("peanut butter", peanutRule), "the peanut rule catches peanut butter");
 ok(findForbiddenTerm("peanut butter", dairyRule) === null, "peanut butter does not trip the dairy-free rule's butter");
+ok(findForbiddenTerm("butter beans", veganRule) === null, "vegan plans allow butter beans without allowing dairy butter");
+ok(findForbiddenTerm("butter beans", dairyRule) === null, "dairy-free plans allow butter beans as a plant ingredient");
+ok(findForbiddenTerm("unsalted butter", veganRule) === "butter" && findForbiddenTerm("unsalted butter", dairyRule) === "butter", "vegan and dairy-free plans still reject dairy butter");
 ok(findForbiddenTerm("almond milk", veganRule) === null && findForbiddenTerm("coconut milk", dairyRule) === null, "plant milks do not trip the milk rules");
 ok(findForbiddenTerm("eggplant curry", veganRule) === null, "word-boundary matching does not read eggplant as egg");
 ok(findForbiddenTerm("corn tortillas", glutenRule) === null && findForbiddenTerm("gluten free pasta", glutenRule) === null, "gluten-free substitutes are not flagged as gluten");

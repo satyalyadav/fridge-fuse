@@ -1,5 +1,7 @@
 "use strict";
 
+const { performance } = require("node:perf_hooks");
+
 // Bounded link-only audit. It reports titles and verification outcomes, never
 // copies recipe ingredients or instructions into the audit output.
 const { createLiveRecipeService } = require("../lib/live-recipes");
@@ -33,6 +35,7 @@ function minGapByHost(events) {
 
 async function runAudit(options = {}) {
   const fetchImpl = options.fetchImpl || globalThis.fetch;
+  const monotonicNow = options.monotonicNow || (() => performance.now());
   const globalCap = Math.max(1, Math.min(GLOBAL_PAGE_GET_CAP, Math.floor(Number(options.globalPageGetCap) || GLOBAL_PAGE_GET_CAP)));
   const gapMs = Math.max(REQUEST_GAP_MS, Math.floor(Number(options.requestGapMs) || REQUEST_GAP_MS));
   const events = [];
@@ -48,7 +51,7 @@ async function runAudit(options = {}) {
       error.code = "audit-global-page-cap";
       throw error;
     }
-    const at = Date.now();
+    const at = monotonicNow();
     let response;
     try {
       response = await fetchImpl(url.href, { ...init, redirect: "manual" });
@@ -91,7 +94,7 @@ async function runAudit(options = {}) {
     activeCase = scenario.id;
     const eventStart = events.length;
     const verifyStart = verificationCalls.length;
-    const startedAt = Date.now();
+    const startedAt = monotonicNow();
     const result = await discovery.findRecipes({
       ...scenario.input,
       allowPrototypeOnly: true,
@@ -127,7 +130,7 @@ async function runAudit(options = {}) {
       failureReasons: result.rejectionReasons,
       sourceFailures: result.sourceFailures,
       failureStatus: result.failure?.status || null,
-      latencyMs: Date.now() - startedAt,
+      latencyMs: monotonicNow() - startedAt,
     });
   }
 

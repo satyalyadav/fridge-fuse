@@ -175,6 +175,7 @@
         "soy chorizo",
         "vegan fish sauce",
         "vegetarian worcestershire sauce",
+        "butter beans",
         "peanut butter",
         "almond butter",
         "cashew butter",
@@ -443,6 +444,7 @@
         "custard"
       ],
       "allows": [
+        "butter beans",
         "peanut butter",
         "almond butter",
         "cashew butter",

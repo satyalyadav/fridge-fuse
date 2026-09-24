@@ -3,6 +3,7 @@
 const assert = require("node:assert/strict");
 const curatedIndex = require("./data/curated-recipe-leads.json");
 const { createLiveRecipeService, isPublicRecipeUrl } = require("./lib/live-recipes");
+const { minGapByHost } = require("./scripts/audit-curated-recipes");
 const {
   createCuratedRecipeDiscovery,
   exactLeadUrl,
@@ -86,13 +87,22 @@ function makeDiscovery(options = {}) {
 
 async function runCuratedDiscoveryChecks() {
   const checkedIndex = validateCuratedIndex(curatedIndex);
-  check(checkedIndex.ok && checkedIndex.leadCount === 28 && checkedIndex.sourceCount === 3, "the first curated batch has 28 unique URLs across three prototype-only source policies");
+  check(checkedIndex.ok && checkedIndex.leadCount === 36 && checkedIndex.sourceCount === 6, "the expanded curated index has 36 unique URLs across six prototype-only source policies");
   check(curatedIndex.leads.every((lead) => Object.keys(lead).sort().join(",") === "leadTags,sourceId,url"), "curated leads store URLs and ranking hints, not recipe titles, times, ingredients, or steps");
   check(curatedIndex.sourcePolicies.every((policy) => policy.rightsStatus.startsWith("prototype-only")), "every source has an explicit prototype-only rights status");
-  check(curatedIndex.leads.every((lead) => !/dessert|cake|cookie|side-dish|smoothie|drink/i.test(lead.url)), "the first batch excludes obvious dessert and side URL slugs");
+  check(curatedIndex.leads.every((lead) => !/dessert|cake|cookie|side-dish|smoothie|drink/i.test(lead.url)), "the curated index excludes obvious dessert and side URL slugs");
   check(curatedIndex.leads.filter((lead) => lead.leadTags.includes("microwave")).length === 7, "microwave dinner leads are ranked from seven URL-only entries");
   check(rankCuratedLeads(curatedIndex.leads, { equipment: ["microwave"] }).slice(0, 7).every((lead) => lead.leadTags.includes("microwave")), "microwave requests rank microwave leads first without accepting their tags as facts");
-  check(rankCuratedLeads(curatedIndex.leads, { equipment: ["stove"], dietRules: [{ id: "vegan", label: "Vegan" }] })[0].leadTags.includes("stove"), "stove and diet signals affect deterministic lead ranking");
+  const veganStoveLeads = rankCuratedLeads(curatedIndex.leads, { equipment: ["stove"], dietRules: [{ id: "vegan", label: "Vegan" }] });
+  check(veganStoveLeads.slice(0, 4).every((lead) => ["bbc-good-food", "budget-bytes", "vegan-richa", "nora-cooks"].includes(lead.sourceId)), "new live-verified vegan stove publishers rank ahead of older RCP leads with source diversity");
+  check(curatedIndex.leads.filter((lead) => ["bbc-good-food", "budget-bytes", "vegan-richa", "nora-cooks"].includes(lead.sourceId) && lead.leadTags.includes("vegan") && lead.leadTags.includes("stove")).length === 8, "eight added vegan stove URL hints are present without storing recipe facts");
+  check(veganStoveLeads[0].leadTags.includes("stove"), "stove and diet signals affect deterministic lead ranking");
+  const measuredGap = minGapByHost([
+    { host: "publisher.example.test", startedAt: 25.5 },
+    { host: "other.example.test", startedAt: 50.25 },
+    { host: "publisher.example.test", startedAt: 1225.75 },
+  ]);
+  check(Math.abs(measuredGap["publisher.example.test"] - 1200.25) < 0.001, "audit host pacing gaps preserve monotonic sub-millisecond timestamps");
 
   const fixture = fixtureIndex();
   check(validateCuratedIndex(fixture).ok, "a small source-scoped fixture index validates");
@@ -207,7 +217,7 @@ async function runCuratedDiscoveryChecks() {
     concurrent.findRecipes({ dinners: 1, maxTimeMin: 30, equipment: ["stove"], allowPrototypeOnly: true, maxCandidates: 1, maxPageFetches: 1 }),
     concurrent.findRecipes({ dinners: 1, maxTimeMin: 30, equipment: ["stove"], allowPrototypeOnly: true, maxCandidates: 1, maxPageFetches: 1 }),
   ]);
-  check(actualStartTimes.length === 2 && Math.abs(actualStartTimes[1] - actualStartTimes[0]) >= 1000, "concurrent page checks wait for the per-host gap immediately before fetch, after delayed DNS");
+  check(actualStartTimes.length === 2 && Math.abs(actualStartTimes[1] - actualStartTimes[0]) >= 1010, "concurrent page checks preserve the publisher gap plus a fetch-start timing margin after delayed DNS");
 
   const publicAddress = [{ address: "93.184.216.34", family: 4 }];
   const htmlFor = (name, totalTime = "PT20M", instruction = "Heat the beans in a skillet on a stove.") => `<!doctype html><html><body><p>Adapted from Wikibooks under CC BY-SA 4.0.</p><script type="application/ld+json">${JSON.stringify({
