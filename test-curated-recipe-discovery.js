@@ -87,9 +87,9 @@ function makeDiscovery(options = {}) {
 
 async function runCuratedDiscoveryChecks() {
   const checkedIndex = validateCuratedIndex(curatedIndex);
-  check(checkedIndex.ok && checkedIndex.leadCount === 36 && checkedIndex.sourceCount === 6, "the expanded curated index has 36 unique URLs across six prototype-only source policies");
+  check(checkedIndex.ok && checkedIndex.leadCount === 36 && checkedIndex.sourceCount === 6, "the curated index has 36 unique URLs across six source policies");
   check(curatedIndex.leads.every((lead) => Object.keys(lead).sort().join(",") === "leadTags,sourceId,url"), "curated leads store URLs and ranking hints, not recipe titles, times, ingredients, or steps");
-  check(curatedIndex.sourcePolicies.every((policy) => policy.rightsStatus.startsWith("prototype-only")), "every source has an explicit prototype-only rights status");
+  check(curatedIndex.sourcePolicies.every((policy) => ["publisher-directions-with-link-credit", "licensed-publisher-directions-with-attribution"].includes(policy.productionMode)), "every production source declares whether publisher directions require a license or link credit");
   check(curatedIndex.leads.every((lead) => !/dessert|cake|cookie|side-dish|smoothie|drink/i.test(lead.url)), "the curated index excludes obvious dessert and side URL slugs");
   check(curatedIndex.leads.filter((lead) => lead.leadTags.includes("microwave")).length === 7, "microwave dinner leads are ranked from seven URL-only entries");
   check(rankCuratedLeads(curatedIndex.leads, { equipment: ["microwave"] }).slice(0, 7).every((lead) => lead.leadTags.includes("microwave")), "microwave requests rank microwave leads first without accepting their tags as facts");
@@ -114,6 +114,32 @@ async function runCuratedDiscoveryChecks() {
   const factPoison = fixtureIndex();
   factPoison.leads[0].timeMin = 5;
   check(validateCuratedIndex(factPoison).errors.some((error) => error.status === "lead-stores-non-url-metadata"), "index validation rejects persisted recipe facts");
+
+  const factualIndex = fixtureIndex(1);
+  Object.assign(factualIndex.sourcePolicies[0], {
+    rightsStatus: "reuse-permission-unverified", productionMode: "publisher-directions-with-link-credit",
+    attributionRequired: false, licenseRequired: false, linkAttributionRequired: true,
+  });
+  const factualDiscovery = makeDiscovery({
+    index: factualIndex,
+    recipeFactory: (url) => recipeFor(url, { publisher: "Example Publisher", attribution: "", license: null }),
+  });
+  const factualResult = await factualDiscovery.findRecipes({ dinners: 1, maxTimeMin: 30, equipment: ["stove"], maxPageFetches: 1, maxPageChecks: 1 });
+  check(factualResult.ok && factualResult.candidates[0].productionEligible && !factualResult.candidates[0].prototypeOnly, "the explicitly linked source is enabled for the operational publisher-directions path");
+  check(factualResult.candidates[0].usageMode === "publisher-directions-with-link-credit" && factualResult.candidates[0].rawInstructions.length > 0, "production candidates carry their explicit display mode and verified publisher directions");
+  const factualRetained = await factualDiscovery.verifyUrl(factualIndex.leads[0].url);
+  check(factualRetained.ok && factualRetained.recipe.sourcePolicyId === "fixture" && factualRetained.recipe.productionEligible, "retained recipes pass through the same fresh publisher policy and rights check");
+  const prototypeRetained = await makeDiscovery().verifyUrl(fixtureIndex(1).leads[0].url);
+  check(!prototypeRetained.ok && prototypeRetained.failure.status === "prototype-only-source", "retained verification cannot re-enable a prototype-only publisher");
+
+  const licensedIndex = fixtureIndex(1);
+  Object.assign(licensedIndex.sourcePolicies[0], {
+    rightsStatus: "source-specific-license-required", productionMode: "licensed-publisher-directions-with-attribution",
+    attributionRequired: true, licenseRequired: true,
+  });
+  const licensedResult = await makeDiscovery({ index: licensedIndex, maxPageFetches: 1, maxPageChecks: 1 })
+    .findRecipes({ dinners: 1, maxTimeMin: 30, equipment: ["stove"], maxPageFetches: 1, maxPageChecks: 1 });
+  check(licensedResult.ok && licensedResult.candidates[0].attribution.includes("CC BY-SA") && licensedResult.candidates[0].license.includes("CC BY-SA"), "licensed RCP-style candidates retain both required source notices");
 
   let verifyCalls = 0;
   const gated = makeDiscovery({ onVerify: () => { verifyCalls++; } });
@@ -253,6 +279,12 @@ async function runCuratedDiscoveryChecks() {
     .findRecipes({ dinners: 1, maxTimeMin: 30, equipment: ["stove"], allowPrototypeOnly: true, maxPageFetches: 1, maxPageChecks: 1 });
   check(parsedLive.ok && parsedLive.candidates[0].title === "Live Bean Rice" && pageFetches === 1 && searchFetches === 0, "the curated adapter parses one fresh Recipe JSON-LD page through the existing verifier without a Tavily request");
   check(parsedLive.candidates[0].license.includes("creativecommons") && parsedLive.candidates[0].attribution.includes("CC BY-SA"), "live license and source attribution survive verification on the candidate");
+
+  const escapedPath = await makeDiscovery({
+    index: fixtureIndex(1),
+    recipeFactory: (url) => recipeFor(url, { finalUrl: "https://recipes.example.test/outside/redirected-recipe" }),
+  }).findRecipes({ dinners: 1, maxTimeMin: 30, equipment: ["stove"], allowPrototypeOnly: true, maxPageFetches: 1, maxPageChecks: 1 });
+  check(!escapedPath.ok && escapedPath.candidates.length === 0 && escapedPath.rejectionReasons.some((entry) => entry.status === "unsafe-redirect"), "discovery rejects same-host redirects outside the source path prefix");
 
   const redirectService = createLiveRecipeService({
     dnsLookup: async () => publicAddress,

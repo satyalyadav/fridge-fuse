@@ -48,8 +48,9 @@ a failing test blocks the deploy.
   Chat is home, Plan opens when a build finishes, Shop is the comparison view.
   The pantry is a permanent side panel on wide screens and a drawer on phones.
   `body[data-view]` is the only view switch.
-- `lib/live-recipes.js` — request-scoped Tavily discovery, public-page fetch,
-  Recipe JSON-LD verification, and bounded safety filters.
+- `lib/live-recipes.js` — public-page fetch, Recipe JSON-LD verification, and
+  bounded safety filters. `lib/curated-recipe-discovery.js` ranks URL-only leads
+  from `data/curated-recipe-leads.json` before each request's live checks.
 - `data/diet-rules.json` — dietary restrictions: student phrasings → a word-level
   `forbids` net with per-rule `allows` exceptions and advisory `notes`.
 - `test.js` — one flat script of `ok(...)` assertions, run in-process.
@@ -74,13 +75,18 @@ plan or demo data. Do not add a fallback that invents plans or prices — earlie
 commits deliberately removed those. Failures go to `reportFailure()` and surface at
 `/api/failures`.
 
-**Recipes are grounded to live verified candidates.** Each planning request uses
-Tavily discovery, a public HTTPS page fetch, recursive schema.org Recipe JSON-LD
-extraction, and time/equipment/diet filtering before Voyager sees a candidate.
-The prompt and repair call reuse that exact request-scoped candidate set. Source
-titles, ingredients, and instructions are bounded untrusted facts; unsafe URLs,
+**Recipes are grounded to live verified candidates.** Each planning request ranks
+the URL-only curated index, fetches public HTTPS pages, verifies Recipe JSON-LD,
+and applies time/equipment/diet filters before Voyager selects a candidate ID.
+Voyager does not receive publisher directions or write final recipe steps. The
+server uses the exact verified ingredient set and ordered JSON-LD directions,
+then adds the publisher link and visible credit. RCP's page attribution and
+license notice must remain intact. Other listed publishers have no verified reuse
+permission; credit is not permission. This is a hackathon display path pending
+reuse-rights review, not a claim that source text is legally cleared. Unsafe URLs,
 redirects, malformed pages, prompt-injection text, and diet-violating source facts
-are rejected. There is no static recipe catalog or model-invented URL fallback.
+are rejected. There is no search API key or Tavily fallback, static recipe
+catalog, or model-invented URL fallback.
 
 **Dietary restrictions are enforced, not requested.** `data/diet-rules.json` drives
 both the prompt and a post-generation check (`assertPlanRespectsDiet()`) that scans

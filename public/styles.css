@@ -584,6 +584,7 @@ button.mobile-pantry-button { display: none; }
 .meal-reason { margin: 10px 0 0; color: var(--maroon-deep); font-size: 12px; font-weight: 600; }
 .meal-source { display: inline-block; margin-top: 8px; color: var(--maroon-deep); font-size: 12px; font-weight: 600; }
 .meal-source:hover { color: var(--ink); }
+.meal-source-credit { margin: 4px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .meal-details {
   display: none;
   grid-column: 2 / -1;

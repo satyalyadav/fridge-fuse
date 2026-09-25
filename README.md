@@ -29,18 +29,18 @@ AI setup for photo recognition and meal planning:
 cp .env.example .env
 ```
 
-Then edit `.env` and set `VOYAGER_KEY` to your ASU AIR (Voyager) API key and
-`TAVILY_API_KEY` to a Tavily API key for live recipe discovery.
+Then edit `.env` and set `VOYAGER_KEY` to your ASU AIR (Voyager) API key.
+Meal planning ranks the curated URL index and fetches publisher pages directly,
+so it does not need a paid search key.
 `ASU_AIR_BASE_URL`, `ASU_AIR_MODEL`, and `ASU_AIR_VISION_MODEL` already have
 working defaults. Text planning uses `llama4-scout-17b`, while photo recognition
 uses `qwen3-vl-32b-instruct`. A second, independent photo check uses the faster
 multimodal `llama4-scout-17b` by default; it can be overridden with
 `ASU_AIR_VISION_VERIFY_MODEL`.
 
-`VOYAGER_KEY` and `TAVILY_API_KEY` are required for meal planning; Voyager is
-also required for photo recognition. If either planning key is missing, or an
-upstream service is unavailable, the endpoint reports an error instead of
-inventing a local plan, recipe, or demo grocery result.
+`VOYAGER_KEY` is required for meal planning and photo recognition. If it is
+missing, or a publisher page cannot be verified, the endpoint reports an error
+instead of inventing a plan or recipe.
 
 `.env` is gitignored — never commit the real key.
 
@@ -246,23 +246,31 @@ was not returned by search.
 
 ## Recipe sources
 
-- Tavily discovers public recipe pages for each planning request. The server
-  fetches each HTTPS page with a browser-safe client, follows only manually
-  validated public redirects, and accepts a candidate only when recursive
-  schema.org Recipe JSON-LD supplies its title, ingredients, instructions, and
-  exact time.
+- `data/curated-recipe-leads.json` stores publisher URLs and ranking hints only.
+  The server freshly fetches candidate HTTPS pages with a browser-safe client,
+  follows only manually validated public redirects, and accepts a candidate
+  only when recursive schema.org Recipe JSON-LD supplies its title, ingredients,
+  instructions, and exact time; equipment is inferred from verified directions.
+  Per-request page checks are bounded.
 - Every returned dinner carries an exact `sourceRecipe`, `source`, and
   `sourceUrl` triple from the verified candidates. Publisher homepages,
   hallucinated URLs/IDs, snippets, and model timing claims are rejected.
-- Candidate source text is bounded and treated as untrusted facts. Raw titles,
-  ingredients, and instructions that violate the active diet or contain obvious
-  prompt-injection text are rejected before Voyager sees them.
-- The model builds from the selected candidate's facts. When a small pantry,
-  budget, equipment, time, or diet change is needed, it records that change in
-  `adaptationNote`.
-- Search and verified pages use bounded TTL caches and in-flight deduplication;
-  failures are aggregated and exposed through `/api/failures`. There is no
-  static recipe catalog or model-invented URL fallback.
+- Voyager selects recipe IDs only and does not receive publisher directions.
+  The server returns the exact verified JSON-LD ingredients, time, inferred
+  equipment, and ordered publisher directions, alongside the publisher link and
+  visible credit. RCP recipes retain the page's required attribution and license
+  notice. For other listed publishers, reuse permission has not been verified;
+  credit does not grant permission. This is a hackathon display path pending
+  reuse-rights review, not a claim that the source text is legally cleared.
+- Candidate source text is bounded and treated as untrusted evidence. Titles,
+  ingredients, and directions that violate the active diet or contain obvious
+  prompt-injection text are rejected. Voyager sees only the candidate IDs and
+  bounded selection facts; it does not receive publisher directions.
+- The server does not adapt a source recipe. It uses the verified ingredient set
+  and rejects candidates that do not fit the request's time, equipment, and diet.
+- Publisher requests use a process-wide host pacer and bounded per-request
+  checks. Failures are aggregated and exposed through `/api/failures`. There is
+  no search API fallback or model-invented URL fallback.
 
 ## Your kitchen data
 
@@ -366,7 +374,8 @@ Run deterministic tests with `npm test`.
 ## API
 
 - `POST /api/chat/interpret {message,pantry}` interprets food actions using AIR.
-- `GET /api/health` reports server, catalog, and diet-rule status.
+- `GET /api/health` reports server, curated recipe lead/source counts, and
+  diet-rule status.
 - `POST /api/vision {imageDataUrl}` returns independently verified `confirmed`
   pantry items plus `uncertain` items with bounding boxes for user review.
 - `POST /api/plan` builds the dinner plan and its unpriced shopping list; dinners include
@@ -394,8 +403,8 @@ scope in the results. Pickup availability is never claimed.
   and photo recognition stay unavailable until the key is configured.
 - `npm test` fails: make sure you ran `npm install` first and did not edit
   `data/diet-rules.json`.
-- Live plans need both `VOYAGER_KEY` and `TAVILY_API_KEY`; `/api/health` shows
-  `recipeSearchConfigured` and the configured AI models.
+- Live plans need `VOYAGER_KEY`, a usable curated recipe index, and reachable
+  publisher pages. `/api/health` reports the provider and eligible lead counts.
 - Phone on same WiFi can't reach demo: server binds `0.0.0.0`, use your laptop's LAN IP, e.g. `http://192.168.1.x:3000`.
 
 ## Deploy to Vercel

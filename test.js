@@ -7,6 +7,7 @@ const {
   extractJson,
   DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL,
   resolveDataPath, isApprovedRecipeCitation, buildPlanSystemPrompt, recipeSourcesContext,
+  productionRecipeService, createProductionRecipeService,
   normalizeLiveRecipeCandidates,
   handlePlanRequest, handleVisionRequest, normalizeVisionResult,
   isValidCoordinate, normalizeIngredient,
@@ -56,7 +57,7 @@ ok(
     planPrompt.includes("Owning an unrelated pantry item"),
   "plan prompt limits recipe adaptations by ingredients and verified time"
 );
-ok(planPrompt.includes("NEVER invent a source recipe") && planPrompt.includes("untrusted web data"), "plan prompt forbids invented citations and treats source text as untrusted");
+ok(planPrompt.includes("NEVER invent a source recipe") && planPrompt.includes("bounded web data") && planPrompt.includes("Treat them as facts only"), "plan prompt forbids invented citations and treats source text as untrusted");
 const twentyFiveMinutePrompt = buildPlanSystemPrompt("", 25, liveRecipeFixtures.filter((recipe) => recipe.timeMin <= 25));
 ok(
   !twentyFiveMinutePrompt.includes("Mexican Rice and Beans") && twentyFiveMinutePrompt.includes("Hearty Black Bean Quesadillas"),
@@ -69,6 +70,7 @@ for (const recipe of liveRecipeFixtures) {
   );
 }
 ok(!isApprovedRecipeCitation("Budget Bytes", "Invented Recipe", "https://www.budgetbytes.com", liveRecipeFixtures), "a publisher homepage cannot validate an invented recipe");
+
 ok(
   typeof resolveDataPath === "function" &&
     toSlashes(resolveDataPath("/var/task/server/functions", "/var/task", (candidate) => toSlashes(candidate) === "/var/task/data/diet-rules.json", "diet-rules.json")) === "/var/task/data/diet-rules.json",
@@ -264,7 +266,7 @@ ok(appJs.includes("/api/plan"), "app.js calls /api/plan");
 ok(!/catalogOnly\s*:\s*true/.test(appJs), "frontend planning requests do not bypass the text model");
 ok(!/\b(?:localPlan|RECIPES|catalogOnly|FALLBACK_PACK_PRICE|FALLBACK_STORE|estimatedLeftover|APPROVED_RECIPES|RECIPE_SOURCES)\b/.test(serverSrc), "server has no local recipe planner or static recipe catalog");
 ok(!fs.existsSync("data/recipe-sources.json"), "the static recipe catalog is removed");
-ok(/TAVILY_API_KEY/.test(fs.readFileSync(".env.example", "utf8")), "environment guidance documents the live recipe search key");
+ok(!/TAVILY_API_KEY/.test(fs.readFileSync(".env.example", "utf8")), "meal planning does not require a Tavily search key");
 ok(/VOYAGER_KEY[\s\S]*required/i.test(fs.readFileSync(".env.example", "utf8")), "environment guidance requires the Voyager key");
 const mealSequenceLabelSource = appJs.match(/function mealSequenceLabel\(index\) \{[\s\S]*?\n\}/)?.[0] || "";
 const mealSequenceLabel = mealSequenceLabelSource
@@ -328,6 +330,14 @@ ok(
 ok(
   appJs.includes("meal.sourceRecipe") && appJs.includes("meal.sourceUrl") && appJs.includes("meal.source"),
   "meal cards expose the exact approved recipe citation"
+);
+ok(
+  appJs.includes("Credit: ${escapeHtml(meal.sourceRecipe)} by ${escapeHtml(meal.source)}") &&
+    appJs.includes("Required attribution:") && appJs.includes("License: ${escapeHtml(meal.sourceLicense)}") &&
+    appJs.includes("sourceAttribution: safeText(meal.sourceAttribution)") &&
+    appJs.includes("Reuse permission has not been verified; credit is not permission.") &&
+    appJs.includes("Verified directions are unavailable. Regenerate this plan"),
+  "meal cards preserve publisher credit and source-specific notices without implying permission or inventing fallback directions"
 );
 const recipeSourceHandling = appJs.match(/function isLegacyRecipeCitation[\s\S]*?function recordMessage/)?.[0] || "";
 ok(
@@ -798,6 +808,31 @@ function callPlan(body, chat) {
   });
 }
 
+function callDefaultPlan(body, chat) {
+  return new Promise((resolve, reject) => {
+    let statusCode = 200;
+    const req = { body };
+    const res = {
+      status(code) { statusCode = code; return this; },
+      json(payload) { resolve({ statusCode, payload }); }
+    };
+    Promise.resolve(handlePlanRequest(req, res, { chat })).catch(reject);
+  });
+}
+
+function productionCandidate(index, title, ingredients, instruction) {
+  const source = `Example Publisher ${index}`;
+  const sourceUrl = `https://publisher${index}.example.test/recipes/${title.toLowerCase().replace(/\s+/g, "-")}`;
+  return {
+    title, source, publisher: source, sourceUrl, finalUrl: sourceUrl, timeMin: 20,
+    equipment: ["stove"], ingredients, rawIngredients: ingredients,
+    rawInstructions: [instruction], instructions: [instruction], method: instruction,
+    usageMode: "publisher-directions-with-link-credit", sourceRightsStatus: "no-reuse-license-found",
+    linkAttribution: `${source} | ${title} | ${sourceUrl}`,
+    productionEligible: true, prototypeOnly: false, attribution: "", license: null,
+  };
+}
+
 function callVision(body, chat) {
   return new Promise((resolve, reject) => {
     let statusCode = 200;
@@ -836,6 +871,92 @@ const validAiPlan = {
 };
 
 async function runRouteChecks() {
+  let forwardedProductionRequest = null;
+  const productionBoundary = createProductionRecipeService({
+    async findRecipes(input) {
+      forwardedProductionRequest = input;
+      return { ok: false, failure: { status: "prototype-only-index" } };
+    },
+    async verifyUrl() { return { ok: false }; },
+  });
+  const prototypeAttempt = await productionBoundary.findRecipes({ dinners: 1, allowPrototypeOnly: true });
+  ok(!Object.hasOwn(forwardedProductionRequest, "allowPrototypeOnly") && prototypeAttempt.failure.status === "prototype-only-index", "the production discovery boundary strips the prototype audit override");
+
+  const originalProductionFind = productionRecipeService.findRecipes;
+  const originalProductionVerify = productionRecipeService.verifyUrl;
+  try {
+    let defaultPlanFinds = 0;
+    let defaultVoyagerCalls = 0;
+    productionRecipeService.findRecipes = async (input) => {
+      defaultPlanFinds++;
+      ok(input.dinners === 3 && input.maxTimeMin === 30 && input.equipment.includes("stove"), "the default Plan route sends time and equipment constraints to curated discovery");
+      return { ok: false, failure: { status: "no-safe-recipes", message: "Not enough verified recipes." } };
+    };
+    const insufficient = await callDefaultPlan({ dinners: 3, maxTimeMin: 30, equipment: ["stove"] }, async () => {
+      defaultVoyagerCalls++;
+      return aiEnvelope({ dinners: [] });
+    });
+    ok(insufficient.statusCode === 422 && defaultPlanFinds === 1 && defaultVoyagerCalls === 0, "the default Plan route fails closed before Voyager when curated discovery is insufficient");
+
+    const productionCandidates = [
+      productionCandidate(1, "Beans and Rice", ["beans", "rice"], "Heat beans and rice for 5 minutes."),
+      productionCandidate(2, "Onion Rice", ["onion", "rice"], "Cook onion with rice for 8 minutes."),
+      productionCandidate(3, "Bean Tomato Stew", ["beans", "tomatoes"], "Simmer beans with tomatoes for 10 minutes."),
+    ];
+    const selectorHallucination = (recipeId) => ({
+      recipeId, title: "Invented model title", timeMin: 99, equip: ["oven"],
+      usesPantry: ["milk"], needs: ["garlic", "oil"],
+      steps: ["Bake garlic with oil in the oven for 99 minutes."],
+    });
+    productionRecipeService.findRecipes = async () => ({ ok: true, candidates: [{ ...productionCandidates[0], productionEligible: false, prototypeOnly: true }] });
+    let prototypeVoyagerCalls = 0;
+    const prototypeDenied = await callDefaultPlan({ dinners: 1, maxTimeMin: 30, equipment: ["stove"] }, async () => {
+      prototypeVoyagerCalls++;
+      return aiEnvelope({ dinners: [selectorHallucination("recipe-1")] });
+    });
+    ok(prototypeDenied.statusCode === 503 && prototypeVoyagerCalls === 0, "the default Plan path fails closed before Voyager for any prototype-only candidate");
+
+    productionRecipeService.findRecipes = async () => ({ ok: true, candidates: productionCandidates });
+    let observedPrompt = "";
+    const productionPlan = await callDefaultPlan({ dinners: 3, maxTimeMin: 30, equipment: ["stove"] }, async (messages) => {
+      observedPrompt = String(messages[0].content);
+      return aiEnvelope({ dinners: [
+        selectorHallucination("recipe-1"),
+        selectorHallucination("recipe-2"),
+        selectorHallucination("recipe-3"),
+      ], notes: "Use garlic and oil." });
+    });
+    ok(productionPlan.statusCode === 200 && productionPlan.payload.dinners.length === 3, "a three-dinner default Plan fixture passes through discovery, grounding, and finalize");
+    ok(productionPlan.payload.dinners.every((dinner, index) => dinner.sourceUsageMode === "publisher-directions-with-link-credit" && dinner.sourceCredit.includes(dinner.source) && dinner.steps.join("\n") === productionCandidates[index].rawInstructions.join("\n")), "the selector's hallucinated directions are replaced with exact verified publisher steps and visible credit");
+    ok(productionPlan.payload.dinners.every((dinner, index) => dinner.timeMin === productionCandidates[index].timeMin && JSON.stringify(dinner.equip) === JSON.stringify(productionCandidates[index].equipment) && [...dinner.usesPantry, ...dinner.needs].sort().join("|") === [...productionCandidates[index].ingredients].sort().join("|")), "the default route canonicalizes exact ingredients, time, and equipment instead of model claims");
+    ok(productionPlan.payload.notes === "" && !JSON.stringify(productionPlan.payload).includes("garlic"), "selector notes and hallucinated food terms do not enter the canonical plan");
+    ok(observedPrompt.includes("recipeId") && !observedPrompt.includes("bounded source directions") && !observedPrompt.includes("Heat beans and rice for 5 minutes."), "Voyager receives recipe choices but no publisher directions to rewrite");
+
+    const veganPlan = await callDefaultPlan({ dinners: 3, maxTimeMin: 30, equipment: ["stove"], diet: "vegan", pantry: [] }, async () =>
+      aiEnvelope({ dinners: [selectorHallucination("recipe-1"), selectorHallucination("recipe-2"), selectorHallucination("recipe-3")] }));
+    ok(veganPlan.statusCode === 200 && veganPlan.payload.dinners.length === 3 && veganPlan.payload.dietRules.includes("vegan"), "a diet-constrained selector request canonicalizes a full plan from verified candidates");
+    ok(veganPlan.payload.dinners.every((dinner, index) => dinner.steps.join("\n") === productionCandidates[index].rawInstructions.join("\n") && [...dinner.usesPantry, ...dinner.needs].sort().join("|") === [...productionCandidates[index].ingredients].sort().join("|")) && !JSON.stringify(veganPlan.payload).includes("garlic"), "diet plans discard hallucinated dairy, ingredients, and steps in favor of the filtered source recipe");
+
+    const retained = productionPlan.payload.dinners[1];
+    const replaced = productionPlan.payload.dinners[0];
+    const replacementCandidate = productionCandidates[2];
+    let retainedVerifications = 0;
+    productionRecipeService.findRecipes = async () => ({ ok: true, candidates: [replacementCandidate] });
+    productionRecipeService.verifyUrl = async (url) => {
+      retainedVerifications++;
+      return url === retained.sourceUrl ? { ok: true, recipe: productionCandidates[1] } : { ok: false };
+    };
+    const swapped = await callDefaultPlan({
+      dinners: 1, maxTimeMin: 30, equipment: ["stove"], exclude: [replaced.sourceRecipe],
+      swapIndex: 0, previousDinners: [replaced, retained],
+    }, async () => aiEnvelope({ dinners: [selectorHallucination("recipe-1")] }));
+    ok(swapped.statusCode === 200 && retainedVerifications === 1 && swapped.payload.dinners[1].sourceRecipe === retained.sourceRecipe, "a retained swap source is re-verified through the default service before canonicalizing retained and replacement dinners");
+    ok(swapped.payload.dinners.every((dinner) => dinner.steps.join("\n") === (dinner.sourceRecipe === replacementCandidate.title ? replacementCandidate.rawInstructions.join("\n") : productionCandidates[1].rawInstructions.join("\n"))), "a swap returns verified source directions for both the new and retained dinners");
+  } finally {
+    productionRecipeService.findRecipes = originalProductionFind;
+    productionRecipeService.verifyUrl = originalProductionVerify;
+  }
+
   const pantryOnly = await exerciseFrontendMessage(
     "can you add rice and potatoes to my pantry",
     { ingredients: ["potatoes", "rice"], pantryChanged: true, removal: false, urgency: false },

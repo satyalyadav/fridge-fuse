@@ -83,6 +83,8 @@ function safeMeal(meal) {
   const sourceUrl = safeUrl(meal.sourceUrl);
   return {
     title: safeText(meal.title), sourceRecipe: safeText(meal.sourceRecipe), source: safeText(meal.source), sourceUrl,
+    sourceUsageMode: safeText(meal.sourceUsageMode), sourceRightsStatus: safeText(meal.sourceRightsStatus),
+    sourceCredit: safeText(meal.sourceCredit), sourceAttribution: safeText(meal.sourceAttribution), sourceLicense: safeText(meal.sourceLicense, 300),
     sourceUnavailable: !sourceUrl || isLegacyRecipeCitation(meal), adaptationNote: safeText(meal.adaptationNote),
     timeMin: safeNumber(meal.timeMin, 0, 180),
     steps: safeStrings(meal.steps, 30), equip: safeStrings(meal.equip, 20), usesPantry: safeStrings(meal.usesPantry),
@@ -737,6 +739,12 @@ function renderPlan() {
       : meal.sourceRecipe && meal.source && meal.sourceUrl && !isLegacyRecipeCitation(meal)
       ? `<a class="meal-source" href="${escapeHtml(meal.sourceUrl)}" target="_blank" rel="noopener noreferrer">Recipe: ${escapeHtml(meal.sourceRecipe)} on ${escapeHtml(meal.source)}</a>`
       : "";
+    const recipeCredit = !meal.sourceUnavailable && meal.sourceRecipe && meal.source
+      ? `<p class="meal-source-credit">Credit: ${escapeHtml(meal.sourceRecipe)} by ${escapeHtml(meal.source)}.${meal.sourceUsageMode === "publisher-directions-with-link-credit" ? " Publisher directions are shown with this link and credit. Reuse permission has not been verified; credit is not permission." : ""}</p>`
+      : "";
+    const sourceNotice = !meal.sourceUnavailable && (meal.sourceAttribution || meal.sourceLicense)
+      ? `<p class="meal-source-credit">${meal.sourceAttribution ? `Required attribution: ${escapeHtml(meal.sourceAttribution)} ` : ""}${meal.sourceLicense ? `License: ${escapeHtml(meal.sourceLicense)}` : ""}</p>`
+      : "";
     return `
       <article class="meal-card" data-meal-index="${index}">
         <div class="meal-day">${mealSequenceLabel(index)}</div>
@@ -745,6 +753,8 @@ function renderPlan() {
           <p class="meal-meta">${Number(meal.timeMin) || "—"} min · beginner · ${escapeHtml((meal.equip || []).join(" + ") || planConstraints.equipment[0] || "simple equipment")}</p>
           <p class="meal-reason">${escapeHtml(reason)}</p>
           ${recipeSource}
+          ${recipeCredit}
+          ${sourceNotice}
         </div>
         <div class="meal-actions">
           <button data-action="details" data-index="${index}">Steps</button>
@@ -753,7 +763,7 @@ function renderPlan() {
         </div>
         <div class="meal-details">
           <strong>How to make it</strong>
-          <ol>${steps || "<li>Follow the package directions and combine the listed ingredients.</li>"}</ol>
+          <ol>${steps || "<li>Verified directions are unavailable. Regenerate this plan to get directions from a live recipe source.</li>"}</ol>
         </div>
       </article>`;
   }).join("");
@@ -805,6 +815,11 @@ function toggleSavedRecipe(meal) {
       sourceRecipe: meal.sourceRecipe || "",
       source: meal.source || "",
       sourceUrl: meal.sourceUrl || "",
+      sourceUsageMode: meal.sourceUsageMode || "",
+      sourceRightsStatus: meal.sourceRightsStatus || "",
+      sourceCredit: meal.sourceCredit || "",
+      sourceAttribution: meal.sourceAttribution || "",
+      sourceLicense: meal.sourceLicense || "",
       timeMin: Number(meal.timeMin) || null,
       steps: Array.isArray(meal.steps) ? meal.steps.slice(0, 12) : [],
       savedAt: new Date().toISOString()
@@ -831,6 +846,9 @@ function renderSavedRecipes() {
       <div class="saved-recipe-main">
         <strong>${escapeHtml(recipe.title)}</strong>
         <span>${recipe.timeMin ? `${safeNumber(recipe.timeMin, 0, 180)} min · ` : ""}${escapeHtml(recipe.source || "saved recipe")}</span>
+        ${recipe.sourceUrl && !isLegacyRecipeCitation(recipe) ? `<a class="meal-source" href="${escapeHtml(recipe.sourceUrl)}" target="_blank" rel="noopener noreferrer">Recipe: ${escapeHtml(recipe.sourceRecipe || recipe.title)} on ${escapeHtml(recipe.source)}</a>` : ""}
+        ${recipe.sourceRecipe && recipe.source ? `<small class="meal-source-credit">Credit: ${escapeHtml(recipe.sourceRecipe)} by ${escapeHtml(recipe.source)}.${recipe.sourceUsageMode === "publisher-directions-with-link-credit" ? " Publisher directions are shown with this link and credit. Reuse permission has not been verified; credit is not permission." : ""}</small>` : ""}
+        ${recipe.sourceAttribution || recipe.sourceLicense ? `<small class="meal-source-credit">${recipe.sourceAttribution ? `Required attribution: ${escapeHtml(recipe.sourceAttribution)} ` : ""}${recipe.sourceLicense ? `License: ${escapeHtml(recipe.sourceLicense)}` : ""}</small>` : ""}
       </div>
       <div class="saved-recipe-actions">
         <button data-saved-action="cook" data-index="${index}">Cook again</button>
