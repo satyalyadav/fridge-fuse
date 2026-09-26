@@ -82,7 +82,7 @@ a:focus-visible {
   height: 100vh;
   height: 100dvh;
   display: grid;
-  grid-template-columns: 76px minmax(0, 1fr);
+  grid-template-columns: 88px minmax(0, 1fr);
   grid-template-rows: 68px minmax(0, 1fr);
 }
 
@@ -173,30 +173,30 @@ button.mobile-reset-button { display: none; }
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 9px;
-  padding: 14px 10px;
+  gap: 5px;
+  padding: 20px 11px 16px;
   border-right: 1px solid var(--line);
   background: var(--enamel);
 }
 
 .nav-item {
   position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  min-height: 58px;
-  padding: 7px 4px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  align-content: center;
+  justify-items: start;
+  column-gap: 4px;
+  min-height: 61px;
+  padding: 8px 4px 8px 10px;
   border: 0;
-  border-radius: 13px;
+  border-left: 2px solid transparent;
+  border-radius: 0;
   background: transparent;
-  color: #6b6360;
-  font-size: 11px;
-  font-weight: 600;
+  color: var(--ink-soft);
+  text-align: left;
 }
 
-.nav-item svg,
 .icon-button svg,
 .tool-button svg,
 .send-button svg,
@@ -210,24 +210,31 @@ button.mobile-reset-button { display: none; }
 }
 
 .nav-item.active {
-  background: var(--maroon-wash);
+  border-left-color: var(--maroon);
   color: var(--maroon);
-  box-shadow: inset 3px 0 0 var(--gold);
 }
 .nav-item:hover { color: var(--ink); }
+.nav-index {
+  grid-column: 1 / -1;
+  color: var(--ink-soft);
+  font-family: var(--utility);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+.nav-item.active .nav-index { color: var(--gold-edge); }
+.nav-label { font-size: 12px; font-weight: 700; }
+.nav-reset { border-top: 1px solid var(--line); }
 .nav-spacer { flex: 1; }
 
 .nav-count {
-  position: absolute;
-  top: 5px;
-  right: 6px;
-  min-width: 18px;
-  padding: 2px 4px;
-  border-radius: 20px;
-  background: var(--gold);
-  color: var(--ink);
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 12px;
+  color: var(--maroon);
   font-family: var(--utility);
-  font-size: 9px;
+  font-size: 10px;
+  font-weight: 600;
+  text-align: right;
 }
 
 .workspace {
@@ -334,6 +341,47 @@ button.mobile-pantry-button { display: none; }
 .message-copy p { margin: 0 0 9px; }
 .message-copy p:last-child { margin-bottom: 0; }
 .message-example { color: var(--ink-soft); font-size: 13px; }
+.recipe-suggestions {
+  display: grid;
+  gap: 12px;
+  margin: 24px 0 4px 40px;
+  max-width: 690px;
+}
+.suggestions-heading { display: grid; gap: 4px; }
+.suggestions-heading .eyebrow { margin: 0; }
+.suggestions-stale { margin: 0; color: var(--alert); font-size: 12px; line-height: 1.4; }
+.suggestion-card {
+  padding: 17px 19px;
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--gold-edge);
+  background: var(--paper);
+}
+.suggestion-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.suggestion-heading .eyebrow { margin: 0 0 5px; color: var(--ink-soft); }
+.suggestion-heading h3 { font-size: 20px; }
+.suggestion-heading button {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 7px 11px;
+  border: 1px solid var(--maroon);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--maroon);
+  font-size: 12px;
+  font-weight: 700;
+}
+.suggestion-heading button:hover:not(:disabled) { background: var(--maroon-wash); }
+.suggestion-heading button:disabled { border-color: var(--line); color: var(--ink-soft); cursor: default; }
+.suggestion-meta { margin: 8px 0 0; color: var(--ink-soft); font-size: 12px; }
+.suggestion-ingredients { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+.suggestion-ingredients p { margin: 0; font-size: 12px; line-height: 1.45; }
+.suggestion-ingredients strong, .suggestion-ingredients span { display: block; }
+.suggestion-ingredients strong { margin-bottom: 3px; color: var(--maroon-deep); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+.suggestion-ingredients span { color: var(--ink-soft); }
+.suggestion-directions { margin-top: 15px; color: var(--ink-soft); font-size: 13px; line-height: 1.5; }
+.suggestion-directions > strong { color: var(--ink); }
+.suggestion-directions ol { margin: 6px 0 0; padding-left: 19px; }
+.suggestion-directions li { margin: 4px 0; }
 .error-message .assistant-symbol {
   border-color: var(--alert);
   background: #fff1ef;
@@ -596,7 +644,7 @@ button.mobile-pantry-button { display: none; }
 .meal-card.open .meal-details { display: block; }
 .meal-details ol { margin: 8px 0 4px; padding-left: 19px; }
 .meal-details li { margin: 4px 0; }
-.meal-actions { display: flex; gap: 5px; }
+.meal-actions { display: flex; flex-wrap: wrap; gap: 5px; }
 .meal-actions button {
   padding: 7px 9px;
   border: 1px solid var(--line);
@@ -1344,7 +1392,7 @@ body[data-welcome-open="true"] { overflow: hidden; }
 /* Wide screens already have the room, so the pantry is a permanent column
    beside the conversation instead of a drawer that covers it. */
 @media (min-width: 981px) {
-  .app-shell { grid-template-columns: 76px minmax(0, 1fr) minmax(270px, 320px); }
+  .app-shell { grid-template-columns: 88px minmax(0, 1fr) minmax(270px, 320px); }
   .pantry-drawer:not(.profile-drawer) {
     position: static;
     grid-column: 3;
@@ -1787,6 +1835,7 @@ body[data-welcome-open="true"] { overflow: hidden; }
   button.mobile-pantry-button { display: grid; }
   h1 { font-size: 34px; }
   .messages { min-height: 260px; margin-top: 24px; }
+  .recipe-suggestions { margin-left: 0; }
   .composer-hint { display: none; }
   .grocery-panel {
     min-height: calc(100vh - 130px);
@@ -1856,6 +1905,10 @@ body[data-welcome-open="true"] { overflow: hidden; }
   }
   .meal-actions { grid-column: 2; justify-content: flex-start; margin-top: 2px; }
   .meal-details { grid-column: 2; }
+  .suggestion-card { padding: 15px 13px; }
+  .suggestion-heading { align-items: stretch; flex-direction: column; }
+  .suggestion-heading button { align-self: flex-start; }
+  .suggestion-ingredients { grid-template-columns: 1fr; gap: 9px; }
   .receipt { padding-right: 14px; padding-left: 14px; }
   .drawer-sheet { padding: 25px 18px 90px; }
   .location-bar { flex-direction: column; align-items: stretch; gap: 10px; }

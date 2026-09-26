@@ -293,15 +293,19 @@ ok(
   "the plan title uses singular dinner for a one-meal plan"
 );
 ok(
-  appJs.includes('result.dinners.length === 1 ? "Use the Swap button."'),
-  "one-dinner guidance does not tell the user to swap dinner two"
+  appJs.includes('"Add the dinners you want to Plan. Leave the rest here in Chat."'),
+  "the chat invites deliberate selection without implying every suggestion was added"
 );
 const buildPlanSource = appJs.replaceAll("\r\n", "\n").match(/async function buildPlan[\s\S]*?\n}\n\nfunction formatMoney/)?.[0] || "";
-const planAssignment = buildPlanSource.indexOf("state.plan =");
-const groceryRefresh = buildPlanSource.indexOf("renderGroceryList();");
 ok(
-  planAssignment !== -1 && groceryRefresh > planAssignment,
-  "building a plan refreshes the Shop meal-plan button after assigning the plan"
+  !/state\.plan\s*=/.test(buildPlanSource) &&
+    /state\.suggestions/.test(buildPlanSource) &&
+    !/setView\("plan"\)/.test(buildPlanSource),
+  "building recipes keeps Plan and Shop untouched and leaves choices in Chat"
+);
+ok(
+  /function addSuggestedDinnerToPlan\(/.test(appJs) && /function removeDinnerFromPlan\(/.test(appJs) && /swapping \? "replace" : "add"/.test(appJs),
+  "chat recipe choices can be added to and removed from the plan"
 );
 ok(
   /planningFailureCopy\(\{[\s\S]*failure:\s*serverFailure[\s\S]*responseReceived[\s\S]*httpStatus/.test(buildPlanSource),
@@ -338,6 +342,14 @@ ok(
     appJs.includes("Reuse permission has not been verified; credit is not permission.") &&
     appJs.includes("Verified directions are unavailable. Regenerate this plan"),
   "meal cards preserve publisher credit and source-specific notices without implying permission or inventing fallback directions"
+);
+const suggestionCitationSource = appJs.match(/function renderSuggestionCitation[\s\S]*?function addSuggestedDinnerToPlan/)?.[0] || "";
+ok(
+  suggestionCitationSource.includes("Required attribution:") && suggestionCitationSource.includes("License:") &&
+    suggestionCitationSource.includes("Reuse permission has not been verified; credit is not permission.") &&
+    /<ol>\$\{meal\.steps\.map\(\(step\) => `<li>\$\{escapeHtml\(step\)\}<\/li>`\)/.test(suggestionCitationSource) &&
+    suggestionCitationSource.includes("href=\"${escapeHtml(meal.sourceUrl)}\""),
+  "Chat suggestions show escaped ordered directions with the publisher link, credit, and rights notices"
 );
 const recipeSourceHandling = appJs.match(/function isLegacyRecipeCitation[\s\S]*?function recordMessage/)?.[0] || "";
 ok(
@@ -555,9 +567,14 @@ ok(fs.readFileSync("public/styles.css", "utf8").includes("repeat(4, 1fr)"), "mob
   const mobileNav = html.match(/<nav class="mobile-nav"[\s\S]*?<\/nav>/)?.[0] || "";
   ok(!desktopNav.includes('data-view="pantry"'), "the desktop rail drops the pantry tab because the panel is always there");
   ok(mobileNav.includes('data-view="pantry"'), "mobile keeps its pantry tab");
+  ok(
+    !desktopNav.includes("<svg") && desktopNav.includes("nav-index") && desktopNav.includes('id="groceryNavCount"') &&
+      /\.nav-item\.active\s*\{[^}]*border-left-color/.test(styles),
+    "the desktop rail uses numbered editorial labels with a flat active rule and visible Shop count"
+  );
   const wideShellCss = styles.match(/@media \(min-width: 981px\) \{[\s\S]*?\n\}/)?.[0] || "";
   ok(
-    /grid-template-columns: 76px minmax\(0, 1fr\) minmax\(270px, 320px\)/.test(wideShellCss) &&
+    /grid-template-columns: 88px minmax\(0, 1fr\) minmax\(270px, 320px\)/.test(wideShellCss) &&
       /\.pantry-drawer:not\(\.profile-drawer\) \.drawer-scrim \{ display: none/.test(wideShellCss) &&
       /\.pantry-drawer:not\(\.profile-drawer\) \.drawer-sheet \{[\s\S]{0,120}transform: none/.test(wideShellCss),
     "wide screens show the pantry as a static side column, not a drawer"
@@ -614,8 +631,8 @@ ok(fs.readFileSync("public/styles.css", "utf8").includes(".pantry-item.off-limit
 // A first visit should show what you can act on, not headings over empty boxes.
 ok(/id="savedRecipes"[^>]*hidden/.test(html), "the saved-meals section stays out of the way until something is saved");
 ok(/\$\("savedRecipes"\)\.hidden = state\.savedRecipes\.length === 0/.test(appJs), "and appears the moment something is");
-// "1 dinners" reads as broken software to someone skimming.
-ok(/dinners\.length === 1 \? "is" : "are"/.test(appJs) && /dinners\.length === 1 \? "" : "s"/.test(appJs), "the plan message agrees with its own count");
+// A count with the wrong singular form reads as broken software to someone skimming.
+ok(/suggestions\.length === 1 \? "is" : "are"/.test(appJs) && /suggestions\.length === 1 \? " suggestion" : " suggestions"/.test(appJs), "the recipe message agrees with its own count");
 ok(/state\.constraints\.diet \|\| "your food restrictions"/.test(appJs), "a sentence about a diet still reads when no diet is named");
 
 // An inventory row is a thing you scan, not a form: the row itself marks what to
@@ -743,7 +760,7 @@ function runClient({ planPayload }) {
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     navigator: { geolocation: { getCurrentPosition() {} } },
     structuredClone: (value) => JSON.parse(JSON.stringify(value)),
-    setTimeout, clearTimeout, requestAnimationFrame: (fn) => fn(), Intl,
+    setTimeout, clearTimeout, requestAnimationFrame: (fn) => fn(), Intl, URL,
     Image: function () {}, FileReader: function () {},
     fetch: async () => ({ ok: true, json: async () => planPayload }),
   };
@@ -760,8 +777,12 @@ const clientSandbox = [];
 runClient({
   planPayload: {
     ok: true,
-    dinners: [{ title: "T", usesPantry: [], needs: [], steps: ["step"], source: "s", sourceUrl: "u", sourceRecipe: "r" }],
-    shoppingList: [], leftovers: [], totalCost: 3, offLimitsPantry: ["pasta"], dietRules: ["gluten-free"],
+    dinners: [
+      { title: "T", usesPantry: ["spinach"], needs: ["carrots", "eggs"], steps: ["step one"], equip: ["microwave"], timeMin: 10, source: "s", sourceUrl: "https://example.com/one", sourceRecipe: "r1" },
+      { title: "U", usesPantry: ["rice"], needs: ["beans", "eggs"], steps: ["step two"], equip: ["microwave"], timeMin: 12, source: "s", sourceUrl: "https://example.com/two", sourceRecipe: "r2" },
+    ],
+    shoppingList: [{ item: "eggs", qty: 1, sharedBy: ["Night 1: T"] }, { item: "beans", qty: 1, sharedBy: ["Night 2: U"] }],
+    leftovers: [], totalCost: 3, offLimitsPantry: ["pasta"], dietRules: ["gluten-free"],
   },
 }).then(({ said, sandbox }) => { clientSaid.push(...said); clientSandbox.push(sandbox); });
 
@@ -1635,7 +1656,7 @@ async function runRouteChecks() {
 
   ok(clientSaid.length > 0, "public/app.js runs end to end against a stub DOM");
   ok(
-    clientSaid.some((line) => /Here is 1 dinner you can make/.test(line)),
+    clientSaid.some((line) => /Here are 2 dinner suggestions/.test(line)),
     `a successful plan reaches the chat (said: ${JSON.stringify(clientSaid)})`
   );
   ok(
@@ -1645,6 +1666,65 @@ async function runRouteChecks() {
   ok(
     clientSaid.some((line) => /I left pasta out of the cooking/.test(line)),
     "the off-limits explanation is produced by the real code path, not just present in the source"
+  );
+  const recipeClient = clientSandbox[0];
+  const recipeState = vm.runInContext("state", recipeClient);
+  ok(recipeState.plan === null, "recipe generation does not add unchosen dinners to Plan");
+  ok(
+    Array.isArray(recipeState.suggestions) && recipeState.suggestions.length === 2,
+    "the generated dinners remain available as Chat suggestions"
+  );
+  ok(vm.runInContext("activeView", recipeClient) === "chat", "a completed recipe request stays in Chat");
+  vm.runInContext('state.constraints.diet = "vegan"', recipeClient);
+  recipeClient.addSuggestedDinnerToPlan(1);
+  ok(vm.runInContext("state.plan", recipeClient) === null, "a stale suggestion cannot be added after diet constraints change");
+  vm.runInContext('state.constraints.diet = ""', recipeClient);
+  recipeClient.addSuggestedDinnerToPlan(1);
+  const chosenPlan = vm.runInContext("state.plan", recipeClient);
+  ok(
+    chosenPlan?.dinners?.length === 1 && chosenPlan.dinners[0].title === "U" &&
+      chosenPlan.shoppingList.map((item) => item.item).sort().join(",") === "bean,egg",
+    "adding one suggestion puts only that dinner and its needs in Plan"
+  );
+  recipeClient.addSuggestedDinnerToPlan(0);
+  const twoChosenPlan = vm.runInContext("state.plan", recipeClient);
+  ok(
+    twoChosenPlan.dinners.length === 2 && twoChosenPlan.shoppingList.map((item) => item.item).sort().join(",") === "bean,carrot,egg" &&
+      twoChosenPlan.shoppingList.find((item) => item.item === "egg").qty === 2 &&
+      twoChosenPlan.shoppingList.find((item) => item.item === "egg").sharedBy.length === 2,
+    "adding a second suggestion appends it and grounds only the chosen dinners' needs"
+  );
+  recipeClient.removeDinnerFromPlan(0);
+  const reducedPlan = vm.runInContext("state.plan", recipeClient);
+  ok(reducedPlan.dinners.length === 1 && reducedPlan.shoppingList.map((item) => item.item).sort().join(",") === "carrot,egg" &&
+    reducedPlan.shoppingList.find((item) => item.item === "egg").qty === 1 &&
+    reducedPlan.shoppingList.find((item) => item.item === "egg").sharedBy.length === 1,
+  "removing a dinner also removes its unshared shopping needs and resets shared counts");
+  recipeClient.removeDinnerFromPlan(0);
+  ok(vm.runInContext("state.plan", recipeClient) === null, "removing the final dinner leaves no empty plan behind");
+  const retainedState = vm.runInContext("state", recipeClient);
+  retainedState.plan = {
+    dinners: [{
+      title: "Existing dinner", sourceRecipe: "Existing recipe", source: "Budget Bytes",
+      sourceUrl: "https://www.budgetbytes.com/existing-recipe/", timeMin: 10,
+      equip: ["microwave"], usesPantry: [], needs: ["rice"], steps: ["Warm the rice."]
+    }],
+    constraints: JSON.parse(JSON.stringify(retainedState.constraints)),
+    shoppingList: [{ item: "rice", qty: 1, sharedBy: ["Night 1: Existing dinner"] }],
+    offLimitsPantry: []
+  };
+  retainedState.groceryList = [{ name: "tea", qty: 2 }];
+  const oldPlan = JSON.stringify(retainedState.plan);
+  const oldShop = JSON.stringify(retainedState.groceryList);
+  await recipeClient.buildPlan("another set of choices");
+  ok(
+    JSON.stringify(retainedState.plan) === oldPlan && JSON.stringify(retainedState.groceryList) === oldShop,
+    "generating more recipes leaves an existing Plan and Shop list unchanged"
+  );
+  recipeClient.addSuggestedDinnerToPlan(1);
+  ok(
+    retainedState.plan.dinners.length === 2 && retainedState.plan.dinners[0].title === "Existing dinner" && retainedState.plan.dinners[1].title === "U",
+    "adding to a compatible existing Plan appends the chosen dinner"
   );
 
   // ---------- export and restore ----------
@@ -1671,6 +1751,20 @@ async function runRouteChecks() {
     messages: Array.from({ length: 500 }, () => ({ role: "user", text: "hi" })),
   });
   ok(bounded.savedRecipes.length <= 40 && bounded.messages.length <= 30, "a restored file cannot grow the stored state without limit");
+  const hostileSuggestion = {
+    ...recipeState.suggestions[0], title: "<img src=x onerror=alert(1)>", steps: ["<script>bad()</script>"]
+  };
+  const restoredSuggestion = client.normaliseState({
+    suggestions: [hostileSuggestion], suggestionConstraints: recipeState.constraints, suggestionPantry: []
+  });
+  const unsafeSuggestion = client.normaliseState({
+    suggestions: [{ ...hostileSuggestion, sourceUrl: "javascript:alert(1)" }], suggestionConstraints: recipeState.constraints
+  });
+  ok(
+    restoredSuggestion.suggestions.length === 1 && client.escapeHtml(restoredSuggestion.suggestions[0].title).startsWith("&lt;img") &&
+      client.escapeHtml(restoredSuggestion.suggestions[0].steps[0]).startsWith("&lt;script") && unsafeSuggestion.suggestions.length === 0,
+    "restored suggestions escape publisher text and discard non-HTTPS source links"
+  );
   ok(client.normaliseState({ location: { lat: "x", lng: 4 } }).location === null, "a restored location with no usable coordinates is dropped");
 
   await runGeoLookupChecks();

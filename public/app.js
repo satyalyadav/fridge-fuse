@@ -18,6 +18,11 @@ const DEFAULT_STATE = {
   },
   excludedTitles: [],
   plan: null,
+  suggestions: [],
+  suggestionConstraints: null,
+  suggestionPantry: [],
+  suggestionOffLimitsPantry: [],
+  suggestionSwap: null,
   messages: [],
   groceryList: [],
   savedRecipes: [],
@@ -56,10 +61,11 @@ function safeStrings(value, limit = 100) {
   return Array.isArray(value) ? value.filter((entry) => typeof entry === "string" && entry.trim()).slice(0, limit).map((entry) => entry.slice(0, 500)) : [];
 }
 
-function safeUrl(value) {
+function safeRecipeUrl(value) {
   try {
     const url = new URL(value);
-    return ["https:", "http:"].includes(url.protocol) ? url.href : "";
+    if (url.protocol !== "https:" || !url.hostname || url.username || url.password || url.hostname === "github.com" || url.hostname.endsWith(".github.com")) return "";
+    return url.href;
   } catch { return ""; }
 }
 
@@ -80,7 +86,7 @@ function safeConstraints(value = {}) {
 
 function safeMeal(meal) {
   if (!meal || typeof meal !== "object" || typeof meal.title !== "string" || !meal.title.trim()) return null;
-  const sourceUrl = safeUrl(meal.sourceUrl);
+  const sourceUrl = safeRecipeUrl(meal.sourceUrl);
   return {
     title: safeText(meal.title), sourceRecipe: safeText(meal.sourceRecipe), source: safeText(meal.source), sourceUrl,
     sourceUsageMode: safeText(meal.sourceUsageMode), sourceRightsStatus: safeText(meal.sourceRightsStatus),
@@ -90,6 +96,13 @@ function safeMeal(meal) {
     steps: safeStrings(meal.steps, 30), equip: safeStrings(meal.equip, 20), usesPantry: safeStrings(meal.usesPantry),
     needs: safeStrings(meal.needs), savedAt: safeText(meal.savedAt)
   };
+}
+
+function safeSuggestionMeal(meal) {
+  const safe = safeMeal(meal);
+  return safe && safe.sourceUrl && !safe.sourceUnavailable && safe.sourceRecipe && safe.source && safe.timeMin > 0 && safe.steps.length
+    ? safe
+    : null;
 }
 
 function sanitizeStoredPlan(plan) {
@@ -136,6 +149,13 @@ function normaliseState(stored) {
     profile: { displayName: safeText(stored.profile?.displayName, 40), onboarded: stored.profile?.onboarded === true },
     constraints: safeConstraints(stored.constraints),
     plan: sanitizeStoredPlan(stored.plan),
+    suggestions: (Array.isArray(stored.suggestions) ? stored.suggestions.slice(0, 7) : []).map(safeSuggestionMeal).filter(Boolean),
+    suggestionConstraints: stored.suggestionConstraints ? safeConstraints(stored.suggestionConstraints) : null,
+    suggestionPantry: safeStrings(stored.suggestionPantry),
+    suggestionOffLimitsPantry: safeStrings(stored.suggestionOffLimitsPantry),
+    suggestionSwap: stored.suggestionSwap && Number.isInteger(stored.suggestionSwap.index) && stored.suggestionSwap.index >= 0 && stored.suggestionSwap.index < 7
+      ? { index: stored.suggestionSwap.index, originalRecipe: safeText(stored.suggestionSwap.originalRecipe, 240) }
+      : null,
     pantry: records(stored.pantry, 100).filter((item) => typeof item.name === "string" && item.name.trim())
       .map((item) => ({ name: item.name.trim().toLowerCase().slice(0, 80), soon: item.soon === true })),
     excludedTitles: safeStrings(stored.excludedTitles).slice(-MAX_EXCLUDED),
@@ -184,7 +204,7 @@ async function importKitchen(file) {
     const text = await file.text();
     const payload = JSON.parse(text);
     const incoming = payload?.format === EXPORT_FORMAT ? payload.state : payload;
-    if (!incoming || typeof incoming !== "object" || Array.isArray(incoming) || !["profile", "pantry", "constraints", "plan", "savedRecipes"].some((key) => Object.prototype.hasOwnProperty.call(incoming, key))) {
+    if (!incoming || typeof incoming !== "object" || Array.isArray(incoming) || !["profile", "pantry", "constraints", "plan", "suggestions", "savedRecipes"].some((key) => Object.prototype.hasOwnProperty.call(incoming, key))) {
       throw new Error("That file is not a FridgeFuse kitchen.");
     }
     if (payload?.format === EXPORT_FORMAT && Number(payload.version) > EXPORT_VERSION) {
@@ -411,6 +431,7 @@ function parseMessage(message) {
 
   saveState();
   renderPantry();
+  renderRecipeSuggestions();
   return {};
 }
 
@@ -482,6 +503,183 @@ function planningFailureCopy(context) {
 
 let planRequestSequence = 0;
 let planningOptions = {};
+
+function constraintsKey(constraints) {
+  if (!constraints) return "";
+  const safe = safeConstraints(constraints);
+  return JSON.stringify({
+    budget: safe.budget,
+    dinners: safe.dinners,
+    maxTimeMin: safe.maxTimeMin,
+    equipment: [...safe.equipment].map((item) => item.toLowerCase()).sort(),
+    diet: safe.diet.split(",").map((item) => item.trim().toLowerCase()).filter(Boolean).sort()
+  });
+}
+
+function suggestionContextIsCurrent() {
+  const pantry = state.pantry.map((item) => item.name).sort();
+  return constraintsKey(state.suggestionConstraints) === constraintsKey(state.constraints) &&
+    JSON.stringify(pantry) === JSON.stringify([...state.suggestionPantry].sort());
+}
+
+function suggestionFitsConstraints(meal, constraints) {
+  return Boolean(constraints) && Number(meal.timeMin) <= Number(constraints.maxTimeMin) &&
+    (meal.equip || []).every((item) => constraints.equipment.includes(item));
+}
+
+function shoppingListForDinners(dinners) {
+  const demand = new Map();
+  for (const [index, dinner] of dinners.entries()) {
+    const mealLabel = `Night ${index + 1}: ${dinner.title}`;
+    for (const raw of dinner.needs || []) {
+      // Match server needName() so a selected subset keeps the same shared
+      // ingredient names and dinner counts as a complete server plan.
+      const text = String(raw ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+      if (!text || text.length > 80) continue;
+      const words = text.split(" ");
+      const last = words.at(-1);
+      const singular = last.endsWith("ies") && last.length > 4
+        ? `${last.slice(0, -3)}y`
+        : last.endsWith("oes") && last.length > 4
+          ? last.slice(0, -2)
+          : /(?:ss|us|is)$/.test(last)
+            ? last
+            : last.endsWith("s") ? last.slice(0, -1) : last;
+      const name = singular === last ? text : `${words.slice(0, -1).join(" ")}${words.length > 1 ? " " : ""}${singular}`;
+      const entry = demand.get(name) || { item: name, dinners: 0, sharedBy: [] };
+      entry.dinners += 1;
+      if (!entry.sharedBy.includes(mealLabel)) entry.sharedBy.push(mealLabel);
+      demand.set(name, entry);
+    }
+  }
+  return [...demand.values()].map(({ item, dinners, sharedBy }) => ({
+    item,
+    qty: Math.min(dinners, 99),
+    sharedBy
+  }));
+}
+
+function renderSuggestionCitation(meal) {
+  return `
+    <a class="meal-source" href="${escapeHtml(meal.sourceUrl)}" target="_blank" rel="noopener noreferrer">Recipe: ${escapeHtml(meal.sourceRecipe)} on ${escapeHtml(meal.source)}</a>
+    <p class="meal-source-credit">Credit: ${escapeHtml(meal.sourceRecipe)} by ${escapeHtml(meal.source)}.${meal.sourceUsageMode === "publisher-directions-with-link-credit" ? " Publisher directions are shown with this link and credit. Reuse permission has not been verified; credit is not permission." : ""}</p>
+    ${(meal.sourceAttribution || meal.sourceLicense) ? `<p class="meal-source-credit">${meal.sourceAttribution ? `Required attribution: ${escapeHtml(meal.sourceAttribution)} ` : ""}${meal.sourceLicense ? `License: ${escapeHtml(meal.sourceLicense)}` : ""}</p>` : ""}`;
+}
+
+function renderRecipeSuggestions({ scroll = false } = {}) {
+  const host = $("messages");
+  host.querySelector("#recipeSuggestions")?.remove();
+  if (!state.suggestions.length) return;
+  const current = suggestionContextIsCurrent();
+  const swapping = Boolean(state.suggestionSwap);
+  const cardHtml = state.suggestions.map((meal, index) => {
+    const pantry = meal.usesPantry || [];
+    const needs = meal.needs || [];
+    const isInPlan = state.suggestionSwap
+      ? state.plan?.dinners?.[state.suggestionSwap.index] && recipeKey(state.plan.dinners[state.suggestionSwap.index]) === recipeKey(meal)
+      : Boolean(state.plan?.dinners?.some((dinner) => recipeKey(dinner) === recipeKey(meal)));
+    const action = swapping ? (isInPlan ? "Replaced" : "Replace dinner") : (isInPlan ? "In Plan" : "Add to Plan");
+    return `
+      <article class="suggestion-card">
+        <div class="suggestion-heading">
+          <div>
+            <p class="eyebrow">Recipe ${String(index + 1).padStart(2, "0")}</p>
+            <h3>${escapeHtml(meal.title)}</h3>
+          </div>
+          <button type="button" data-suggestion-action="${swapping ? "replace" : "add"}" data-index="${index}" ${!current || isInPlan ? "disabled" : ""}>${action}</button>
+        </div>
+        <p class="suggestion-meta">${safeNumber(meal.timeMin, 0, 180)} minutes · ${escapeHtml((meal.equip || []).join(" + ") || "no cooking equipment")}</p>
+        <div class="suggestion-ingredients">
+          <p><strong>From your pantry</strong><span>${pantry.length ? escapeHtml(pantry.join(", ")) : "Nothing"}</span></p>
+          <p><strong>To buy</strong><span>${needs.length ? escapeHtml(needs.join(", ")) : "Nothing"}</span></p>
+        </div>
+        ${renderSuggestionCitation(meal)}
+        <div class="suggestion-directions">
+          <strong>Directions</strong>
+          <ol>${meal.steps.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol>
+        </div>
+      </article>`;
+  }).join("");
+  host.insertAdjacentHTML("beforeend", `
+    <section class="recipe-suggestions" id="recipeSuggestions" aria-label="Recipe suggestions">
+      <div class="suggestions-heading">
+        <p class="eyebrow">Made for your kitchen</p>
+        ${current ? "" : "<p class=\"suggestions-stale\">These choices used older preferences or pantry items. Ask for new choices before adding one.</p>"}
+      </div>
+      ${cardHtml}
+    </section>`);
+  if (scroll) scrollMessages();
+}
+
+function addSuggestedDinnerToPlan(index) {
+  const meal = state.suggestions[index];
+  if (!meal) return false;
+  if (!suggestionContextIsCurrent() || !suggestionFitsConstraints(meal, state.suggestionConstraints)) {
+    renderRecipeSuggestions();
+    toast("These choices used older preferences. Ask for new choices before adding one.", "error");
+    return false;
+  }
+
+  const swapping = state.suggestionSwap;
+  if (swapping) {
+    const target = state.plan?.dinners?.[swapping.index];
+    if (!target || recipeKey(target) !== swapping.originalRecipe || !state.plan?.constraints || constraintsKey(state.plan.constraints) !== constraintsKey(state.suggestionConstraints)) {
+      renderRecipeSuggestions();
+      toast("Your plan changed. Get a new swap suggestion before replacing a dinner.", "error");
+      return false;
+    }
+    const dinners = [...state.plan.dinners];
+    dinners[swapping.index] = meal;
+    state.plan = {
+      dinners,
+      constraints: clone(state.suggestionConstraints),
+      shoppingList: shoppingListForDinners(dinners),
+      offLimitsPantry: [...state.suggestionOffLimitsPantry]
+    };
+    addAssistantMessage(`Dinner ${swapping.index + 1} is now ${meal.title}.`);
+  } else {
+    const existingDinners = state.plan?.dinners || [];
+    const existingCompatible = state.plan && state.plan.constraints && constraintsKey(state.plan.constraints) === constraintsKey(state.suggestionConstraints);
+    let dinners = existingCompatible ? [...existingDinners] : [];
+    if (state.plan && !existingCompatible) {
+      if (!window.confirm("This recipe uses different preferences from your current plan. Replace that plan with this dinner?")) return false;
+    }
+    if (dinners.some((dinner) => recipeKey(dinner) === recipeKey(meal))) return false;
+    if (dinners.length >= 7) {
+      toast("A plan can hold up to 7 dinners. Remove one before adding another.");
+      return false;
+    }
+    dinners.push(meal);
+    state.plan = {
+      dinners,
+      constraints: clone(state.suggestionConstraints),
+      shoppingList: shoppingListForDinners(dinners),
+      offLimitsPantry: [...state.suggestionOffLimitsPantry]
+    };
+    addAssistantMessage(`${meal.title} added to your Plan.`);
+  }
+  state.offLimitsPantry = [...state.suggestionOffLimitsPantry];
+  saveState();
+  renderPlan();
+  renderGroceryList();
+  renderPantry();
+  return true;
+}
+
+function removeDinnerFromPlan(index) {
+  if (!Number.isInteger(index) || !state.plan?.dinners?.[index]) return false;
+  const [removed] = state.plan.dinners.splice(index, 1);
+  state.plan = state.plan.dinners.length
+    ? { ...state.plan, shoppingList: shoppingListForDinners(state.plan.dinners) }
+    : null;
+  state.offLimitsPantry = [...(state.plan?.offLimitsPantry || [])];
+  saveState();
+  renderPlan();
+  renderGroceryList();
+  renderPantry();
+  toast(`${removed.title} removed from your Plan`);
+  return true;
+}
 
 let interpreting = false;
 
@@ -633,20 +831,7 @@ async function buildPlan(request = "") {
     if (!result.ok && !result.dinners) throw new Error(result.failure?.message || "The planner did not return a plan");
     responseAccepted = true;
 
-    // Leaving food out silently is what makes a diet feature untrustworthy: the
-    // student can see the item sitting in their pantry and cannot tell whether
-    // the planner respected it or forgot it.
     const offLimits = Array.isArray(result.offLimitsPantry) ? result.offLimitsPantry : [];
-
-    state.plan = {
-      ...result,
-      constraints: clone(snapshot.constraints)
-    };
-    state.offLimitsPantry = offLimits;
-    saveState();
-    renderPlan();
-    renderGroceryList();
-    renderPantry();
     hideThinking();
 
     if (!result.dinners?.length) {
@@ -656,24 +841,49 @@ async function buildPlan(request = "") {
       );
       return;
     }
-    const priceStatus = "Add the shopping list to Shop and compare live Walmart, ALDI, and Fry's prices.";
-    const usedSoon = soon.filter((name) => result.dinners?.[0]?.usesPantry?.includes(name));
-    const soonText = usedSoon.length ? ` The first dinner uses ${usedSoon.join(" and ")}.` : "";
-    const dietText = snapshot.constraints.diet ? ` Every dinner is ${snapshot.constraints.diet}.` : "";
-    const offLimitsText = offLimits.length
-      ? ` I left ${offLimits.join(" and ")} out of the cooking — ${offLimits.length === 1 ? "it does not" : "they do not"} fit ${snapshot.constraints.diet || "your food restrictions"}. If yours is a safe version, add it under its own name (for example "gluten free pasta") and I will use it.`
-      : "";
     if (result.swapUnavailable) {
       addAssistantMessage(
         "I could not find a different recipe that fits your time and equipment, so that dinner is still here.",
-        "Loosening one of those — more time or another appliance — usually opens up more options."
+        "The Plan has not changed. Try a little more time or another appliance, then ask again."
       );
+      return;
     }
+    const swapIndex = Number.isInteger(options.swapIndex) ? options.swapIndex : null;
+    const proposed = swapIndex === null ? result.dinners.slice(0, 7) : [result.dinners[swapIndex]].filter(Boolean);
+    const suggestions = proposed.map(safeSuggestionMeal).filter((meal) => meal && suggestionFitsConstraints(meal, snapshot.constraints));
+    if (!suggestions.length) {
+      addAssistantMessage("I couldn't find a verified recipe for those preferences.", result.note || "Try more time, more equipment, or fewer restrictions.");
+      return;
+    }
+    state.suggestions = suggestions;
+    state.suggestionConstraints = clone(snapshot.constraints);
+    state.suggestionPantry = snapshot.pantry.map((item) => item.name);
+    state.suggestionOffLimitsPantry = safeStrings(offLimits);
+    state.suggestionSwap = swapIndex === null
+      ? null
+      : { index: swapIndex, originalRecipe: recipeKey(snapshot.plan?.dinners?.[swapIndex]) };
+    saveState();
+
+    const usedSoon = soon.filter((name) => suggestions.some((meal) => meal.usesPantry?.includes(name)));
+    const soonText = usedSoon.length ? ` Some suggestions use ${usedSoon.join(" and ")}.` : "";
+    const dietText = snapshot.constraints.diet ? ` Each suggestion meets ${snapshot.constraints.diet}.` : "";
+    const offLimitsText = offLimits.length
+      ? ` I left ${offLimits.join(" and ")} out of the cooking — ${offLimits.length === 1 ? "it does not" : "they do not"} fit ${snapshot.constraints.diet || "your food restrictions"}. If yours is a safe version, add it under its own name (for example "gluten free pasta") and I will use it.`
+      : "";
+    if (swapIndex !== null) {
+      addAssistantMessage(
+        `I found a replacement for dinner ${swapIndex + 1}. Review the publisher link and directions, then choose Replace dinner if you want it.`,
+        offLimitsText.trim()
+      );
+      renderRecipeSuggestions({ scroll: true });
+      return;
+    }
+    const countText = `Here ${suggestions.length === 1 ? "is" : "are"} ${suggestions.length} dinner${suggestions.length === 1 ? " suggestion" : " suggestions"}.`;
     addAssistantMessage(
-      `Here ${result.dinners.length === 1 ? "is" : "are"} ${result.dinners.length} dinner${result.dinners.length === 1 ? "" : "s"} you can make.${soonText}${dietText}${offLimitsText}`,
-      `${priceStatus} ${result.dinners.length === 1 ? "Use the Swap button." : 'Do not like one? Say "swap dinner two".'}`
+      `${countText}${soonText}${dietText}${offLimitsText}`,
+      "Add the dinners you want to Plan. Leave the rest here in Chat."
     );
-    setView("plan");
+    renderRecipeSuggestions({ scroll: true });
   } catch (error) {
     if (requestId !== planRequestSequence) return;
     hideThinking();
@@ -760,6 +970,7 @@ function renderPlan() {
           <button data-action="details" data-index="${index}">Steps</button>
           <button data-action="save" data-index="${index}" aria-pressed="${isRecipeSaved(meal)}">${isRecipeSaved(meal) ? "Saved" : "Save"}</button>
           <button data-action="swap" data-index="${index}">Swap</button>
+          <button data-action="remove" data-index="${index}" aria-label="Remove ${escapeHtml(meal.title)} from the plan">Remove</button>
         </div>
         <div class="meal-details">
           <strong>How to make it</strong>
@@ -870,6 +1081,7 @@ function renderPantry() {
       <div class="pantry-empty">
         Nothing here yet. Type what food you have, or add a photo of your fridge.
       </div>`;
+    renderRecipeSuggestions();
     return;
   }
 
@@ -891,6 +1103,7 @@ function renderPantry() {
       <button class="pantry-remove" data-pantry-action="remove" data-index="${index}" aria-label="Remove ${escapeHtml(item.name)}" title="Remove">&times;</button>
     </div>
   `).join("");
+  renderRecipeSuggestions();
 }
 
 /* ---------------- preference catalogs + onboarding ---------------- */
@@ -1129,6 +1342,7 @@ function commitWelcome({ markOnboarded }) {
   state.constraints.budget = clampNumber($("welcomeBudget").value, PREFERENCES.limits.budget, 20);
 
   saveState();
+  renderRecipeSuggestions();
   renderProfile();
   renderLocation();
 }
@@ -1243,8 +1457,8 @@ function closePantry() {
   delete document.body.dataset.drawerOpen;
 }
 
-// One view at a time at every width. Chat is home, the Plan is a result screen
-// that opens when a build finishes, and the nav buttons always change the pane.
+// One view at a time at every width. Chat is home, and recipes stay here until
+// the student chooses which dinners belong in the Plan.
 function setView(view) {
   if (view === "pantry") {
     openPantry();
@@ -1438,6 +1652,7 @@ $("profileForm").addEventListener("submit", (event) => {
   state.constraints.budget = clampNumber($("profileBudget").value, PREFERENCES.limits.budget, 20);
 
   saveState();
+  renderRecipeSuggestions();
   renderProfile();
   closeProfile();
 
@@ -1922,6 +2137,11 @@ bindOptionToggles($("profileForm"), "profile");
 
 $("useLocationButton").addEventListener("click", requestLocation);
 $("compareButton").addEventListener("click", compareStores);
+$("messages").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-suggestion-action]");
+  if (!button || button.disabled) return;
+  addSuggestedDinnerToPlan(Number(button.dataset.index));
+});
 $("offerAreaInput").addEventListener("input", () => {
   groceryRevision += 1;
   $("groceryResults").innerHTML = '<p class="results-note">Search area changed. Compare stores again for updated totals.</p>';
@@ -2008,6 +2228,11 @@ $("mealList").addEventListener("click", async (event) => {
   const index = Number(button.dataset.index);
   const meal = state.plan.dinners[index];
   if (!meal) return;
+
+  if (button.dataset.action === "remove") {
+    removeDinnerFromPlan(index);
+    return;
+  }
 
   if (button.dataset.action === "details") {
     button.closest(".meal-card").classList.toggle("open");

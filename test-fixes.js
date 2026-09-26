@@ -12,7 +12,9 @@ function client() {
       classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
       addEventListener(event, fn) { this.handlers[event] = fn; },
       append(child) { this.children.push(child); }, appendChild(child) { this.append(child); },
-      remove() {}, focus() {}, setAttribute() {}, removeAttribute() {}, scrollTo() {}, click() { return this.handlers.click?.({ target: this }); },
+      remove() {}, focus() {}, setAttribute() {}, removeAttribute() {}, scrollTo() {},
+      insertAdjacentHTML(_, html) { this.innerHTML += html; },
+      click() { return this.handlers.click?.({ target: this }); },
       querySelector() { return node("child"); }, querySelectorAll() { return []; }, closest() { return this; }
     };
     nodes.set(id, el);
@@ -48,7 +50,7 @@ const dietOptions = () => server.DIET_RULES.map(({ id, label, group, note, alias
   id, label, group, note, aliases, restricts: forbids.length
 }));
 // Deterministic request-scoped candidates for the in-process route checks. The
-// production service discovers these facts through Tavily and Recipe JSON-LD;
+// production service starts from curated URL leads and verifies live Recipe JSON-LD;
 // this fixture only replaces that network boundary.
 const LIVE_CANDIDATES = [
   { title: "Microwave Potato", source: "Food Network", sourceUrl: "https://www.foodnetwork.com/recipes/food-network-kitchen/microwave-potato-10076489", timeMin: 10, equipment: ["microwave"], ingredients: ["potatoes", "olive oil", "butter"], method: "Pierce and oil the potato, microwave until tender, then split and season it.", rawIngredients: ["potatoes", "olive oil", "butter"], rawInstructions: ["Pierce and oil the potato, microwave until tender, then split and season it."] },
@@ -303,21 +305,69 @@ async function run() {
     assert.strictEqual(c.run('state.pantry[0].amount'), undefined);
     assert.strictEqual(c.run('state.pantry[1].soon'), true);
   });
-  await check("newest plan wins, with its own captured constraints", async () => {
+  await check("newest suggestions win, with their own captured constraints", async () => {
     c.run('state=clone(DEFAULT_STATE);');
     const pending = [];
     c.context.fetch = (_, options) => new Promise((resolve) => pending.push({ resolve, body: JSON.parse(options.body) }));
     const first = c.context.buildPlan("old"); c.run('state.constraints.diet="vegan"'); const second = c.context.buildPlan("new");
-    const response = (title) => ({ ok: true, status: 200, json: async () => ({ ok: true, dinners: [{title,steps:[]}], shoppingList: [], leftovers: [], totalCost: 0 }) });
+    const response = (title) => ({ ok: true, status: 200, json: async () => ({ ok: true, dinners: [{
+      title,
+      sourceRecipe: title,
+      source: "Budget Bytes",
+      sourceUrl: `https://www.budgetbytes.com/${title.toLowerCase().replaceAll(" ", "-")}/`,
+      timeMin: 10,
+      equip: ["microwave"],
+      usesPantry: [],
+      needs: ["rice"],
+      steps: ["Warm the rice in a microwave-safe bowl."]
+    }], shoppingList: [], leftovers: [], totalCost: 0 }) });
     pending[1].resolve(response("new")); await second; pending[0].resolve(response("old")); await first;
-    assert.strictEqual(c.run("state.plan.dinners[0].title"), "new");
-    assert.strictEqual(c.run("state.plan.constraints.diet"), "vegan");
+    assert.strictEqual(c.run("state.plan"), null);
+    assert.strictEqual(c.run("state.suggestions[0].title"), "new");
+    assert.strictEqual(c.run("state.suggestionConstraints.diet"), "vegan");
   });
-  await check("plan succeeds without structuredClone support", async () => {
-    c.context.structuredClone = undefined;
-    c.context.fetch = async () => ({ ok: true, status: 200, json: async () => ({ ok: true, dinners: [{ title: "legacy browser", steps: [] }], shoppingList: [], leftovers: [], totalCost: 0 }) });
+  await check("verified recipe suggestions render as escaped, credited chat cards", async () => {
+    c.run('state=clone(DEFAULT_STATE);');
+    c.node("messages").innerHTML = "";
+    c.context.fetch = async () => ({ ok: true, status: 200, json: async () => ({ ok: true, dinners: [{
+      title: "Choice <one>",
+      sourceRecipe: "Published <Recipe>",
+      source: "Budget Bytes",
+      sourceUrl: "https://www.budgetbytes.com/published-recipe/",
+      timeMin: 10,
+      equip: ["microwave"],
+      usesPantry: ["rice"],
+      needs: ["spinach"],
+      steps: ["<script>first()</script>", "Serve & enjoy"]
+    }], shoppingList: [], leftovers: [], totalCost: 0 }) });
     await c.context.buildPlan();
+    const markup = c.node("messages").innerHTML;
+    assert(markup.includes('<article class="suggestion-card">'));
+    assert(markup.includes('data-suggestion-action="add"') && markup.includes("Add to Plan"));
+    assert(markup.includes('href="https://www.budgetbytes.com/published-recipe/"') && markup.includes("Credit: Published &lt;Recipe&gt; by Budget Bytes."));
+    const firstStep = markup.indexOf("&lt;script&gt;first()&lt;/script&gt;");
+    const secondStep = markup.indexOf("Serve &amp; enjoy");
+    assert(firstStep >= 0 && secondStep > firstStep && !markup.includes("<script>first()</script>"));
+  });
+  await check("recipe suggestions work without structuredClone support", async () => {
+    c.context.structuredClone = undefined;
+    c.context.fetch = async () => ({ ok: true, status: 200, json: async () => ({ ok: true, dinners: [{
+      title: "legacy browser",
+      sourceRecipe: "Legacy Browser Recipe",
+      source: "Budget Bytes",
+      sourceUrl: "https://www.budgetbytes.com/legacy-browser-recipe/",
+      timeMin: 10,
+      equip: ["microwave"],
+      usesPantry: [],
+      needs: ["rice"],
+      steps: ["Warm the rice in a microwave-safe bowl."]
+    }], shoppingList: [], leftovers: [], totalCost: 0 }) });
+    await c.context.buildPlan();
+    assert.strictEqual(c.run("state.plan"), null);
+    assert.strictEqual(c.run("state.suggestions[0].title"), "legacy browser");
+    assert.strictEqual(c.context.addSuggestedDinnerToPlan(0), true);
     assert.strictEqual(c.run("state.plan.dinners[0].title"), "legacy browser");
+    assert.strictEqual(c.run("state.plan.shoppingList[0].item"), "rice");
   });
   if (failed.length) throw new Error(`${failed.length} regression checks failed: ${failed.join("; ")}`);
   return count;
