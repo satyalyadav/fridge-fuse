@@ -568,13 +568,27 @@ ok(fs.readFileSync("public/styles.css", "utf8").includes("repeat(4, 1fr)"), "mob
   ok(!desktopNav.includes('data-view="pantry"'), "the desktop rail drops the pantry tab because the panel is always there");
   ok(mobileNav.includes('data-view="pantry"'), "mobile keeps its pantry tab");
   ok(
-    !desktopNav.includes("<svg") && desktopNav.includes("nav-index") && desktopNav.includes('id="groceryNavCount"') &&
-      /\.nav-item\.active\s*\{[^}]*border-left-color/.test(styles),
-    "the desktop rail uses numbered editorial labels with a flat active rule and visible Shop count"
+    ["chat", "plan", "grocery"].every((view) => desktopNav.includes(`data-view="${view}"`)) &&
+      ["Chat", "Plan", "Shop", "Reset"].every((label) => desktopNav.includes(`<span>${label}</span>`)) &&
+      desktopNav.includes('<svg aria-hidden="true"') && desktopNav.includes('id="groceryNavCount"') &&
+      desktopNav.includes('aria-label="Main navigation"') && desktopNav.includes('aria-label="Reset kitchen"') &&
+      desktopNav.includes('aria-current="page"') && !desktopNav.includes("nav-index"),
+    "the desktop rail keeps accessible icon labels, view hooks, and the Shop count"
+  );
+  const navItemCss = styles.match(/\.nav-item\s*\{[^}]*\}/)?.[0] || "";
+  const activeNavCss = styles.match(/\.nav-item\.active\s*\{[^}]*\}/)?.[0] || "";
+  const navCountCss = styles.match(/\.nav-count\s*\{[^}]*\}/)?.[0] || "";
+  ok(
+    /grid-template-columns: 76px minmax\(0, 1fr\)/.test(styles) &&
+      /display:\s*flex/.test(navItemCss) && /flex-direction:\s*column/.test(navItemCss) &&
+      /align-items:\s*center/.test(navItemCss) && /border-radius:\s*13px/.test(navItemCss) &&
+      /background:\s*var\(--maroon-wash\)/.test(activeNavCss) && !/box-shadow:/.test(activeNavCss) &&
+      /border-radius:\s*20px/.test(navCountCss) && /background:\s*var\(--gold\)/.test(navCountCss),
+    "the desktop rail restores its 76px icon-over-label layout and active pill without the gold side sliver"
   );
   const wideShellCss = styles.match(/@media \(min-width: 981px\) \{[\s\S]*?\n\}/)?.[0] || "";
   ok(
-    /grid-template-columns: 88px minmax\(0, 1fr\) minmax\(270px, 320px\)/.test(wideShellCss) &&
+    /grid-template-columns: 76px minmax\(0, 1fr\) minmax\(270px, 320px\)/.test(wideShellCss) &&
       /\.pantry-drawer:not\(\.profile-drawer\) \.drawer-scrim \{ display: none/.test(wideShellCss) &&
       /\.pantry-drawer:not\(\.profile-drawer\) \.drawer-sheet \{[\s\S]{0,120}transform: none/.test(wideShellCss),
     "wide screens show the pantry as a static side column, not a drawer"
