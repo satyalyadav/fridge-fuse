@@ -87,15 +87,16 @@ function makeDiscovery(options = {}) {
 
 async function runCuratedDiscoveryChecks() {
   const checkedIndex = validateCuratedIndex(curatedIndex);
-  check(checkedIndex.ok && checkedIndex.leadCount === 36 && checkedIndex.sourceCount === 6, "the curated index has 36 unique URLs across six source policies");
+  check(checkedIndex.ok && checkedIndex.leadCount === 33 && checkedIndex.sourceCount === 5, "the curated index has 33 unique URLs across five source policies");
+  check(curatedIndex.sourcePolicies.every((policy) => policy.id !== "budget-bytes") && curatedIndex.leads.every((lead) => lead.sourceId !== "budget-bytes" && !new URL(lead.url).hostname.endsWith("budgetbytes.com")), "Budget Bytes has no production source policy or curated lead");
   check(curatedIndex.leads.every((lead) => Object.keys(lead).sort().join(",") === "leadTags,sourceId,url"), "curated leads store URLs and ranking hints, not recipe titles, times, ingredients, or steps");
   check(curatedIndex.sourcePolicies.every((policy) => ["publisher-directions-with-link-credit", "licensed-publisher-directions-with-attribution"].includes(policy.productionMode)), "every production source declares whether publisher directions require a license or link credit");
   check(curatedIndex.leads.every((lead) => !/dessert|cake|cookie|side-dish|smoothie|drink/i.test(lead.url)), "the curated index excludes obvious dessert and side URL slugs");
   check(curatedIndex.leads.filter((lead) => lead.leadTags.includes("microwave")).length === 7, "microwave dinner leads are ranked from seven URL-only entries");
   check(rankCuratedLeads(curatedIndex.leads, { equipment: ["microwave"] }).slice(0, 7).every((lead) => lead.leadTags.includes("microwave")), "microwave requests rank microwave leads first without accepting their tags as facts");
   const veganStoveLeads = rankCuratedLeads(curatedIndex.leads, { equipment: ["stove"], dietRules: [{ id: "vegan", label: "Vegan" }] });
-  check(veganStoveLeads.slice(0, 4).every((lead) => ["bbc-good-food", "budget-bytes", "vegan-richa", "nora-cooks"].includes(lead.sourceId)), "new live-verified vegan stove publishers rank ahead of older RCP leads with source diversity");
-  check(curatedIndex.leads.filter((lead) => ["bbc-good-food", "budget-bytes", "vegan-richa", "nora-cooks"].includes(lead.sourceId) && lead.leadTags.includes("vegan") && lead.leadTags.includes("stove")).length === 8, "eight added vegan stove URL hints are present without storing recipe facts");
+  check(veganStoveLeads.slice(0, 3).every((lead) => ["bbc-good-food", "vegan-richa", "nora-cooks"].includes(lead.sourceId)), "new live-verified vegan stove publishers rank ahead of older RCP leads with source diversity");
+  check(curatedIndex.leads.filter((lead) => ["bbc-good-food", "vegan-richa", "nora-cooks"].includes(lead.sourceId) && lead.leadTags.includes("vegan") && lead.leadTags.includes("stove")).length === 5, "five vegan stove URL hints are present without storing recipe facts");
   check(veganStoveLeads[0].leadTags.includes("stove"), "stove and diet signals affect deterministic lead ranking");
   const measuredGap = minGapByHost([
     { host: "publisher.example.test", startedAt: 25.5 },

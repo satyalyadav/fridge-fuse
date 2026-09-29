@@ -48,21 +48,6 @@
       "minimumRequestGapMs": 1200
     },
     {
-      "id": "budget-bytes",
-      "host": "www.budgetbytes.com",
-      "pathPrefix": "/",
-      "displayName": "Budget Bytes",
-      "robotsStatus": "allow-recipe-paths; named AI-crawler disallows",
-      "robotsChecked": "2026-09-23",
-      "rightsStatus": "no-reuse-license-found",
-      "productionMode": "publisher-directions-with-link-credit",
-      "licenseRule": "Operational display path only. Reuse permission has not been verified and credit is not permission. Show publisher directions with a link and credit pending rights review; do not use photos.",
-      "attributionRequired": false,
-      "licenseRequired": false,
-      "linkAttributionRequired": true,
-      "minimumRequestGapMs": 1200
-    },
-    {
       "id": "vegan-richa",
       "host": "www.veganricha.com",
       "pathPrefix": "/",
@@ -104,9 +89,6 @@
     { "url": "https://www.bbcgoodfood.com/recipes/vegetable-bean-chilli", "sourceId": "bbc-good-food", "leadTags": ["dinner", "stove", "vegan", "vegetarian", "dairy-free"] },
     { "url": "https://www.bbcgoodfood.com/recipes/bean-pepper-chilli", "sourceId": "bbc-good-food", "leadTags": ["dinner", "stove", "vegan", "vegetarian", "dairy-free"] },
     { "url": "https://www.bbcgoodfood.com/recipes/kidney-bean-curry", "sourceId": "bbc-good-food", "leadTags": ["dinner", "stove", "vegan", "vegetarian", "dairy-free"] },
-    { "url": "https://www.budgetbytes.com/coconut-curry-chickpeas/", "sourceId": "budget-bytes", "leadTags": ["dinner", "stove", "vegan", "vegetarian", "dairy-free"] },
-    { "url": "https://www.budgetbytes.com/vegan-red-lentil-stew/", "sourceId": "budget-bytes", "leadTags": ["dinner", "stove", "vegan", "vegetarian", "dairy-free"] },
-    { "url": "https://www.budgetbytes.com/vegan-winter-lentil-stew/", "sourceId": "budget-bytes", "leadTags": ["dinner", "stove", "vegan", "vegetarian", "dairy-free"] },
     { "url": "https://www.veganricha.com/fat-free-red-lentil-stew-with-garlic/", "sourceId": "vegan-richa", "leadTags": ["dinner", "stove", "vegan", "vegetarian", "dairy-free", "quick"] },
     { "url": "https://www.noracooks.com/spanish-rice-and-beans/", "sourceId": "nora-cooks", "leadTags": ["dinner", "stove", "vegan", "vegetarian", "dairy-free"] },
     { "url": "https://recipecontextprotocol.com/recipes/20-minute-beef-stroganoff", "sourceId": "rcp-wikibooks", "leadTags": ["dinner", "stove"] },

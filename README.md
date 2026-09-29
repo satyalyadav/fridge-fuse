@@ -156,7 +156,8 @@ tap away in the rail, and the pantry stays open beside the conversation on wide
 screens.
 
 With `VOYAGER_KEY` configured, the planning flow sends the pantry, constraints,
-and latest request to ASU AIR. Voyager creates the dinners and cooking steps.
+and latest request to ASU AIR. Voyager selects verified recipes for the dinners;
+publisher pages provide their cooking steps.
 The server turns the ingredient names into a shopping list and drops every
 number the model returned; the Shop tab prices that list live.
 
