@@ -261,15 +261,10 @@ async function runCuratedDiscoveryChecks() {
     sourcePolicies: [{ id: "fixture", host: "recipes.example.test", pathPrefix: "/recipes/", rightsStatus: "prototype-only-fixture", attributionRequired: true, licenseRequired: true, minimumRequestGapMs: 1000 }],
     leads: [{ url: "https://recipes.example.test/recipes/live-bean-rice", sourceId: "fixture", leadTags: ["dinner", "stove"] }],
   };
-  let searchFetches = 0;
   let pageFetches = 0;
   const html = htmlFor("Live Bean Rice");
   const liveVerifier = createLiveRecipeService({
     dnsLookup: async () => publicAddress,
-    fetchImpl: async () => {
-      searchFetches++;
-      return { status: 200, ok: true, headers: { get: (name) => name.toLowerCase() === "content-type" ? "text/html" : null }, text: async () => html };
-    },
     recipeFetch: async () => {
       pageFetches++;
       return { status: 200, ok: true, headers: { get: (name) => name.toLowerCase() === "content-type" ? "text/html" : null }, text: async () => html };
@@ -277,7 +272,7 @@ async function runCuratedDiscoveryChecks() {
   });
   const parsedLive = await createCuratedRecipeDiscovery({ index: liveIndex, liveRecipeService: liveVerifier, hostDelayMs: 0, now: () => 1000, sleep: async () => {} })
     .findRecipes({ dinners: 1, maxTimeMin: 30, equipment: ["stove"], allowPrototypeOnly: true, maxPageFetches: 1, maxPageChecks: 1 });
-  check(parsedLive.ok && parsedLive.candidates[0].title === "Live Bean Rice" && pageFetches === 1 && searchFetches === 0, "the curated adapter parses one fresh Recipe JSON-LD page through the existing verifier without a Tavily request");
+  check(parsedLive.ok && parsedLive.candidates[0].title === "Live Bean Rice" && pageFetches === 1, "the curated adapter parses one fresh Recipe JSON-LD page through the existing verifier");
   check(parsedLive.candidates[0].license.includes("creativecommons") && parsedLive.candidates[0].attribution.includes("CC BY-SA"), "live license and source attribution survive verification on the candidate");
 
   const escapedPath = await makeDiscovery({

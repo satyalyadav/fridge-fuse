@@ -7,10 +7,6 @@
     "start": "node server.js",
     "build": "npm test",
     "test": "node test.js",
-    "benchmark:recipes": "node scripts/benchmark-recipe-discovery.js",
-    "benchmark:rcp": "node scripts/benchmark-rcp-discovery.js",
-    "smoke:rcp": "node scripts/benchmark-rcp-discovery.js --live",
-    "evaluate:recipe-time": "node scripts/evaluate-recipe-inference.js",
     "audit:curated-recipes": "node scripts/audit-curated-recipes.js",
     "dev:vercel": "npx vercel@latest dev"
   },

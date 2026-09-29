@@ -13,6 +13,7 @@ const express = require("express");
 const fs = require("fs");
 const path = require("path");
 const { createGroceryOffersService } = require("./lib/grocery-offers");
+const { createGroceryMatcher } = require("./lib/grocery-matcher");
 const { createCuratedRecipeDiscovery } = require("./lib/curated-recipe-discovery");
 const {
   createLiveRecipeService,
@@ -22,33 +23,6 @@ const {
   isPublicRecipeUrl,
 } = require("./lib/live-recipes");
 
-// The direct Walmart search needs impit's native binary, so build it lazily
-// and tolerate a platform where the package cannot load: the offers route then
-// reports the Walmart failure instead of crashing. The load error is kept for
-// /api/health because a serverless platform is where it will bite.
-// WALMART_BROWSERS lists the fingerprints to try in order, and
-// WALMART_WARMUP=1 makes each one visit the homepage before searching.
-function loadWalmartDirectSearch() {
-  try {
-    const walmartDirect = require("./lib/walmart-direct");
-    const browsers = String(process.env.WALMART_BROWSERS || "")
-      .split(",")
-      .map((name) => name.trim())
-      .filter(Boolean);
-    return {
-      create: walmartDirect.createWalmartDirectSearch,
-      search: walmartDirect.createWalmartDirectSearch({
-        browsers,
-        warmUp: process.env.WALMART_WARMUP === "1",
-      }),
-      error: "",
-    };
-  } catch (error) {
-    return { create: null, search: null, error: error?.message || "The direct Walmart search could not be loaded." };
-  }
-}
-const WALMART_DIRECT = loadWalmartDirectSearch();
-
 const PORT = process.env.PORT || 3000;
 const AIR_BASE = (process.env.ASU_AIR_BASE_URL || "https://openai.rc.asu.edu/v1").replace(/\/$/, "");
 const AIR_KEY = process.env.VOYAGER_KEY || "";
@@ -56,6 +30,8 @@ const DEFAULT_AIR_MODEL = "llama4-scout-17b";
 const AIR_MODEL = process.env.ASU_AIR_MODEL || DEFAULT_AIR_MODEL;
 const AIR_VISION_MODEL = process.env.ASU_AIR_VISION_MODEL || "qwen3-vl-32b-instruct";
 const AIR_VISION_VERIFY_MODEL = process.env.ASU_AIR_VISION_VERIFY_MODEL || AIR_MODEL;
+const GROCERY_MATCH_MODEL = process.env.ASU_AIR_GROCERY_MATCH_MODEL || "llama4-scout-17b";
+const GROCERY_MATCH_VERIFY_MODEL = process.env.ASU_AIR_GROCERY_MATCH_VERIFY_MODEL || "gemma4-31b-it";
 
 function asStringArray(value, fallback = []) {
   if (!Array.isArray(value)) return fallback;
@@ -136,6 +112,12 @@ function reportFailure(provider, operation, details) {
 
 // Advertised grocery offers have their own bounded cache, separate from the
 // meal plan so no web result can change what a plan contains.
+const groceryMatcher = createGroceryMatcher({
+  chat: airChat,
+  primaryModel: GROCERY_MATCH_MODEL,
+  verifierModel: GROCERY_MATCH_VERIFY_MODEL,
+  reportFailure,
+});
 const groceryOffersService = createGroceryOffersService({
   reportFailure,
 });
@@ -169,7 +151,7 @@ function aiFailureStatus(failure) {
   return failure?.status === "no-key" ? 503 : 502;
 }
 
-async function airChat(messages, { maxTokens = 1200, wantJson = true, model = AIR_MODEL, schema = null, temperature } = {}) {
+async function airChat(messages, { maxTokens = 1200, wantJson = true, model = AIR_MODEL, schema = null, temperature, timeoutMs = 45000 } = {}) {
   // Returns { ok:true, data } or { ok:false, failure }
   if (!AIR_KEY) {
     const f = reportFailure("asu-air", "chat", {
@@ -181,7 +163,8 @@ async function airChat(messages, { maxTokens = 1200, wantJson = true, model = AI
     return { ok: false, failure: f };
   }
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 45000);
+  const boundedTimeout = Math.max(1, Math.min(45000, Number(timeoutMs) || 45000));
+  const t = setTimeout(() => ctrl.abort(), boundedTimeout);
   try {
     const body = { model, messages, max_tokens: maxTokens };
     if (Number.isFinite(temperature)) body.temperature = temperature;
@@ -313,10 +296,13 @@ function isApprovedRecipeCitation(source, sourceRecipe, sourceUrl, candidates = 
 // and singularize the common grocery plurals so "eggs" and "egg" are the same
 // food. The suffix rules leave mass nouns alone ("asparagus", "hummus", "rice").
 function normalizeIngredient(name) {
-  const text = String(name ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const text = String(name ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   if (!text) return "";
   const last = text.split(" ").pop();
-  const singular = last.endsWith("ies") && last.length > 4
+  const singular = last === "leaves"
+    ? "leaf"
+    : last.endsWith("ies") && last.length > 4
     ? `${last.slice(0, -3)}y`
     : last.endsWith("oes") && last.length > 4
       ? last.slice(0, -2)
@@ -617,7 +603,7 @@ const EQUIPMENT_OPTIONS = [
 // A dinner's needs are ingredient NAMES, not quantities. The model reliably
 // knows which ingredients a recipe uses and reliably misjudges how much, so the
 // plan requests names and the server turns each one into a live shopping-list
-// line; the Shop compare prices those names against Walmart, ALDI, and Fry's.
+// line; the Shop compare prices those names through the live retailer adapters.
 function needName(raw) {
   const rawName = raw && typeof raw === "object" && !Array.isArray(raw) ? raw.item : raw;
   const name = normalizeIngredient(rawName);
@@ -911,9 +897,6 @@ app.get("/api/health", (req, res) => {
     airModel: AIR_MODEL,
     airVisionModel: AIR_VISION_MODEL,
     airVisionVerifyModel: AIR_VISION_VERIFY_MODEL,
-    walmartDirect: Boolean(WALMART_DIRECT.search),
-    walmartProfiles: WALMART_DIRECT.search?.browsers || [],
-    ...(WALMART_DIRECT.error ? { walmartDirectError: WALMART_DIRECT.error } : {}),
     dietRules: DIET_RULES.map((rule) => rule.label),
     failures: failures.length,
   });
@@ -1153,7 +1136,7 @@ ${dietCtx}`
 "notes":"..."}
 Use recipeId from a verified live candidate for every dinner. The server fills sourceRecipe, source, and sourceUrl from that ID; you may omit those three fields.
 Rules: plan EXACTLY the requested number of dinners. The user is a freshman cook, so give concrete beginner-safe steps and only use the listed equipment. First use food marked use-soon, then minimize unique purchases and keep cooking easy. Prefer purchases shared across dinners. Put only missing ingredients in needs; pantry items cost $0. Respect time, equipment, and dietary restrictions.
-Ingredients (REQUIRED): needs is a plain list of lowercase ingredient NAME strings, no amounts, units, or packages. Do NOT return shoppingList, leftovers, or totalCost — the server builds the shopping list and the Shop tab prices it live against Walmart, ALDI, and Fry's.
+Ingredients (REQUIRED): needs is a plain list of lowercase ingredient NAME strings, no amounts, units, or packages. Do NOT return shoppingList, leftovers, or totalCost — the server builds the shopping list and the Shop tab prices it through live retailer sources.
 Recipe grounding (STRICT):
 - Select every dinner from the verified live candidates below. NEVER invent a source recipe, cite a publisher homepage, use a search snippet, or use a URL/ID not listed below.
 - The verified candidates are ordered by overlap with the user's cookable pantry when possible. Prefer an earlier candidate with matching ingredient facts when time, equipment, diet, and the requested recipe constraints still allow it; never count an unrelated pantry item as a recipe match.
@@ -1518,50 +1501,16 @@ app.post("/api/geo/describe", handleGeoDescribe);
 // Searches for advertised offers only after an explicit Shop-tab click. The
 // response is deliberately separate from /api/grocery/optimize: advertised
 // prices are unverified and can never alter a meal plan.
-// The route enables the ALDI adapter; Walmart and Fry's always run. Tests
-// call handleGroceryOffers directly and stay on their mocks.
+// The route enables ALDI alongside Fry's. Tests call handleGroceryOffers
+// directly and stay on their mocks.
 app.post("/api/grocery/offers", (req, res) => handleGroceryOffers(req, res, {
   aldiPages: true,
-  walmartDirect: WALMART_DIRECT.search,
+  matcher: groceryMatcher,
   kroger: {
     clientId: process.env.KROGER_CLIENT_ID || "",
     clientSecret: process.env.KROGER_CLIENT_SECRET || "",
   },
 }));
-
-// Profile canary: exercises every configured Walmart fingerprint from this
-// deployment, where the WAF scores differently from a laptop. Vercel Cron
-// calls it daily with the CRON_SECRET bearer token; a manual call needs the
-// same token when that secret is set. Failures also land in the failure log,
-// which is the early warning that Walmart has aged out the current profiles.
-app.get("/api/walmart/canary", async (req, res) => {
-  res.set("Cache-Control", "no-store");
-  const secret = process.env.CRON_SECRET || "";
-  if (secret && req.headers.authorization !== `Bearer ${secret}`) {
-    return res.status(401).json({ ok: false, error: "The canary requires the cron secret." });
-  }
-  if (!WALMART_DIRECT.search || typeof WALMART_DIRECT.create !== "function") {
-    return res.status(503).json({ ok: false, error: WALMART_DIRECT.error || "The direct Walmart search is unavailable." });
-  }
-  const profiles = [];
-  for (const browser of WALMART_DIRECT.search.browsers) {
-    const single = WALMART_DIRECT.create({ browsers: [browser], timeoutMs: 10000 });
-    try {
-      const rows = await single("bananas", "85281");
-      profiles.push({ browser, ok: rows.length > 0, rows: rows.length });
-    } catch (error) {
-      profiles.push({ browser, ok: false, error: String(error?.message || error).slice(0, 140) });
-    }
-  }
-  const failing = profiles.filter((profile) => !profile.ok);
-  if (failing.length) {
-    reportFailure("walmart-canary", "profiles", {
-      status: failing.length === profiles.length ? "blocked" : "degraded",
-      message: `${failing.length} of ${profiles.length} Walmart profiles failed: ${failing.map((profile) => `${profile.browser} ${profile.error || "no rows"}`).join("; ")}`.slice(0, 400),
-    });
-  }
-  return res.json({ ok: true, checkedAt: new Date().toISOString(), profiles });
-});
 
 app.get("/api/failures", (req, res) => res.json({ ok: true, count: failures.length, failures: failures.slice(-20) }));
 
@@ -1571,6 +1520,7 @@ app.get("/api/failures", (req, res) => res.json({ ok: true, count: failures.leng
 module.exports = app;
 Object.assign(module.exports, {
   app, extractJson, interpretChat, airChat,
+  GROCERY_MATCH_MODEL, GROCERY_MATCH_VERIFY_MODEL,
   liveRecipeService, productionRecipeService, createProductionRecipeService,
   normalizeLiveRecipeCandidates, rankLiveRecipeCandidates, approvedRecipeForCitation, isApprovedRecipeCitation, assertDinnerMatchesRecipe,
   buildPlanSystemPrompt, recipeSourcesContext, parseAiPlan, parseAiSelections, reportFailure, resolveDataPath,

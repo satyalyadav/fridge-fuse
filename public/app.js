@@ -57,6 +57,14 @@ function safeText(value, limit = 500) {
   return typeof value === "string" ? value.slice(0, limit) : "";
 }
 
+function repairStoredIngredientName(value) {
+  const text = safeText(value);
+  const legacyName = text.trim().toLowerCase();
+  if (legacyName === "tomato pur e") return "tomato puree";
+  if (legacyName === "coriander plus 1 tbsp chopped coriander leaves to garnish") return "coriander leaves";
+  return text;
+}
+
 function safeStrings(value, limit = 100) {
   return Array.isArray(value) ? value.filter((entry) => typeof entry === "string" && entry.trim()).slice(0, limit).map((entry) => entry.slice(0, 500)) : [];
 }
@@ -93,8 +101,8 @@ function safeMeal(meal) {
     sourceCredit: safeText(meal.sourceCredit), sourceAttribution: safeText(meal.sourceAttribution), sourceLicense: safeText(meal.sourceLicense, 300),
     sourceUnavailable: !sourceUrl || isLegacyRecipeCitation(meal), adaptationNote: safeText(meal.adaptationNote),
     timeMin: safeNumber(meal.timeMin, 0, 180),
-    steps: safeStrings(meal.steps, 30), equip: safeStrings(meal.equip, 20), usesPantry: safeStrings(meal.usesPantry),
-    needs: safeStrings(meal.needs), savedAt: safeText(meal.savedAt)
+    steps: safeStrings(meal.steps, 30), equip: safeStrings(meal.equip, 20), usesPantry: safeStrings(meal.usesPantry).map(repairStoredIngredientName),
+    needs: safeStrings(meal.needs).map(repairStoredIngredientName), savedAt: safeText(meal.savedAt)
   };
 }
 
@@ -112,7 +120,7 @@ function sanitizeStoredPlan(plan) {
   return {
     dinners, constraints: plan.constraints ? safeConstraints(plan.constraints) : undefined,
     shoppingList: (Array.isArray(plan.shoppingList) ? plan.shoppingList : []).filter((item) => item && typeof item.item === "string").slice(0, 50).map((item) => ({
-      item: safeText(item.item), qty: Math.max(1, Math.floor(safeNumber(item.qty, 1, 99))), sharedBy: safeStrings(item.sharedBy)
+      item: repairStoredIngredientName(item.item), qty: Math.max(1, Math.floor(safeNumber(item.qty, 1, 99))), sharedBy: safeStrings(item.sharedBy)
     })),
     offLimitsPantry: safeStrings(plan.offLimitsPantry)
   };
@@ -162,7 +170,7 @@ function normaliseState(stored) {
     messages: records(stored.messages, MAX_MESSAGES).filter((item) => typeof item.text === "string")
       .map((item) => ({ role: item.role === "user" ? "user" : "assistant", text: safeText(item.text, 4000), supportingText: safeText(item.supportingText, 4000), tone: item.tone === "error" ? "error" : "" })),
     groceryList: records(stored.groceryList, MAX_GROCERY_ITEMS).filter((item) => typeof item.name === "string" && item.name.trim())
-      .map((item) => ({ name: item.name.trim().toLowerCase().slice(0, 80), qty: Math.max(1, Math.floor(safeNumber(item.qty, 1, MAX_GROCERY_QTY))) })),
+      .map((item) => ({ name: repairStoredIngredientName(item.name).trim().toLowerCase().slice(0, 80), qty: Math.max(1, Math.floor(safeNumber(item.qty, 1, MAX_GROCERY_QTY))) })),
     savedRecipes: records(stored.savedRecipes, MAX_SAVED_RECIPES).map(safeMeal).filter(Boolean),
     offLimitsPantry: safeStrings(stored.offLimitsPantry),
     location: location && Number.isFinite(location.lat) && Number.isFinite(location.lng) && Math.abs(location.lat) <= 90 && Math.abs(location.lng) <= 180
@@ -705,24 +713,65 @@ function applyChatActions(actions) {
   }
   if (pantryNames.size > 100 || shoppingNames.size > MAX_GROCERY_ITEMS) throw new Error("This update exceeds the list limit. Remove some items first.");
   const confirmations = [];
+  const initialPantry = new Map(state.pantry.map(item => [item.name, Boolean(item.soon)]));
+  const pantryTouched = new Set();
+  const pantrySetRequested = new Set();
+  const pantryRemoveRequested = new Set();
   for (const action of actions) {
     if (action.type === "pantry_set") {
+      const name = action.name.trim().toLowerCase();
+      pantryTouched.add(name);
+      pantrySetRequested.add(name);
       addPantryItem(action.name, action.soon);
-      confirmations.push(`Pantry updated: ${action.name}.`);
     } else if (action.type === "pantry_remove") {
-      state.pantry = state.pantry.filter(item => item.name !== action.name);
-      confirmations.push(`Removed ${action.name} from your pantry.`);
+      const name = action.name.trim().toLowerCase();
+      pantryTouched.add(name);
+      pantryRemoveRequested.add(name);
+      state.pantry = state.pantry.filter(item => item.name !== name);
     } else if (action.type === "shopping_add") {
       addGroceryItem(action.name, action.qty);
       confirmations.push(`Added ${action.name} to your shopping list.`);
     } else if (action.type === "shopping_remove") {
+      const existed = state.groceryList.some(item => item.name === action.name);
       state.groceryList = state.groceryList.filter(item => item.name !== action.name);
-      confirmations.push(`Removed ${action.name} from your shopping list.`);
+      confirmations.push(existed ? `Removed ${action.name} from your shopping list.` : `${action.name} was not on your shopping list.`);
     }
   }
   if (actions.some(action => action.type.startsWith("shopping_"))) invalidateGroceryResults();
   saveState(); renderPantry(); renderGroceryList();
-  return confirmations.join(" ");
+  const joinNames = (names) => names.length < 2 ? names[0] || "" : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  const finalPantry = new Map(state.pantry.map(item => [item.name, Boolean(item.soon)]));
+  const added = [];
+  const updated = [];
+  const removed = [];
+  const already = [];
+  const absent = [];
+  const unchanged = [];
+  for (const name of pantryTouched) {
+    const wasPresent = initialPantry.has(name);
+    const isPresent = finalPantry.has(name);
+    if (!wasPresent && isPresent) added.push(name);
+    else if (wasPresent && !isPresent) removed.push(name);
+    else if (wasPresent && isPresent && initialPantry.get(name) !== finalPantry.get(name)) updated.push(name);
+    else if (wasPresent && isPresent && pantrySetRequested.has(name) && pantryRemoveRequested.has(name)) unchanged.push(name);
+    else if (wasPresent && isPresent && pantrySetRequested.has(name)) already.push(name);
+    else if (!wasPresent && !isPresent && pantrySetRequested.has(name) && pantryRemoveRequested.has(name)) unchanged.push(name);
+    else if (!wasPresent && !isPresent && pantryRemoveRequested.has(name)) absent.push(name);
+  }
+  const pantryConfirmations = [];
+  const changed = [...added, ...updated];
+  if (changed.length) {
+    pantryConfirmations.push(added.length === changed.length && added.length > 3
+      ? `Added ${added.length} items to your pantry.`
+      : changed.length > 3
+        ? `Updated ${changed.length} items in your pantry.`
+        : `Pantry updated: ${joinNames(changed)}.`);
+  }
+  if (removed.length) pantryConfirmations.push(`Removed ${joinNames(removed)} from your pantry.`);
+  if (already.length) pantryConfirmations.push(`Already in your pantry: ${joinNames(already)}.`);
+  if (absent.length) pantryConfirmations.push(`Not in your pantry: ${joinNames(absent)}.`);
+  if (unchanged.length) pantryConfirmations.push(`Pantry unchanged: ${joinNames(unchanged)}.`);
+  return [...pantryConfirmations, ...confirmations].join(" ");
 }
 
 async function handleMessage(message) {
@@ -1892,9 +1941,9 @@ async function compareStores() {
   button.textContent = "Checking live prices…";
   const area = $("offerAreaInput").value.trim() || DEFAULT_OFFER_AREA;
   const names = state.groceryList.map((item) => item.name);
-  // The server checks each chain with one search per item, so a cart over the
-  // per-request cap runs in sequential batches and the results are merged.
-  $("groceryResults").innerHTML = `<p class="results-note">Checking live store pages near ${escapeHtml(area)}. This searches each store once per item and can take a few seconds.</p>`;
+  // The server checks every item at each chain and can retry an unresolved
+  // query once. Carts over the per-request cap run in sequential batches.
+  $("groceryResults").innerHTML = `<p class="results-note">Checking live store pages near ${escapeHtml(area)}. An unresolved item may get one alternate search, so this can take a few seconds.</p>`;
 
   try {
     const results = [];
@@ -2009,6 +2058,10 @@ function renderStoreEstimates(estimates, area) {
     const missing = Array.isArray(estimate.missing) && estimate.missing.length
       ? `<p class="store-missing">No live price found: ${escapeHtml(estimate.missing.join(", "))}</p>`
       : "";
+    const itemCount = Number(estimate.itemCount) || 0;
+    const hasPricedItems = itemCount > 0;
+    const totalLabel = hasPricedItems ? formatMoney(Number(estimate.total) || 0) : "—";
+    const totalStatus = !hasPricedItems ? "UNAVAILABLE" : estimate.complete ? "BALLPARK" : "PARTIAL";
     const rankLabel = estimate.cheapest
       ? estimate.complete ? "CHEAPEST LIVE BALLPARK" : "BEST LIVE BALLPARK SO FAR"
       : `#${index + 1}`;
@@ -2020,8 +2073,8 @@ function renderStoreEstimates(estimates, area) {
         ${missing}
       </div>
       <div class="store-total">
-        <strong>${escapeHtml(formatMoney(Number(estimate.total) || 0))}</strong>
-        <small>${estimate.complete ? "BALLPARK" : "PARTIAL"}</small>
+        <strong>${escapeHtml(totalLabel)}</strong>
+        <small>${totalStatus}</small>
       </div>
       <details class="store-breakdown">
         <summary>Price breakdown</summary>
@@ -2036,7 +2089,7 @@ function renderStoreEstimates(estimates, area) {
   // The profile budget applies here now: it compares against the cheapest
   // complete live ballpark, not against any precomputed catalog total.
   const budget = Number(state.constraints.budget);
-  const winner = estimates.find((estimate) => estimate.cheapest);
+  const winner = estimates.find((estimate) => estimate.cheapest && Number(estimate.itemCount) > 0);
   const budgetNote = winner && winner.complete && Number.isFinite(budget) && budget > 0
     ? `<p class="results-note${winner.total > budget ? " warn" : ""}">${escapeHtml(formatMoney(Math.abs(budget - winner.total)))} ${winner.total <= budget ? "under" : "over"} your ${escapeHtml(formatMoney(budget))} budget at ${escapeHtml(safeText(winner.label, 120).trim() || "the cheapest store")}.</p>`
     : "";

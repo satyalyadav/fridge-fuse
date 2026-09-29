@@ -2,7 +2,18 @@
 
 // Focused live-recipe contract checks. This file intentionally uses injected
 // network and DNS functions so the security boundary is deterministic.
-const assert = require("assert");
+const rawAssert = require("assert");
+let assertionCount = 0;
+function assert(...args) {
+  assertionCount++;
+  return rawAssert(...args);
+}
+for (const method of ["deepStrictEqual", "strictEqual", "throws"]) {
+  assert[method] = (...args) => {
+    assertionCount++;
+    return rawAssert[method](...args);
+  };
+}
 
 const {
   createLiveRecipeService,
@@ -11,7 +22,6 @@ const {
   normalizeIngredientLine,
   isPublicRecipeUrl,
   recipeViolatesDiet,
-  queryForConstraints,
 } = require("./lib/live-recipes");
 const server = require("./server");
 
@@ -85,49 +95,27 @@ async function run() {
   assert.strictEqual(parseIsoDuration("PT45S"), 1, "positive sub-minute durations round up");
   assert.strictEqual(parseIsoDuration("not-a-duration"), null, "malformed durations are rejected");
   assert.strictEqual(normalizeIngredientLine("1 1/2 pounds baby potatoes"), "baby potatoes", "mixed-fraction quantities are removed");
+  assert.strictEqual(normalizeIngredientLine("some tomato purée/turmeric paste"), "tomato purée", "a vague amount and first listed puree choice reduce to a searchable ingredient");
+  assert.strictEqual(normalizeIngredientLine("coriander plus 1 tbsp chopped coriander leaves to garnish"), "coriander leaves", "a measured duplicate garnish stays one grounded ingredient");
   assert.strictEqual(normalizeIngredientLine("2 to 4 tablespoons water"), "water", "to-ranges are removed");
-  assert.strictEqual(normalizeIngredientLine("400g can chopped tomatoes drained and juice reserved"), "tomatoes drained and juice reserved", "adjacent gram units are removed");
+  assert.strictEqual(normalizeIngredientLine("onion finely chopped"), "onion", "trailing preparation text is removed from an ingredient name");
+  assert.strictEqual(normalizeIngredientLine("2 x 400g can black beans, drained and rinsed"), "black beans", "multipack quantities and drained preparation are removed");
+  assert.strictEqual(normalizeIngredientLine("1 x 400g can chopped tomatoes"), "diced tomatoes", "canned chopped tomatoes retain their grocery form");
+  assert.strictEqual(normalizeIngredientLine("400g can chopped tomatoes drained and juice reserved"), "diced tomatoes", "trailing canning preparation does not become part of the grocery name");
+  assert.strictEqual(normalizeIngredientLine("sweetcorn"), "corn", "sweetcorn uses the common store-search term");
+  assert.strictEqual(normalizeIngredientLine("soured cream/guacamole"), "sour cream", "an explicit slash alternative uses its first listed choice");
+  assert.strictEqual(normalizeIngredientLine("chilli flakes or chilli powder"), "chilli flakes", "an explicit word alternative uses its first listed choice");
+  assert.strictEqual(normalizeIngredientLine("ground beef"), "ground beef", "ground remains part of a food identity");
+  assert.strictEqual(normalizeIngredientLine("chopped nuts"), "chopped nuts", "chopped remains part of a food identity");
+  assert.strictEqual(normalizeIngredientLine("fire-roasted chopped tomatoes"), "fire-roasted chopped tomatoes", "a preparation word before the ingredient does not remove the food name");
+  assert.strictEqual(normalizeIngredientLine("diced tomatoes"), "diced tomatoes", "diced tomatoes remains an ingredient form");
+  assert.strictEqual(normalizeIngredientLine("frozen peas"), "frozen peas", "frozen remains a grocery form qualifier");
+  assert.strictEqual(normalizeIngredientLine("fresh spinach"), "fresh spinach", "fresh remains a grocery form qualifier");
   assert.strictEqual(normalizeIngredientLine("2 squares dark chocolate"), "dark chocolate", "count units are removed");
   assert.strictEqual(normalizeIngredientLine("thyme leaves or 1 teaspoon dried"), "thyme leaves", "quantity-bearing alternatives are reduced to the named ingredient");
-  assert.strictEqual(normalizeIngredientLine("chilli flakes or chilli powder"), "chilli flakes or chilli powder", "unnumbered alternatives remain intact");
-  const quantityParsed = parseRecipeHtml(html({ ingredients: ["1 1/2 pounds baby potatoes", "2 to 4 tablespoons water", "400g can chopped tomatoes drained and juice reserved"] }));
-  assert.deepStrictEqual(quantityParsed.ingredients, ["baby potatoes", "water", "tomatoes drained and juice reserved"]);
-  assert.deepStrictEqual(quantityParsed.rawIngredients, ["1 1/2 pounds baby potatoes", "2 to 4 tablespoons water", "400g can chopped tomatoes drained and juice reserved"], "raw ingredient facts retain publisher quantities");
-
-  const microwaveQueries = [0, 1, 2].map((attempt) => queryForConstraints({
-    maxTimeMin: 20,
-    equipment: ["microwave"],
-    dietRules: [],
-    includeRecipe: "",
-    pantry: ["hidden pantry item", "private leftovers"],
-    attempt,
-  }));
-  assert.deepStrictEqual(microwaveQueries, [
-    "microwave chilli recipe under 20 minutes",
-    "microwave potato recipe under 20 minutes",
-    "microwave rice bowl recipe under 20 minutes",
-  ], "microwave discovery uses three singular dish seeds");
-  assert(microwaveQueries.every((query) => !/hidden pantry item|private leftovers/i.test(query)), "discovery queries never include pantry contents");
-  const stoveQueries = [0, 1, 2].map((attempt) => queryForConstraints({
-    maxTimeMin: 30,
-    equipment: ["stove"],
-    dietRules: [{ label: "Vegan" }],
-    includeRecipe: "Saved Rice Bowl",
-    attempt,
-  }));
-  assert(stoveQueries[0].includes("skillet rice and beans recipe under"));
-  assert(stoveQueries[1].includes("stovetop pasta recipe under"));
-  assert(stoveQueries[2].includes("vegetable stir fry recipe under"));
-  assert(stoveQueries.every((query) => query.includes("Vegan") && query.includes("Saved Rice Bowl") && query.includes("under 30 minutes")), "diet and cook-again terms stay on dish-specific queries");
-  const mixedQueries = [0, 1, 2].map((attempt) => queryForConstraints({
-    maxTimeMin: 30,
-    equipment: ["microwave", "stove"],
-    dietRules: [],
-    includeRecipe: "",
-    attempt,
-  }));
-  assert(mixedQueries[0].includes("microwave chilli recipe") && mixedQueries[1].includes("skillet rice and beans recipe"), "mixed-equipment discovery gives each appliance a dish seed");
-  assert(mixedQueries.some((query) => query.includes("microwave")) && mixedQueries.some((query) => query.includes("skillet") || query.includes("stovetop") || query.includes("vegetable stir fry")), "mixed-equipment queries cover both microwave and stove");
+  const quantityParsed = parseRecipeHtml(html({ ingredients: ["1 1/2 pounds baby potatoes", "2 to 4 tablespoons water", "400g can chopped tomatoes drained and juice reserved", "coriander plus 1 tbsp chopped coriander leaves to garnish"] }));
+  assert.deepStrictEqual(quantityParsed.ingredients, ["baby potatoes", "water", "diced tomatoes", "coriander leaves"]);
+  assert.deepStrictEqual(quantityParsed.rawIngredients, ["1 1/2 pounds baby potatoes", "2 to 4 tablespoons water", "400g can chopped tomatoes drained and juice reserved", "coriander plus 1 tbsp chopped coriander leaves to garnish"], "raw ingredient facts retain publisher quantities and garnish text");
 
   const parsed = parseRecipeHtml(html());
   assert.strictEqual(parsed.title, "Microwave Bean Rice Bowl");
@@ -142,110 +130,7 @@ async function run() {
   assert.strictEqual(isPublicRecipeUrl("https://user:pass@example.com/recipe"), false);
   assert.strictEqual(isPublicRecipeUrl("https://127.0.0.1/recipe"), false);
 
-  const failures = [];
-  let searchCalls = 0;
-  let pageCalls = 0;
-  const service = createLiveRecipeService({
-    tavilyKey: "tavily-test",
-    dnsLookup: async () => [{ address: "93.184.216.34", family: 4 }],
-    fetchImpl: async (url, options) => {
-      if (url === "https://api.tavily.com/search") {
-        searchCalls++;
-        const body = JSON.parse(options.body);
-        assert.strictEqual(options.method, "POST");
-        assert.strictEqual(options.headers.Authorization, "Bearer tavily-test");
-        assert.strictEqual(body.search_depth, "basic");
-        assert.strictEqual(body.max_results, 20);
-        assert(!body.query.includes("hidden pantry item") && !body.query.includes("private leftovers"), "pantry is not sent to discovery");
-        return { ...okResponse(JSON.stringify({ results: [{ url: "https://recipes.example.test/microwave-bean-rice-bowl" }] }), { "content-type": "application/json" }) };
-      }
-      pageCalls++;
-      return okResponse(html());
-    },
-    reportFailure: (provider, operation, details) => failures.push({ provider, operation, ...details }),
-    searchTtlMs: 1000,
-    verifiedTtlMs: 1000,
-  });
-  const first = await service.findRecipes({
-    dinners: 1,
-    pantry: ["hidden pantry item", "private leftovers"],
-    equipment: ["microwave"],
-    maxTimeMin: 20,
-    dietRules: [],
-  });
-  assert.strictEqual(first.ok, true);
-  assert.strictEqual(first.candidates.length, 1);
-  assert.strictEqual(first.candidates[0].finalUrl, "https://recipes.example.test/microwave-bean-rice-bowl");
-  assert.strictEqual(searchCalls, 3, "three bounded discovery queries provide room for alternate candidates");
-  assert.strictEqual(pageCalls, 1);
-
-  const concurrent = await Promise.all([
-    service.findRecipes({ dinners: 1, equipment: ["microwave"], maxTimeMin: 20, dietRules: [] }),
-    service.findRecipes({ dinners: 1, equipment: ["microwave"], maxTimeMin: 20, dietRules: [] }),
-  ]);
-  assert(concurrent.every((result) => result.ok && result.candidates.length === 1));
-  assert.strictEqual(searchCalls, 3, "discovery query variants are cached and reused");
-  assert.strictEqual(pageCalls, 1, "verified page cache is shared across searches");
-
-  const restricted = await service.findRecipes({
-    dinners: 1,
-    equipment: ["microwave"],
-    maxTimeMin: 20,
-    dietRules: [{ label: "vegan", forbids: ["black beans"], allows: [] }],
-  });
-  assert.strictEqual(restricted.ok, false);
-  assert(/no safe recipes/i.test(restricted.failure.message));
-
-  let fairSearchCalls = 0;
-  let fairPageCalls = 0;
-  const fairValidUrl = "https://recipes.example.test/stovetop-rice-beans";
-  const fairValidPage = html({
-    name: "Stovetop Rice and Beans",
-    url: fairValidUrl,
-    ingredients: ["rice", "black beans", "oil"],
-    instructions: ["Heat oil in a pan and cook over medium heat.", "Stir in the rice and black beans."],
-    totalTime: "PT10M",
-    publisher: "Fair Search Kitchen",
-  });
-  const fairService = createLiveRecipeService({
-    tavilyKey: "tavily-test",
-    dnsLookup: async () => [{ address: "93.184.216.34", family: 4 }],
-    fetchImpl: async (url, options) => {
-      if (url === "https://api.tavily.com/search") {
-        fairSearchCalls++;
-        const body = JSON.parse(options.body);
-        assert(!body.query.includes("secret leftovers"), "fair discovery still excludes pantry contents");
-        if (body.query.includes("skillet rice and beans")) {
-          return { ...okResponse(JSON.stringify({ results: [{ url: fairValidUrl }] }), { "content-type": "application/json" }) };
-        }
-        if (body.query.includes("microwave chilli")) {
-          return { ...okResponse(JSON.stringify({ results: Array.from({ length: 20 }, (_, index) => ({ url: `https://recipes.example.test/listicle-${index}` })) }), { "content-type": "application/json" }) };
-        }
-        return { ...okResponse(JSON.stringify({ results: [] }), { "content-type": "application/json" }) };
-      }
-      fairPageCalls++;
-      return url === fairValidUrl ? okResponse(fairValidPage) : okResponse("<html><body>not a recipe page</body></html>");
-    },
-  });
-  const fairResult = await fairService.findRecipes({
-    dinners: 1,
-    pantry: ["secret leftovers"],
-    equipment: ["microwave", "stove"],
-    maxTimeMin: 20,
-    dietRules: [],
-  });
-  assert.strictEqual(fairResult.ok, true, "a later discovery attempt can supply a verified candidate");
-  assert(fairResult.candidates.some((candidate) => candidate.title === "Stovetop Rice and Beans"));
-  assert.strictEqual(fairSearchCalls, 3, "mixed-equipment discovery reaches all bounded query attempts");
-  assert(fairPageCalls >= 9, "the first result page cannot starve later query URLs");
-
-  const noKey = createLiveRecipeService({ tavilyKey: "", reportFailure: (provider, operation, details) => failures.push({ provider, operation, ...details }) });
-  const missing = await noKey.findRecipes({ dinners: 1, equipment: ["microwave"], maxTimeMin: 20, dietRules: [] });
-  assert.strictEqual(missing.ok, false);
-  assert.strictEqual(missing.failure.status, "no-key");
-
   const privateService = createLiveRecipeService({
-    tavilyKey: "tavily-test",
     dnsLookup: async () => [{ address: "127.0.0.1", family: 4 }],
     fetchImpl: async () => { throw new Error("fetch must not run for private DNS"); },
   });
@@ -254,7 +139,6 @@ async function run() {
   assert(/private|reserved|public/i.test(privateResult.failure.message));
 
   const oversized = createLiveRecipeService({
-    tavilyKey: "tavily-test",
     maxBodyBytes: 50,
     dnsLookup: async () => [{ address: "93.184.216.34", family: 4 }],
     fetchImpl: async () => okResponse(`<html>${"x".repeat(100)}</html>`),
@@ -264,7 +148,6 @@ async function run() {
   assert(/large|size|exceed/i.test(oversizedResult.failure.message));
 
   const nonHtml = createLiveRecipeService({
-    tavilyKey: "tavily-test",
     dnsLookup: async () => [{ address: "93.184.216.34", family: 4 }],
     fetchImpl: async () => okResponse("{}", { "content-type": "application/json" }),
   });
@@ -289,7 +172,6 @@ async function run() {
 
   let redirectCalls = 0;
   const redirectService = createLiveRecipeService({
-    tavilyKey: "tavily-test",
     dnsLookup: async (hostname) => [{ address: hostname === "public.example.test" ? "93.184.216.34" : "127.0.0.1", family: 4 }],
     fetchImpl: async (url) => {
       redirectCalls++;
@@ -301,22 +183,8 @@ async function run() {
   assert.strictEqual(redirectResult.ok, false, "every manual redirect hop is revalidated");
   assert.strictEqual(redirectCalls, 1, "unsafe redirect target is never fetched");
 
-  const stoveOnly = createLiveRecipeService({
-    tavilyKey: "tavily-test",
-    dnsLookup: async () => [{ address: "93.184.216.34", family: 4 }],
-    fetchImpl: async (url) => url === "https://api.tavily.com/search"
-      ? { ...okResponse(JSON.stringify({ results: [{ url: "https://recipes.example.test/stove" }] }), { "content-type": "application/json" }) }
-      : okResponse(html({
-        url: "https://recipes.example.test/stove",
-        instructions: ["Heat oil in a pan and cook over medium heat."]
-      }))
-  });
-  const equipmentResult = await stoveOnly.findRecipes({ dinners: 1, equipment: ["microwave"], maxTimeMin: 20, dietRules: [] });
-  assert.strictEqual(equipmentResult.ok, false, "a stovetop recipe is rejected for a microwave-only kitchen");
-
   let readerCancelled = false;
   const streamService = createLiveRecipeService({
-    tavilyKey: "tavily-test",
     maxBodyBytes: 20,
     dnsLookup: async () => [{ address: "93.184.216.34", family: 4 }],
     fetchImpl: async () => ({ ok: true, status: 200, headers: { get: () => "text/html" }, body: {
@@ -478,10 +346,13 @@ async function run() {
   assert.strictEqual(swapped.statusCode, 200);
   assert.deepStrictEqual(swapped.payload.dinners.map((dinner) => dinner.sourceRecipe), [replacement.sourceRecipe, retained.sourceRecipe]);
 
-  console.log("live recipe focused checks passed");
+  console.log(`live recipe focused checks passed (${assertionCount})`);
+  return assertionCount;
 }
 
-run().catch((error) => {
+module.exports = run;
+
+if (require.main === module) run().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });

@@ -55,26 +55,13 @@ item lists it under `missing` and the total is labeled partial; no invented pric
 enters the total. The Shop compare view merges these totals across batches and
 marks the leading store as a ballpark, not a verified checkout total.
 
-Walmart has no free official API: its internal GraphQL returns 418, product
-pages return a CAPTCHA to plain server fetches, and the affiliate API needs
-approval. The item search instead reads Walmart's public search page directly
-through `lib/walmart-direct.js`: it parses the page's embedded `__NEXT_DATA__`,
-sorted by price, and gets past the CAPTCHA with impit's browser fingerprint
-plus a matching header set. The profile is what decides it: chrome151,
-chrome142, and ios18 pass from Vercel's AWS IP, while chrome131 and chrome136
-are challenged there. The list is resolved at startup from impit's shipped
-profiles (newest two Chrome plus newest iOS), so an impit upgrade is enough to
-modernize it. `WALMART_BROWSERS` overrides the list and `WALMART_WARMUP=1`
-visits the homepage first. `/api/walmart/canary` tests every profile
-from the deployment, and a daily Vercel Cron calls it, so a Walmart block
-lands in `/api/failures` before a demo. The
-prices are Walmart's own advertised web prices, with no key and no credits.
-When the direct read fails, the failure is reported for that item and Walmart
-is left out of the comparison for it. The adapter passes the area ZIP
-(Walmart's result set changes with it), prefers first-party Walmart listings
-over marketplace bulk packs, and labels the prices as advertised web prices,
-not verified pickup prices. Walmart grocery prices are national, so the web
-price is the price at the nearby Tempe store.
+The Shop currently checks ALDI's storefront GraphQL and Fry's through Kroger's
+official Products API. ALDI returns live product names, sizes, and prices; its
+weight-priced produce uses the per-pound price, and packaged goods use the
+package price. Fry's requires the optional Kroger credentials below, and its
+results are scoped to the nearest Fry's location for the search ZIP. The API's
+prices and product sizes carry `store-api` scope. Pickup availability and final
+checkout totals are not verified.
 
 When `KROGER_CLIENT_ID` and `KROGER_CLIENT_SECRET` are set (free registration at
 developer.kroger.com), Fry's prices come from the official Kroger Products API
@@ -86,11 +73,8 @@ gets one short retry. Without the credentials the Fry's chain reports no prices;
 it never falls back to a web search. Official prices enter the ballpark with
 `store-api` scope.
 
-ALDI joins when the `aldiPages` option is on. Its storefront GraphQL (the same
-public operations its web app calls, with a guest session cookie) returns
-search results with names, sizes, and prices. Weight-priced produce uses the
-per-pound unit price; packaged goods use the package price. The route
-enables `aldiPages`; tests use the default off.
+ALDI's storefront GraphQL uses the same public operations its web app calls,
+with a guest session cookie. The Shop route enables this source.
 
 Cache state is in memory and therefore resets when a Vercel process is replaced.
 Pickup availability, dietary suitability, and the cheapest complete cart are not
@@ -346,11 +330,10 @@ at startup, and a bad or empty file makes the server refuse to start, by design.
 ## Where prices come from
 
 There is no open grocery-price API shared by every chain, so the Shop compare
-runs live searches and the plan prices nothing itself. Kroger
-(Fry's parent) publishes a location-aware product API behind OAuth partner
-credentials; ALDI's storefront GraphQL is read directly; Walmart's public search
-page is read with a browser fingerprint; Trader Joe's has no online prices and is
-not compared. Pickup availability, package sizes, and in-store prices are not
+runs live searches and the plan prices nothing itself. Kroger (Fry's parent)
+publishes a location-aware product API behind OAuth partner credentials, and
+ALDI's storefront GraphQL is read directly. Trader Joe's has no online prices
+and is not compared. Pickup availability and final checkout totals are not
 verified.
 
 ## AI chat
@@ -383,8 +366,6 @@ Run deterministic tests with `npm test`.
   The response echoes the `dietRules` that were enforced; a plan that breaks them
   is rejected, not returned.
 - `GET /api/preferences` serves the dietary and equipment catalogs the profile renders.
-- `GET /api/walmart/canary` tests every configured Walmart fingerprint from the
-  deployment; Vercel Cron calls it daily.
 - `POST /api/grocery/offers {items,area}` prices up to five selected items per
   chain from each chain's own live source, reports per-item sources and failures,
   and returns a per-store `storeEstimates` ballpark. The Shop compare button

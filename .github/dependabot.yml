@@ -1,6 +1,5 @@
-# impit carries the Walmart browser fingerprints, so its upgrades are what
-# keep the direct price read current. Weekly PRs, and the test workflow runs
-# the suite on each one.
+# impit supplies the browser-fingerprint client used for live recipe pages.
+# Weekly PRs are checked by the test workflow.
 version: 2
 updates:
   - package-ecosystem: "npm"

@@ -117,48 +117,20 @@ is the only source of prices, and `describeLocation()` returns a coordinate labe
 with no branch data behind it; the Nominatim lookup names the place when the
 client shares a fix.
 
-**Advertised offers are a separate, unverified view.** `lib/grocery-offers.js`
-is the only price source and every chain runs through one adapter: Walmart reads
-its public search page through `lib/walmart-direct.js`, ALDI reads its
-storefront GraphQL, and Fry's uses the official Kroger API when
-`KROGER_CLIENT_ID`/`KROGER_CLIENT_SECRET` are set. There is no web-search or
-model fallback: an adapter that fails reports a failure and its store column
-stays partial. Each price keeps its scope (`retailer-advertised` for Walmart's
-advertised web price, `store-api` for the Kroger/ALDI APIs), and
-`groundShoppingPlan()` never reads these prices. The Shop compare view calls
+**Live store offers are separate from meal planning.** `lib/grocery-offers.js`
+is the only price source: ALDI reads its storefront GraphQL, and Fry's uses the
+official Kroger API when `KROGER_CLIENT_ID`/`KROGER_CLIENT_SECRET` are set. There
+is no web-search or model price fallback: an adapter failure reports a failure
+and leaves that store's estimate partial. Prices carry `store-api` scope, and
+`groundShoppingPlan()` never reads them. The Shop compare view calls
 `/api/grocery/offers` from one button and renders `storeEstimates`; a missing
 item makes the store partial, and no invented price may fill it. Fry's without
 credentials reports the missing configuration and must not fall back to a web
-search. API adapters have their own quotas (Kroger: 10,000 product and 1,600
-location calls per day) and nothing else makes outbound price calls.
-
-Walmart item search reads the public search page directly through
-`lib/walmart-direct.js`: the parser reads the
-page's embedded `__NEXT_DATA__`, and impit supplies a browser TLS fingerprint
-because a plain server fetch gets the CAPTCHA. Keep the fingerprint version
-and the header set in sync (`chrome151` today); a mismatched pair returns the
-robot page with HTTP 200. The profile matters more than the IP: chrome131 and
-chrome136 are challenged from Vercel's AWS IP while chrome151, chrome142, and
-ios18 pass there, so the default list is `chrome151, chrome142, ios18`.
-`WALMART_BROWSERS` overrides the list and `WALMART_WARMUP=1` visits the
-homepage first, which the code keeps for the day the WAF starts demanding
-session cookies. The default list comes from impit's shipped typings at
-startup (newest two Chrome profiles plus the newest iOS one), so an impit
-upgrade modernizes the fingerprints with no code edit; `DEFAULT_BROWSERS` is
-only the fallback for when those typings cannot be read. `/api/walmart/canary`
-tests every profile from the deployment and Vercel Cron calls it daily, so a
-Walmart block shows up in the failure log before a demo does. Dependabot opens
-the weekly impit bump and the GitHub test workflow gates it. When the direct
-read fails, the failure is reported for that item; there is no search fallback.
-ALDI search and prices come from
-its storefront GraphQL with a cached guest session (in-flight dedupe included):
-weight-priced items use the per-pound unit price, packaged goods the package
-price. When `KROGER_CLIENT_ID` and `KROGER_CLIENT_SECRET` are set, the Fry's
-chain uses the official Kroger Products and Locations APIs:
-cache the 30-minute token and the location per ZIP, never log the secret, keep
-the daily quotas in mind (10,000 product and 1,600 location calls), and label
-those prices `store-api`. Without credentials the Fry's chain reports no
-prices; it must not fall back to a web search.
+search. ALDI uses a cached guest session with in-flight request dedupe;
+weight-priced items use the per-pound unit price and packaged goods use the
+package price. Kroger tokens live 30 minutes and locations are cached per ZIP;
+never log the secret or exceed the daily quotas (10,000 product and 1,600
+location calls).
 
 **Third-party geocoding needs an explicit `allowLookup: true`.** Sharing a location
 is the consent: `public/app.js` sends the flag with the fix, and the server keeps the
@@ -202,6 +174,6 @@ issue #1.
 
 Match what is there: CommonJS, double quotes, 2-space indent, no semicolon-free style,
 no TypeScript, no new dependencies without a reason (the runtime is express, dotenv,
-and impit, whose browser TLS fingerprint is what gets the Walmart page read past the
-CAPTCHA). Comments in this codebase explain *why* a constraint exists
+and impit, whose browser fingerprint client fetches live recipe pages). Comments in
+this codebase explain *why* a constraint exists
 — keep that habit rather than narrating what the code does.

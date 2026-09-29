@@ -6,6 +6,7 @@ const vm = require("vm");
 const {
   extractJson,
   DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL,
+  GROCERY_MATCH_MODEL, GROCERY_MATCH_VERIFY_MODEL,
   resolveDataPath, isApprovedRecipeCitation, buildPlanSystemPrompt, recipeSourcesContext,
   productionRecipeService, createProductionRecipeService,
   normalizeLiveRecipeCandidates,
@@ -30,6 +31,8 @@ ok(AIR_VISION_MODEL === "qwen3-vl-32b-instruct", "photo requests use the dedicat
 ok(DEFAULT_AIR_MODEL === "llama4-scout-17b", "tracked text-model default uses the verified fast model");
 ok(AIR_VISION_MODEL !== AIR_MODEL, "text and photo requests do not silently share a model");
 ok(AIR_VISION_VERIFY_MODEL === AIR_MODEL, "photo verification uses the tested fast multimodal model");
+ok(GROCERY_MATCH_MODEL === (process.env.ASU_AIR_GROCERY_MATCH_MODEL || "llama4-scout-17b"), "grocery matching has an environment-overridable fast primary model");
+ok(GROCERY_MATCH_VERIFY_MODEL === (process.env.ASU_AIR_GROCERY_MATCH_VERIFY_MODEL || "gemma4-31b-it"), "grocery matching has an independent environment-overridable verifier");
 
 
 ok(extractJson('```json\n{"a":1}\n```').a === 1, "fenced JSON parsed");
@@ -51,7 +54,7 @@ ok(planPrompt.includes('"sourceRecipe"') && planPrompt.includes('"source"') && p
 ok(!planPrompt.includes('"leftovers":[{'), "plan prompt no longer asks the model to estimate leftovers");
 ok(/Do NOT return shoppingList, leftovers, or totalCost/.test(planPrompt), "plan prompt tells the model the server builds the shopping list");
 ok(planPrompt.includes('"needs":["..."]') && /no amounts, units, or packages/.test(planPrompt), "plan prompt asks for ingredient names, not quantities");
-ok(planPrompt.includes("Shop tab prices it live"), "plan prompt points at the live Shop comparison for prices");
+ok(planPrompt.includes("Shop tab prices it through live retailer sources"), "plan prompt points at live retailer prices in the Shop comparison");
 ok(
   planPrompt.includes("adaptationNote") && planPrompt.includes("at least half") && planPrompt.includes("verified time exactly") &&
     planPrompt.includes("Owning an unrelated pantry item"),
@@ -84,6 +87,8 @@ ok(
 // or price: those come from the live Shop comparison.
 ok(normalizeIngredient("EGGS") === "egg", "ingredient names normalize to lowercase singulars");
 ok(normalizeIngredient("  Black Beans  ") === "black bean", "punctuation and whitespace collapse before matching");
+ok(normalizeIngredient("tomato purée") === "tomato puree", "accented ingredient names normalize without splitting the food word");
+ok(normalizeIngredient("baby spinach leaves") === "baby spinach leaf", "irregular leaf plurals normalize to leaf");
 ok(needName("EGGS") === "egg", "a bare ingredient name normalizes to itself");
 ok(needName({ item: "Spinach" }) === "spinach", "object needs read the item field");
 assert.throws(() => needName("  "), /missing its item name/);
@@ -183,6 +188,20 @@ const html = fs.readFileSync("public/index.html", "utf8");
 ok(html.includes("app.js") && html.includes("api/plan") === false, "index.html loads app.js");
 const appJs = fs.readFileSync("public/app.js", "utf8");
 const serverSrc = fs.readFileSync("server.js", "utf8");
+const walmartRemovalSources = [
+  serverSrc,
+  html,
+  fs.readFileSync("public/app.js", "utf8"),
+  fs.readFileSync(".env.example", "utf8"),
+  fs.readFileSync("README.md", "utf8"),
+  fs.readFileSync("AGENTS.md", "utf8"),
+].join("\n");
+ok(
+  !/walmart/i.test(walmartRemovalSources) &&
+    !fs.existsSync("lib/walmart-direct.js") &&
+    !(vercelConfig.crons || []).some((cron) => /walmart/i.test(cron.path || "")),
+  "the Walmart offer adapter, configuration, documentation, and canary cron are removed"
+);
 
 ok(appJs.includes("/api/chat/interpret"), "chat uses server-side AI interpretation");
 ok(!appJs.includes("KNOWN_INGREDIENTS"), "arbitrary foods do not depend on a frontend ingredient dictionary");
@@ -233,19 +252,21 @@ if (planningFailureCopySource) {
   );
 }
 
-async function exerciseFrontendMessage(message, parsed, pantryAfter) {
+async function exerciseFrontendMessage(message, parsed, pantryAfter, initialPantry = []) {
   const { client } = require("./test-fixes");
   const c = client();
   let buildPlanCalls = 0;
   const assistantMessages = [];
+  c.run(`state.pantry = ${JSON.stringify(initialPantry.map((item) => ({ name: item.name, soon: Boolean(item.soon) })))};`);
   c.context.interpretMessage = async () => ({
-    actions: pantryAfter.map(item => ({ type: "pantry_set", name: item.name, qty: 1, soon: false })),
-    requestPlan: /build a dinner plan/.test(message), swapIndex: null, clarification: ""
+    actions: Array.isArray(parsed.actions) ? parsed.actions : pantryAfter.map(item => ({ type: "pantry_set", name: item.name, qty: 1, soon: false })),
+    requestPlan: typeof parsed.requestPlan === "boolean" ? parsed.requestPlan : /build a dinner plan/.test(message),
+    planToShop: parsed.planToShop === true, swapIndex: null, clarification: ""
   });
   c.context.buildPlan = async () => { buildPlanCalls++; };
   c.context.addAssistantMessage = (...args) => assistantMessages.push(args);
   await c.context.handleMessage(message);
-  return { assistantMessages, buildPlanCalls };
+  return { assistantMessages, buildPlanCalls, pantry: c.run("state.pantry.map(item => item.name)"), groceryList: c.run("state.groceryList.map(item => item.name)") };
 }
 // ---------- chat interpretation: the plan-to-shop command ----------
 const { validateInterpretation } = require("./lib/chat-intents");
@@ -366,6 +387,46 @@ ok(
     /renderStoreEstimates\(estimates, area\)/.test(appJs) &&
     !/function renderGroceryResults/.test(appJs),
   "the compare view renders merged live store estimates instead of static optimizer totals"
+);
+const storeEstimateRenderer = appJs.match(/function renderStoreEstimates\(estimates, area\) \{[\s\S]*?\n\}/)?.[0] || "";
+const compareUiContext = vm.createContext({
+  state: { constraints: { budget: 20 } },
+  escapeHtml: (value) => String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[char])),
+  formatMoney: (value) => `$${Number(value).toFixed(2)}`,
+  safeText: (value) => String(value || ""),
+  titleCase: (value) => String(value || ""),
+});
+vm.runInContext(`${storeEstimateRenderer}\nthis.renderStoreEstimatesForTest = renderStoreEstimates;`, compareUiContext);
+const zeroPricePartialHtml = compareUiContext.renderStoreEstimatesForTest([{
+  label: "Fry's / Kroger", total: 0, itemCount: 0, requestedCount: 2, lines: [],
+  missing: ["eggs", "rice"], complete: false, cheapest: true,
+}], "Tempe");
+ok(
+  zeroPricePartialHtml.includes("<strong>—</strong>") &&
+    zeroPricePartialHtml.includes("<small>UNAVAILABLE</small>") &&
+    !zeroPricePartialHtml.includes("$0.00") &&
+    !zeroPricePartialHtml.includes("$20.00") &&
+    !zeroPricePartialHtml.includes(" under your ") &&
+    !zeroPricePartialHtml.includes(" over your "),
+  "a store with zero priced items shows unavailable without a zero total or budget comparison"
+);
+const partialPriceHtml = compareUiContext.renderStoreEstimatesForTest([{
+  label: "ALDI", total: 1.25, itemCount: 1, requestedCount: 2,
+  lines: [{ item: "eggs", product: "Eggs", price: 1.25 }],
+  missing: ["rice"], complete: false, cheapest: true,
+}], "Tempe");
+ok(
+  partialPriceHtml.includes("<strong>$1.25</strong>") &&
+    partialPriceHtml.includes("<small>PARTIAL</small>") &&
+    !partialPriceHtml.includes("over your $20.00 budget"),
+  "a partial store with live prices shows its amount without comparing an incomplete basket to budget"
+);
+ok(
+  /one alternate search/.test(appJs) &&
+    /one bounded alternate search when needed/.test(fs.readFileSync("public/index.html", "utf8")) &&
+    !/once per item/.test(appJs) &&
+    !/once per item/.test(fs.readFileSync("public/index.html", "utf8")),
+  "Shop loading and fine-print copy allow for bounded alternate searches"
 );
 const locationFailureBlock = appJs.match(/function requestLocation\([\s\S]*?async function compareStores/)?.[0] || "";
 ok(
@@ -542,7 +603,7 @@ ok(missingIds.length === 0, `every element app.js touches exists in the HTML${mi
 ok(html.includes('id="groceryView"'), "index.html has the grocery panel");
 ok(html.includes('data-view="grocery"'), "index.html has the grocery nav entry");
 ok(html.includes('id="planShopButton"') && appJs.includes('$("planShopButton")'), "the meal plan's shopping list has its own add-to-shop button");
-ok(appJs.includes("/api/grocery/offers") && !appJs.includes("/api/grocery/optimize"), "the compare button uses live advertised prices, not the static optimizer");
+ok(appJs.includes("/api/grocery/offers") && !appJs.includes("/api/grocery/optimize"), "the compare button uses live store prices, not the static optimizer");
 ok(appJs.includes("navigator.geolocation"), "app.js asks the browser for a location");
 ok(fs.readFileSync("public/styles.css", "utf8").includes("repeat(4, 1fr)"), "mobile nav has room for the fourth tab");
 
@@ -808,8 +869,8 @@ function aiEnvelope(plan) {
 }
 
 // In-process route checks inject a deterministic live-service boundary. The
-// production service performs the Tavily/page/JSON-LD work; this fixture keeps
-// those tests focused on citation, diet, swap, and shopping behavior.
+// production service verifies live page facts; this fixture keeps these tests
+// focused on citation, diet, swap, and shopping behavior.
 const testLiveRecipeService = {
   async findRecipes() {
     return {
@@ -999,8 +1060,20 @@ async function runRouteChecks() {
   );
   ok(
     pantryOnly.buildPlanCalls === 0 &&
-      pantryOnly.assistantMessages[0]?.[0] === "Pantry updated: potatoes. Pantry updated: rice.",
+      pantryOnly.assistantMessages[0]?.[0] === "Pantry updated: potatoes and rice.",
     "a pantry-only chat command confirms the update without requesting a meal plan"
+  );
+
+  const manyPantryAdds = await exerciseFrontendMessage(
+    "add apples rice beans oats corn flour pasta onions tomatoes and milk to my pantry",
+    { actions: ["apples", "rice", "beans", "oats", "corn", "flour", "pasta", "onions", "tomatoes", "milk"].map(name => ({
+      type: "pantry_set", name, qty: 1, soon: false
+    })), requestPlan: false },
+    []
+  );
+  ok(
+    manyPantryAdds.assistantMessages[0]?.[0] === "Added 10 items to your pantry." && !manyPantryAdds.assistantMessages[0]?.[0].includes("apples"),
+    "a large pantry update confirms its item count without repeating every name"
   );
 
   const shorthandPantryAdd = await exerciseFrontendMessage(
@@ -1033,6 +1106,64 @@ async function runRouteChecks() {
   ok(
     pantryAndPlan.buildPlanCalls === 1 && pantryAndPlan.assistantMessages[0]?.[0] === "Pantry updated: rice.",
     "a combined pantry and planning request still requests a meal plan"
+  );
+
+  const existingPantryItem = await exerciseFrontendMessage(
+    "add milk and oats to my pantry",
+    { actions: [
+      { type: "pantry_set", name: "milk", qty: 1, soon: false },
+      { type: "pantry_set", name: "oats", qty: 1, soon: false },
+    ], requestPlan: false },
+    [],
+    [{ name: "oats" }]
+  );
+  ok(
+    existingPantryItem.assistantMessages[0]?.[0] === "Pantry updated: milk. Already in your pantry: oats." && existingPantryItem.pantry.includes("oats"),
+    "a pantry confirmation does not claim an unchanged existing item was added"
+  );
+
+  const mixedChatActions = await exerciseFrontendMessage(
+    "add milk and eggs, remove rice, and add black beans to my shopping list",
+    { actions: [
+      { type: "pantry_set", name: "milk", qty: 1, soon: false },
+      { type: "pantry_set", name: "eggs", qty: 1, soon: false },
+      { type: "pantry_remove", name: "rice", qty: 1, soon: false },
+      { type: "shopping_add", name: "black beans", qty: 1, soon: false },
+    ], requestPlan: false },
+    [],
+    [{ name: "rice" }, { name: "oats" }]
+  );
+  ok(
+    mixedChatActions.assistantMessages[0]?.[0] === "Pantry updated: milk and eggs. Removed rice from your pantry. Added black beans to your shopping list." &&
+      mixedChatActions.pantry.includes("oats") && !mixedChatActions.pantry.includes("rice") && mixedChatActions.groceryList.includes("black beans"),
+    "mixed chat actions summarize pantry additions and accurately report removal and shopping changes"
+  );
+
+  const setThenRemove = await exerciseFrontendMessage(
+    "add milk then remove milk from my pantry",
+    { actions: [
+      { type: "pantry_set", name: "milk", qty: 1, soon: false },
+      { type: "pantry_remove", name: "milk", qty: 1, soon: false },
+    ], requestPlan: false },
+    []
+  );
+  ok(
+    setThenRemove.assistantMessages[0]?.[0] === "Pantry unchanged: milk." && !setThenRemove.pantry.includes("milk"),
+    "a set-then-remove sequence reports its final pantry state without contradictory confirmations"
+  );
+
+  const removeThenSet = await exerciseFrontendMessage(
+    "remove rice then add rice to my pantry",
+    { actions: [
+      { type: "pantry_remove", name: "rice", qty: 1, soon: false },
+      { type: "pantry_set", name: "rice", qty: 1, soon: false },
+    ], requestPlan: false },
+    [],
+    [{ name: "rice" }]
+  );
+  ok(
+    removeThenSet.assistantMessages[0]?.[0] === "Pantry unchanged: rice." && removeThenSet.pantry.includes("rice"),
+    "a remove-then-set sequence reports its final pantry state without contradictory confirmations"
   );
 
   const request = {
@@ -1747,6 +1878,31 @@ async function runRouteChecks() {
   // on purpose.
   const client = clientSandbox[0];
   ok(typeof client.normaliseState === "function", "the state validator is reachable as one shared function");
+  const repairedSavedIngredient = client.normaliseState({
+    plan: {
+      dinners: [{ title: "Saved tomato dinner", needs: [
+        "tomato pur e",
+        "coriander plus 1 tbsp chopped coriander leaves to garnish"
+      ] }],
+      shoppingList: [
+        { item: "tomato pur e", qty: 1, sharedBy: [] },
+        { item: "coriander plus 1 tbsp chopped coriander leaves to garnish", qty: 1, sharedBy: [] }
+      ]
+    },
+    groceryList: [
+      { name: "tomato pur e", qty: 1 },
+      { name: "coriander plus 1 tbsp chopped coriander leaves to garnish", qty: 1 }
+    ]
+  });
+  ok(
+    repairedSavedIngredient.plan.shoppingList[0]?.item === "tomato puree" &&
+      repairedSavedIngredient.plan.dinners[0]?.needs[0] === "tomato puree" &&
+      repairedSavedIngredient.groceryList[0]?.name === "tomato puree" &&
+      repairedSavedIngredient.plan.shoppingList[1]?.item === "coriander leaves" &&
+      repairedSavedIngredient.plan.dinners[0]?.needs[1] === "coriander leaves" &&
+      repairedSavedIngredient.groceryList[1]?.name === "coriander leaves",
+    "exact saved tomato puree and coriander garnish names are repaired in Plan and Shop state"
+  );
   for (const [label, input] of [
     ["null", null],
     ["a string", "not a kitchen"],
@@ -1839,8 +1995,8 @@ async function runRouteChecks() {
 
   n += await require("./test-fixes")();
   n += await require("./test-grocery-offers")();
-  n += await require("./test-sitemap-recipe-discovery")();
-  n += await require("./test-rcp-recipe-discovery")();
+  n += await require("./test-grocery-matcher")();
+  n += await require("./test-live-recipes")();
   n += await require("./test-curated-recipe-discovery")();
   n += await require("./test-local-offer-ui")();
   console.log(`\nALL ${n} CHECKS PASSED`);
