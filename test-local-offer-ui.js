@@ -1,0 +1,129 @@
+const assert = require("assert");
+const { client } = require("./test-fixes");
+
+async function run() {
+  let count = 0;
+  const check = (condition, message) => {
+    assert(condition, message);
+    count += 1;
+    console.log(`compare ui ok - ${message}`);
+  };
+
+  const frontend = client();
+  const render = (estimates, failures = []) => {
+    frontend.context.renderLiveComparison({ area: "Tempe, AZ 85281", estimates, failures });
+    return frontend.node("groceryResults").innerHTML;
+  };
+  const storeLine = (overrides = {}) => ({
+    item: "rice",
+    price: 3.99,
+    product: "Great Value Rice, 2 lb",
+    origin: "store-api",
+    scope: "store-api",
+    ...overrides,
+  });
+
+  let html = render([
+    {
+      chain: "frys",
+      label: "Fry's / Kroger",
+      total: 5.19,
+      advertisedCount: 2,
+      itemCount: 2,
+      requestedCount: 2,
+      missing: [],
+      complete: true,
+      cheapest: true,
+      lines: [
+        storeLine(),
+        { item: "bananas", price: 1.2, product: "Fresh Bananas", origin: "store-api", scope: "store-api" },
+      ],
+    },
+    {
+      chain: "aldi",
+      label: "ALDI",
+      total: 4.45,
+      advertisedCount: 1,
+      itemCount: 1,
+      requestedCount: 2,
+      missing: ["beans"],
+      complete: false,
+      lines: [{ item: "rice", price: 4.45, product: "Kroger Long Grain Rice", origin: "store-api", scope: "store-api" }],
+    },
+  ]);
+  check(html.includes("Where to buy this list") && html.includes("CHEAPEST LIVE BALLPARK") && html.includes("$5.19") && html.includes("$4.45"), "the compare lists ranked stores with their live ballpark totals");
+  check(html.includes("Great Value Rice, 2 lb") && html.includes("store price"), "breakdown lines identify prices from the live store APIs");
+  check(html.includes("No live price found: beans"), "a partial store names every item it could not price");
+
+  html = render([
+    { chain: "aldi", label: "ALDI", total: 8, advertisedCount: 2, itemCount: 2, requestedCount: 3, missing: ["beans"], complete: false, cheapest: true, lines: [storeLine({ price: 4 }), storeLine({ item: "bananas", price: 4 })] },
+    { chain: "frys", label: "Fry's / Kroger", total: 0.5, advertisedCount: 1, itemCount: 1, requestedCount: 3, missing: ["bananas", "beans"], complete: false, lines: [storeLine({ price: 0.5 })] },
+  ]);
+  check(html.includes("BEST LIVE BALLPARK SO FAR") && html.indexOf("$8.00") < html.indexOf("$0.50"), "a partial winner is labeled best so far and outranks a cheaper single-item partial");
+
+  frontend.run("state.constraints.budget = 10;");
+  const complete = [{ chain: "frys", label: "Fry's / Kroger", total: 8.5, advertisedCount: 1, itemCount: 1, requestedCount: 1, missing: [], complete: true, cheapest: true, lines: [storeLine({ price: 8.5 })] }];
+  html = render(complete);
+  check(html.includes("$1.50") && html.includes("under your") && html.includes("$10.00 budget at Fry&#039;s / Kroger"), "the budget compares against the cheapest complete live ballpark");
+  frontend.run("state.constraints.budget = 5;");
+  html = render(complete);
+  check(html.includes("$3.50") && html.includes("over your $5.00 budget"), "an over-budget ballpark is stated plainly");
+  frontend.run("state.constraints.budget = 20;");
+
+  html = render([{ chain: "evil", label: "<img src=x onerror=alert(1)>", total: 1, advertisedCount: 1, itemCount: 1, requestedCount: 1, missing: [], complete: true, cheapest: true, lines: [storeLine({ item: "<script>alert(1)</script>", product: "<img src=x>" })] }]);
+  check(!html.includes("<img") && !html.includes("<script"), "store and line text is escaped");
+
+  html = render(complete, [{ item: "bananas", message: "No live price was found." }]);
+  check(html.includes("Bananas: No live price was found."), "chain failures are listed under the results");
+
+  const mergedEstimates = frontend.context.mergeStoreEstimates([
+    { storeEstimates: [{ chain: "frys", label: "Fry's / Kroger", lines: [{ item: "rice", price: 3.99, product: "Rice" }], missing: ["beans"], branch: null }] },
+    { storeEstimates: [{ chain: "frys", label: "Fry's / Kroger", lines: [{ item: "beans", price: 0.99, product: "Beans" }], missing: [], branch: null }] },
+  ], ["rice", "beans"]);
+  check(mergedEstimates.length === 1 && mergedEstimates[0].total === 4.98 && mergedEstimates[0].complete === true && mergedEstimates[0].itemCount === 2, "batched store estimates merge into one complete total");
+
+  const unitResults = [
+    { storeEstimates: [
+      { chain: "aldi", label: "ALDI", lines: [{ item: "rice", price: 3.5 }, { item: "beans", price: 0.5 }] },
+      { chain: "frys", label: "Fry's / Kroger", lines: [{ item: "rice", price: 2 }, { item: "beans", price: 2.9 }] },
+    ] },
+  ];
+  const unitPrices = frontend.context.mergeStoreEstimates(unitResults, ["rice", "beans"]);
+  const selectedQuantities = frontend.context.mergeStoreEstimates(unitResults, ["rice", "beans"], new Map([["rice", 2], ["beans", 1]]));
+  check(unitPrices[0].chain === "aldi" && unitPrices[0].total === 4, "a default Shop quantity of one ranks using the unit prices");
+  check(selectedQuantities[0].chain === "frys" && selectedQuantities[0].total === 6.9 && selectedQuantities[0].lines[0].price === 2 && selectedQuantities[0].lines[0].subtotal === 4, "selected quantities change the merged total and ranking while preserving unit prices");
+  frontend.run("state.constraints.budget = 7;");
+  html = render(selectedQuantities);
+  check(html.includes("2 × $2.00 = $4.00") && html.includes("$0.10 under your $7.00 budget"), "the rendered selected-quantity subtotal and budget use the extended prices");
+  frontend.run("state.constraints.budget = 20;");
+
+  frontend.run('state = clone(DEFAULT_STATE); state.groceryList = [{name:"eggs",qty:1}]; renderGroceryList();');
+  frontend.node("offerAreaInput").value = "Tempe, AZ 85281";
+  let compareRequest;
+  frontend.context.fetch = (url, options) => {
+    compareRequest = { url, body: JSON.parse(options.body) };
+    return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true, area: "Tempe, AZ 85281", failures: [], storeEstimates: [{ chain: "frys", label: "Fry's / Kroger", total: 1.64, advertisedCount: 1, itemCount: 1, requestedCount: 1, missing: [], complete: true, lines: [storeLine({ item: "eggs", price: 1.64, product: "Great Value Large White Eggs, 12 Count" })] }] }) });
+  };
+  await frontend.context.compareStores();
+  check(compareRequest.url === "/api/grocery/offers" && compareRequest.body.items.join(",") === "eggs" && compareRequest.body.area === "Tempe, AZ 85281" && !Object.prototype.hasOwnProperty.call(compareRequest.body, "lat"), "the compare runs live store searches with the typed area and no device coordinates");
+  check(frontend.node("groceryResults").innerHTML.includes("CHEAPEST LIVE BALLPARK") && frontend.node("groceryResults").innerHTML.includes("$1.64"), "the compare renders the live store ballpark");
+
+  let release;
+  frontend.context.fetch = () => new Promise((resolve) => { release = resolve; });
+  const stale = frontend.context.compareStores();
+  await Promise.resolve();
+  frontend.node("groceryList").handlers.click({ target: { closest: () => ({ dataset: { index: "0", groceryAction: "more" } }) } });
+  const staleMessage = frontend.node("groceryResults").innerHTML;
+  release({ ok: true, status: 200, json: async () => ({ ok: true, area: "Tempe, AZ 85281", failures: [], storeEstimates: [{ chain: "frys", label: "Fry's / Kroger", total: 9.99, advertisedCount: 1, itemCount: 1, requestedCount: 1, missing: [], complete: true, lines: [storeLine({ price: 9.99 })] }] }) });
+  await stale;
+  check(frontend.node("groceryResults").innerHTML === staleMessage && !frontend.node("groceryResults").innerHTML.includes("$9.99"), "a comparison for an edited list cannot replace the current results");
+
+  frontend.node("offerAreaInput").value = "Phoenix, AZ 85004";
+  frontend.node("offerAreaInput").handlers.input({});
+  check(frontend.node("groceryResults").innerHTML.includes("Search area changed"), "changing the search area clears stale comparison results");
+
+  return count;
+}
+
+module.exports = run;
+if (require.main === module) run().catch((error) => { console.error(error.message); process.exitCode = 1; });

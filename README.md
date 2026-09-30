@@ -2,9 +2,10 @@
 
 Fuse what you have into a meal you can afford.
 
-FridgeFuse is a chat-first meal planner for a freshman cooking in a dorm. It
-turns a rough pantry, a grocery limit, and limited equipment into three simple
-dinners and one full-package shopping list.
+FridgeFuse is a chat-first meal planner for a student cooking in a dorm. It
+turns a rough pantry, grocery budget, and limited equipment into dinner
+suggestions and an ingredient list. The Shop view compares that list against
+live advertised prices.
 
 Live deployment: Vercel will provide the project URL after the first deploy.
 
@@ -30,6 +31,8 @@ cp .env.example .env
 ```
 
 Then edit `.env` and set `VOYAGER_KEY` to your ASU AIR (Voyager) API key.
+Meal planning ranks the curated URL index and fetches publisher pages directly,
+so it does not need a paid search key.
 `ASU_AIR_BASE_URL`, `ASU_AIR_MODEL`, and `ASU_AIR_VISION_MODEL` already have
 working defaults. Text planning uses `llama4-scout-17b`, while photo recognition
 uses `qwen3-vl-32b-instruct`. A second, independent photo check uses the faster
@@ -37,10 +40,35 @@ multimodal `llama4-scout-17b` by default; it can be overridden with
 `ASU_AIR_VISION_VERIFY_MODEL`.
 
 `VOYAGER_KEY` is required for meal planning and photo recognition. If it is
-missing, or Voyager is unavailable, those endpoints return an error instead of
-inventing a local plan or demo grocery results.
+missing, or a publisher page cannot be verified, the endpoint reports an error
+instead of inventing a plan or recipe.
 
 `.env` is gitignored — never commit the real key.
+
+Vercel requests to planning, photo recognition, chat interpretation, live offers,
+and location lookup pass through Vercel BotID's Basic check before they reach
+those services. Enable Vercel OIDC for the project so the server can verify the
+check. BotID uses no extra app secret or CAPTCHA account. Local development
+bypasses BotID; `/api/models` and `/api/failures` answer only on localhost while
+the app runs outside production. Basic checks reduce automated abuse, but do not
+stop deliberate manual use. FridgeFuse has no access code or app-wide request quota.
+
+The Shop tab needs no search key. After you click **Find the cheapest store**, it
+sends selected grocery names and the typed search area to `/api/grocery/offers`,
+which queries each chain through its live source. Results are cached in server
+memory for up to six hours; a replaced process starts with an empty cache.
+
+Each response carries `storeEstimates`: a per-store ballpark built only from
+prices the adapters returned. Missing items make a result partial; no invented
+price enters the total. The Shop view merges batches, applies the quantities the
+student selected, and ranks stores by items priced and then total. Even a complete
+result is not a verified checkout total.
+
+ALDI uses its storefront GraphQL; Fry's uses Kroger's official Products API when
+`KROGER_CLIENT_ID` and `KROGER_CLIENT_SECRET` are set. Without those credentials,
+Fry's returns no prices and the app does not search the web as a fallback. The
+Shop view labels each live source. It does not verify package sizes, pickup
+availability, or checkout totals.
 
 ## Run
 
@@ -80,7 +108,7 @@ a plan is only useful if it respects the equipment in the room and the food the
 student cannot eat.
 
 The welcome wizard runs **once, ever** — three steps the first time the app is
-opened: who you are (name, optional ZIP), what you can cook with, and what you
+opened: who you are (name), what you can cook with, and what you
 cannot eat. It never reappears on later visits; after that, preferences are
 changed only by deliberately opening the profile from the avatar button. Either
 the wizard or a later edit can be dismissed in one click — nothing is mandatory.
@@ -98,38 +126,37 @@ fully AI-driven now (see below), so there is no static list to count against
 without making a real request, and a live number the app can't back up would
 be worse than no number.
 
-`DIET_OPTIONS` and `EQUIPMENT_OPTIONS` in `server.js` are the single source of
-truth — `GET /api/preferences` serves them to both the welcome wizard and the
-profile drawer, so an option can't appear in the form without also existing on
-the server. There are 17 dietary options across three groups (diets including
-halal, kosher and pescatarian; nine allergens; things to skip) and 11 pieces of
-equipment. A restriction is enforced by turning it into a concrete "hard
-exclusions" ingredient list appended to the AI planning prompt — not by hoping
-the model infers "vegan" correctly from a word — and an option that blocks
-nothing in the current catalog must carry a note saying so, which is enforced
-by a test.
-
-Dietary options filter a small mock catalog. The form says plainly that this is
-not an allergy-safety guarantee.
+`data/diet-rules.json` and `EQUIPMENT_OPTIONS` in `server.js` are the single
+source of truth — `GET /api/preferences` serves them to both the welcome wizard
+and the profile drawer, so an option can't appear in the form without also
+existing on the server. There are 17 dietary options across three groups (diets
+including halal, kosher and pescatarian; nine allergens; things to skip) and 11
+pieces of equipment. A restriction is enforced by turning it into a concrete
+forbidden-term list appended to the AI planning prompt — not by hoping the model
+infers "vegan" correctly from a word. The form says plainly that this is not an
+allergy-safety guarantee.
 
 ## Demo flow
 
 Behind the profile, the home screen is a conversation, not a constraint form. A
 student can describe their food, budget, time, and equipment in one message or
 add a fridge photo. FridgeFuse keeps a rough pantry in local browser storage and
-renders the evolving plan beside the chat.
+shows recipe suggestions in Chat. The student adds wanted recipes to Plan one
+at a time. Chat is home; Plan and Shop are one tap away in the rail, and the
+pantry stays open beside the conversation on wide screens.
 
 With `VOYAGER_KEY` configured, the planning flow sends the pantry, constraints,
-and latest request to ASU AIR. Voyager creates the dinners and cooking steps.
-The server replaces its shopping prices with packages from the local Tempe 85281
-catalog before returning the plan.
+and latest request to ASU AIR. Voyager selects verified recipes for the dinners;
+publisher pages provide their cooking steps.
+The server turns the ingredient names into a shopping list and drops every
+number the model returned; the Shop tab prices that list live.
 
 The demo flow is:
 
-1. Choose “Try a sample mini-fridge.”
-2. See three microwave-safe dinners with use-soon food scheduled first.
-3. Open beginner cooking steps.
-4. Review the merged full-package list and estimated checkout total.
+1. Choose “Show me an example.”
+2. Review recipe suggestions and directions in Chat; add wanted dinners to Plan.
+3. Review the selected dinners and their ingredient needs in Plan.
+4. Add plan items to Shop, where live prices rank the stores.
 5. Swap a meal without resetting the pantry or budget.
 6. Open the pantry to add food or mark another item “use soon.”
 
@@ -153,66 +180,73 @@ response.
 
 ## Shop tab: cheapest-store comparison
 
-The Shop tab answers the other half of the problem — not “what can I cook” but
-“where do I buy it for the least money.” A student builds a shopping list, shares
-their location, and gets every nearby store ranked by what the whole basket
-actually costs, with distance and a per-item breakdown.
+The Shop tab shows advertised prices for the search area and ranks stores by how
+many items they priced, then by total. It does not report store distances or
+verified checkout costs.
 
-1. Open **Shop** and add items (`eggs, milk, cheese`), or pull the missing
-   ingredients straight from the current meal plan.
+1. Open **Shop** and add items (`eggs, milk, cheese`), or press **Add plan items**
+   to pull the ingredients from the current meal plan.
 2. Adjust quantities; the list is saved on the device like the pantry.
-3. Choose “Use my location,” or skip it and let distances run from the catalog
-   origin (ASU Tempe). FridgeFuse is built for ASU students, so every store in the
-   catalog is in the Phoenix metro and there is no ZIP to ask for.
-4. Compare — stores that stock the whole list rank first, then price, then
-   distance. The cheapest is flagged and the saving is spelled out.
+3. Type the search area (Tempe, AZ 85281 by default) or share a location.
+4. Compare — every chain is searched live per item, stores that priced more of
+   the list rank first, then total. The cheapest complete ballpark is flagged
+   and compared against the profile budget.
 
 ### Showing where the user is
 
-Once a fix is granted, the Shop tab says where that is in words. The description
-is computed on the server from `data/stores.json` alone — the nearest branch or
-origin plus the measured distance, so it reads like `0.5 mi from Tempe —
-University Dr`. Nothing about it is hardcoded: move the branches to another city
-and the wording follows, and if `origin` is absent it is derived from the mean of
-the loaded branches.
-
-A real place name (`Tempe, Arizona`) needs a third party, so the app **asks
-first**. The disclaimer names the service, says the coordinates are rounded to
-~110 m, and makes clear the comparison works identically either way. Only a
-literal `true` from the client unlocks it; the answer is remembered, and
-declining keeps every coordinate on the machine. The lookup runs through
-`POST /api/geo/describe` server-side — so Nominatim's User-Agent policy is
-honoured, requests are throttled to their ~1/second limit, and the browser never
-makes a cross-origin call. If the service is slow or down, the local description
-stands and the failure is logged like any other external call.
+Sharing a fix labels the location bar with the area name (`Tempe, Arizona`). The
+name comes from OpenStreetMap's free Nominatim service through
+`POST /api/geo/describe`.
+That call runs server-side, so Nominatim's User-Agent policy is honoured, requests
+are throttled to their ~1/second limit, and the browser never makes a cross-origin
+call. Only coordinates rounded to three decimals (~110 m) are sent, and the request
+carries a literal `allowLookup: true`, which the server requires before it calls the
+third party. The shared fix labels the location bar; price searches still use the
+editable search area. If Nominatim is slow or down the label falls back to "Your
+location". The failure is logged, and the OpenStreetMap credit sits in the Shop
+fine print.
 
 ## Swapping a dinner
 
 "Swap" excludes the **recipe**, not the dinner's title: the plan prompt lets a title
-describe the adapted result, so the same curated record could otherwise come back
+describe the adapted result, so the same verified source could otherwise come back
 under a new name and the swap would look like it did nothing. The server refuses a
 plan that reuses an excluded recipe and asks the model again.
 
-The curated catalog is small, and equipment, time, and budget narrow it further, so a
+Equipment and time narrow the verified live candidates, so a
 swap can genuinely have nowhere to go. When the second attempt still has no
 alternative the plan is returned with `swapUnavailable`, and the chat says so rather
-than silently handing back the same dinner. More microwave-only records in
-`data/recipe-sources.json` is what widens this.
+than silently handing back the same dinner. Each swap reuses the same
+request-scoped verified candidate set and re-verifies any retained dinner that
+was not returned by search.
 
 ## Recipe sources
 
-- AI meal generation is constrained to the exact recipe records in
-  `data/recipe-sources.json` (v3). Each record has a canonical title, recipe-page
-  URL, timing, equipment, ingredients, and a short verified method outline.
+- `data/curated-recipe-leads.json` stores publisher URLs and ranking hints only.
+  The server freshly fetches candidate HTTPS pages with a browser-safe client,
+  follows only manually validated public redirects, and accepts a candidate
+  only when recursive schema.org Recipe JSON-LD supplies its title, ingredients,
+  instructions, and exact time; equipment is inferred from verified directions.
+  Per-request page checks are bounded.
 - Every returned dinner carries an exact `sourceRecipe`, `source`, and
-  `sourceUrl` triple. Publisher homepages and mismatched titles are rejected.
-- The model builds from the selected record's facts. When a small pantry,
-  budget, equipment, time, or diet change is needed, it records that change in
-  `adaptationNote`.
-- Edit the JSON to change the catalog. The prompt and validation rules are
-  rebuilt from it at startup, and malformed or empty recipe data prevents the
-  server from starting. Recipe pages are curated ahead of time rather than
-  fetched during each request.
+  `sourceUrl` triple from the verified candidates. Publisher homepages,
+  hallucinated URLs/IDs, snippets, and model timing claims are rejected.
+- Voyager selects recipe IDs only and does not receive publisher directions.
+  The server returns the exact verified JSON-LD ingredients, time, inferred
+  equipment, and ordered publisher directions, alongside the publisher link and
+  visible credit. RCP recipes retain the page's required attribution and license
+  notice. For other listed publishers, reuse permission has not been verified;
+  credit does not grant permission. This is a hackathon display path pending
+  reuse-rights review, not a claim that the source text is legally cleared.
+- Candidate source text is bounded and treated as untrusted evidence. Titles,
+  ingredients, and directions that violate the active diet or contain obvious
+  prompt-injection text are rejected. Voyager sees only the candidate IDs and
+  bounded selection facts; it does not receive publisher directions.
+- The server does not adapt a source recipe. It uses the verified ingredient set
+  and rejects candidates that do not fit the request's time, equipment, and diet.
+- Publisher requests use a process-wide host pacer and bounded per-request
+  checks. Local development can inspect aggregated failures through
+  `/api/failures`. There is no search API fallback or model-invented URL fallback.
 
 ## Your kitchen data
 
@@ -235,25 +269,22 @@ that would have to be kept in step.
 
 ## Needs are ingredient names
 
-A dinner requires *ingredients*; a store sells *packages*. The plan keeps those
-separate:
+A dinner requires *ingredients*; the plan keeps those separate from prices:
 
 ```json
 "needs": ["eggs", "gluten free pasta"]
 ```
 
-The model names what each dinner uses; the server does the shopping. Each dinner
-that needs an ingredient adds one package of it, shared across the plan, and the
-total is the sum of what was actually bought. Amounts were deliberately removed:
-the model misjudged them and the package math produced false precision, so the
-plan buys whole packages and claims no leftovers. Do not reintroduce amounts,
+The model names what each dinner uses; the server turns each name into one
+shopping line, shared across the dinners that need it. Amounts were deliberately
+removed: the model misjudged them and the package math produced false precision,
+so the plan asks for names and claims no leftovers. Do not reintroduce amounts,
 units, per-serving bands, or leftover estimates without a design for where
 measured quantities come from.
 
 `shoppingList`, `leftovers`, and `totalCost` are not accepted from the model at
-all. It is asked for dinners and ingredient names; everything with a number in
-it is computed here. An ingredient the catalog cannot price is a hard failure —
-pricing it would mean inventing a price.
+all. It is asked for dinners and ingredient names; anything with a number in it
+is discarded. Prices come from the live comparison in Shop.
 
 ## Dietary restrictions
 
@@ -277,53 +308,39 @@ Matching is word-boundary and plural-tolerant, so `egg` catches `eggs` but not
 are matched, so `peanut butter` does not trip the dairy-free rule's `butter`, and
 `corn tortillas` does not trip gluten-free's `tortillas`.
 
-How an ingredient is judged depends on whether the catalog knows it. A catalog item
-is judged by its own `tags` in `data/prices.json` (`pasta` carries `gluten`, `gluten
-free pasta` carries nothing), which is exact — the word net would fail an alias like
-`gf pasta` for containing "pasta". Anything the catalog has never heard of, and every
-cooking step, falls back to word matching. The two are cross-checked against each
-other by `npm test`, so a mis-tagged item fails the build.
+Every ingredient and every cooking step goes through the same word net, with each
+rule's `allows` list stripped first. That keeps `peanut butter` from tripping
+dairy-free's `butter` and `almond milk` from tripping its `milk`, but it is
+conservative: an unlisted alias like `gf pasta` is flagged for containing "pasta".
+Add the safe phrasing to the rule's `allows` list rather than loosening a `forbids`
+entry.
 
 Edit the JSON to change the rules — the prompt and the check are both rebuilt from it
-at startup, and a bad or empty file makes the server refuse to start, by design. The
-five rules shipped (vegetarian, vegan, dairy-free, gluten-free, no peanuts) match the
-checkboxes in the profile drawer; the chat also understands "peanut allergy".
+at startup, and a bad or empty file makes the server refuse to start, by design. All
+17 rules ship with the app, matching the checkboxes in the profile drawer.
 
-Gluten-free substitutes are stocked in the catalog (`gluten free bread`, `gluten free
-pasta`, `corn tortillas`, `tamari`) so a celiac's plan can actually be priced. Vegan
-and dairy-free do not have their substitutes yet — plant milks and a cheese
-alternative would need adding before those restrictions are equally usable.
+## Where prices come from
 
-## Food codes
-
-Catalog items carry a `codes.foodon` id — an [EBI FoodOn](https://foodon.org)
-ontology term, the closest thing food has to SNOMED/LOINC. `npm run codes:propose`
-queries FoodOn (and USDA FoodData Central, if `FDC_API_KEY` is set) and prints
-candidates for review. It never writes the catalog, because unreviewed name lookup
-gets it wrong in ways that matter here: the best hit for `eggs` is a fish egg, for
-`yogurt` it is "soy yogurt", for `tamari` it is a tamarind plant, and `milk` resolves
-to an anatomy term. Only the 11 items whose ontology label matches exactly carry an
-id; the rest are `null` pending a human decision.
-
-The allergen tags stay hand-curated for the same reason. No food API returns a
-classification dependable enough for an allergy: FoodData Central has no structured
-allergen field, only a free-text ingredient string, and Open Food Facts' tags are
-patchy — its record for a product named "Gluten Free Spaghetti" has an empty
-`allergens_tags` and no gluten-free label.
-
-Prices are mock for the same practical reason: there is no open grocery-price API.
-Kroger (Fry's parent) publishes a location-aware product API behind OAuth partner
-credentials; Aldi, Trader Joe's, and Walmart offer nothing comparable publicly. The
-catalog's shape leaves room for a per-chain adapter to fill later.
+There is no open grocery-price API shared by every chain, so the Shop compare
+runs live searches and the plan prices nothing itself. Kroger (Fry's parent)
+publishes a location-aware product API behind OAuth partner credentials, and
+ALDI's storefront GraphQL is read directly. Trader Joe's has no online prices
+and is not compared. Pickup availability and final checkout totals are not
+verified.
 
 ## AI chat
 
 Every chat message goes through ASU AIR at `/api/chat/interpret`. The model returns
 separate pantry and shopping actions, retaining specific names such as almond milk,
-gluten-free pasta, corn tortillas, tamari, and foods absent from the catalog. Each
-action needs evidence copied from the message. Invalid interpretations receive one
-repair attempt; failed or ambiguous requests apply no food actions. Budget, equipment,
-and dietary preference rules remain deterministic, including preserving allergies.
+gluten-free pasta, corn tortillas, and tamari. Each
+action needs evidence copied from the message. A run of foods with no punctuation is
+split into separate items ("add salmon rice bean spinach" is four things), while real
+multiword foods stay together. Invalid interpretations receive one
+repair attempt; failed or ambiguous requests apply no food actions, and the model can
+ask a follow-up question when one token could be one food or two. The chat also
+understands "add the list to shop", which copies the current meal plan's shopping
+list into the Shop list. Equipment and
+dietary preference rules remain deterministic, including preserving allergies.
 Pantry-only messages no longer generate dinners. An explicit cooking request does.
 
 Run deterministic tests with `npm test`.
@@ -332,23 +349,26 @@ Run deterministic tests with `npm test`.
 ## API
 
 - `POST /api/chat/interpret {message,pantry}` interprets food actions using AIR.
-- `GET /api/health` reports server, catalog, and diet-rule status.
+- `GET /api/health` reports server, curated recipe lead/source counts, and
+  diet-rule status.
 - `POST /api/vision {imageDataUrl}` returns independently verified `confirmed`
   pantry items plus `uncertain` items with bounding boxes for user review.
-- `POST /api/plan` builds and prices the dinner plan; dinners include
+- `POST /api/plan` builds the dinner plan and its unpriced shopping list; dinners include
   `sourceRecipe`, `source`, `sourceUrl`, and (when adapted) `adaptationNote`.
   The response echoes the `dietRules` that were enforced; a plan that breaks them
   is rejected, not returned.
 - `GET /api/preferences` serves the dietary and equipment catalogs the profile renders.
-- `GET /api/prices?item=` reads the Tempe 85281 mock catalog.
-- `GET /api/stores?lat=&lng=&maxDistanceMi=` lists nearby branches with distances.
-- `POST /api/grocery/optimize {items,lat,lng}` ranks stores by what the basket costs.
+- `POST /api/grocery/offers {items,area}` prices up to five selected items per
+  chain from each chain's own live source, reports per-item sources and failures,
+  and returns a per-store `storeEstimates` ballpark. The Shop compare button
+  calls this endpoint.
 - `POST /api/geo/describe {lat,lng,allowLookup}` names a location; the third-party
   lookup runs only when `allowLookup` is exactly `true`.
-- `GET /api/failures` returns recent external-service failures.
+- `GET /api/models` and `GET /api/failures` work only from localhost during
+  development. They are unavailable on Vercel deployments.
 
-Mock prices are development estimates. The interface labels them as mock Tempe
-prices and does not present them as live store quotes.
+Prices are advertised web prices or official store-API prices, labeled with their
+scope in the results. Pickup availability is never claimed.
 
 ## Troubleshooting
 
@@ -356,8 +376,9 @@ prices and does not present them as live store quotes.
 - `key=MISSING (AI unavailable)`: add `VOYAGER_KEY` to `.env` and restart. Plans
   and photo recognition stay unavailable until the key is configured.
 - `npm test` fails: make sure you ran `npm install` first and did not edit
-  `data/prices.json`, `data/recipe-sources.json`, or `data/diet-rules.json`.
-- Slow live plans: check `/api/health` and confirm `airModel` is `llama4-scout-17b`.
+  `data/diet-rules.json`.
+- Live plans need `VOYAGER_KEY`, a usable curated recipe index, and reachable
+  publisher pages. `/api/health` reports the provider and eligible lead counts.
 - Phone on same WiFi can't reach demo: server binds `0.0.0.0`, use your laptop's LAN IP, e.g. `http://192.168.1.x:3000`.
 
 ## Deploy to Vercel
@@ -386,6 +407,8 @@ npx vercel@latest env add ASU_AIR_BASE_URL
 npx vercel@latest env add ASU_AIR_MODEL
 npx vercel@latest env add ASU_AIR_VISION_MODEL
 npx vercel@latest env add ASU_AIR_VISION_VERIFY_MODEL
+npx vercel@latest env add KROGER_CLIENT_ID
+npx vercel@latest env add KROGER_CLIENT_SECRET
 npx vercel@latest --prod
 ```
 
@@ -401,28 +424,43 @@ ASU_AIR_BASE_URL=https://openai.rc.asu.edu/v1
 ASU_AIR_MODEL=llama4-scout-17b
 ASU_AIR_VISION_MODEL=qwen3-vl-32b-instruct
 ASU_AIR_VISION_VERIFY_MODEL=llama4-scout-17b
+KROGER_CLIENT_ID=your-kroger-client-id
+KROGER_CLIENT_SECRET=your-kroger-client-secret
 ```
 
 After deployment, check `https://your-project.vercel.app/api/health` and open
-the project URL in a browser. Confirm the sample mini-fridge flow, photo
-review, Shop tab, and browser-location prompt on the preview before switching
-to the production URL. Vercel Functions have an ephemeral filesystem, so
-`/api/failures` is an in-memory/log view and is not durable storage.
+the project URL in a browser. Confirm the sample pantry flow, photo
+review, the Shop comparison, and the browser-location prompt on the preview
+before switching to the production URL. For a live price smoke check, add one or
+two grocery items, leave the area as `Tempe, AZ 85281`, and click **Find the
+cheapest store**. The same check can be run without a browser against a running
+local server:
+
+```bash
+curl -sS http://localhost:3000/api/grocery/offers \
+  -H 'content-type: application/json' \
+  --data '{"items":["eggs"],"area":"Tempe, AZ 85281"}'
+# Repeat the identical command to observe the in-process cache indications.
+```
+
+Vercel functions have an ephemeral filesystem, so local `/api/failures` is an
+in-memory/log view and is not durable storage.
 
 The default `vercel.app` URL is enough for a live app. You do not need to buy
 or connect a custom domain.
 
 ## Planning and the pantry
 
-Plans use exact recipe IDs and server-validated equipment, ingredients, dietary
-restrictions, and citations. The model still creates the plan; there is no local
-fallback if Voyager fails. A microwave-only kitchen currently has one fully
-compatible curated recipe, so a multi-night plan may repeat it.
+Plans use request-scoped verified recipe IDs and server-validated equipment,
+ingredients, dietary restrictions, exact source times, and citations. The model
+still creates the plan; there is no local fallback if Voyager or live recipe
+search fails. A saved recipe request must still have enough verified candidates
+for every requested dinner.
 
-The browser sends pantry names only — no amounts. Shopping covers every
-ingredient the recipes need that the pantry does not have, at one package per
-dinner that uses it. Plan totals use a complete checkout at one store, matching
-the Shop comparison.
+The browser sends pantry names only — no amounts. The Plan lists each missing
+ingredient once and names the dinners that need it. The student chooses Shop
+quantities; live prices are unit prices, and package sizes and checkout totals
+are not verified.
 
 Swaps replace one dinner and recalculate the full shopping list.
 

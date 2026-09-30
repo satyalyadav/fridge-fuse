@@ -1,0 +1,11 @@
+# impit supplies the browser-fingerprint client used for live recipe pages.
+# Weekly PRs are checked by the test workflow.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    allow:
+      - dependency-name: "impit"

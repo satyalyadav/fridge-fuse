@@ -1,0 +1,7 @@
+# Local secrets and state never belong in an upload.
+.env
+.env.*
+!.env.example
+.vercel
+server.log
+failures.log
