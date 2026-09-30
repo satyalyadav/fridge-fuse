@@ -82,6 +82,21 @@ async function run() {
   ], ["rice", "beans"]);
   check(mergedEstimates.length === 1 && mergedEstimates[0].total === 4.98 && mergedEstimates[0].complete === true && mergedEstimates[0].itemCount === 2, "batched store estimates merge into one complete total");
 
+  const unitResults = [
+    { storeEstimates: [
+      { chain: "aldi", label: "ALDI", lines: [{ item: "rice", price: 3.5 }, { item: "beans", price: 0.5 }] },
+      { chain: "frys", label: "Fry's / Kroger", lines: [{ item: "rice", price: 2 }, { item: "beans", price: 2.9 }] },
+    ] },
+  ];
+  const unitPrices = frontend.context.mergeStoreEstimates(unitResults, ["rice", "beans"]);
+  const selectedQuantities = frontend.context.mergeStoreEstimates(unitResults, ["rice", "beans"], new Map([["rice", 2], ["beans", 1]]));
+  check(unitPrices[0].chain === "aldi" && unitPrices[0].total === 4, "a default Shop quantity of one ranks using the unit prices");
+  check(selectedQuantities[0].chain === "frys" && selectedQuantities[0].total === 6.9 && selectedQuantities[0].lines[0].price === 2 && selectedQuantities[0].lines[0].subtotal === 4, "selected quantities change the merged total and ranking while preserving unit prices");
+  frontend.run("state.constraints.budget = 7;");
+  html = render(selectedQuantities);
+  check(html.includes("2 × $2.00 = $4.00") && html.includes("$0.10 under your $7.00 budget"), "the rendered selected-quantity subtotal and budget use the extended prices");
+  frontend.run("state.constraints.budget = 20;");
+
   frontend.run('state = clone(DEFAULT_STATE); state.groceryList = [{name:"eggs",qty:1}]; renderGroceryList();');
   frontend.node("offerAreaInput").value = "Tempe, AZ 85281";
   let compareRequest;
@@ -96,6 +111,7 @@ async function run() {
   let release;
   frontend.context.fetch = () => new Promise((resolve) => { release = resolve; });
   const stale = frontend.context.compareStores();
+  await Promise.resolve();
   frontend.node("groceryList").handlers.click({ target: { closest: () => ({ dataset: { index: "0", groceryAction: "more" } }) } });
   const staleMessage = frontend.node("groceryResults").innerHTML;
   release({ ok: true, status: 200, json: async () => ({ ok: true, area: "Tempe, AZ 85281", failures: [], storeEstimates: [{ chain: "frys", label: "Fry's / Kroger", total: 9.99, advertisedCount: 1, itemCount: 1, requestedCount: 1, missing: [], complete: true, lines: [storeLine({ price: 9.99 })] }] }) });

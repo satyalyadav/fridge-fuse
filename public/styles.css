@@ -475,7 +475,7 @@ button.mobile-pantry-button { display: none; }
 }
 .tool-button svg { width: 18px; }
 .tool-button:hover { background: var(--enamel); color: var(--ink); }
-.composer-hint { color: #978d89; font-size: 11px; }
+.composer-hint { color: var(--ink-soft); font-size: 11px; }
 
 .send-button {
   width: 36px;

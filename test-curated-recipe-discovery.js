@@ -208,8 +208,9 @@ async function runCuratedDiscoveryChecks() {
   let blockedVerifyCalls = 0;
   const blocked = makeDiscovery({ onVerify: () => { blockedVerifyCalls++; }, failureFor: () => ({ status: 429, message: "throttled" }) });
   const blockedResult = await blocked.findRecipes({ dinners: 1, maxTimeMin: 30, equipment: ["stove"], allowPrototypeOnly: true, maxPageFetches: 4, maxPageChecks: 4 });
+  check(blockedResult.failure.status === "publisher-blocked" && blockedVerifyCalls === 1, "a 429 stops retries for that publisher within one request");
   const blockedAgain = await blocked.findRecipes({ dinners: 1, maxTimeMin: 30, equipment: ["stove"], allowPrototypeOnly: true, maxPageFetches: 4, maxPageChecks: 4 });
-  check(blockedResult.failure.status === "publisher-blocked" && blockedAgain.failure.status === "publisher-blocked" && blockedVerifyCalls === 1, "a page-level 429 blocks later requests without retrying the publisher");
+  check(blockedAgain.failure.status === "publisher-blocked" && blockedVerifyCalls === 2, "a 429 block expires before the next recipe request");
 
   const crossHostIndex = {
     schemaVersion: 1,

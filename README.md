@@ -2,9 +2,10 @@
 
 Fuse what you have into a meal you can afford.
 
-FridgeFuse is a chat-first meal planner for a freshman cooking in a dorm. It
-turns a rough pantry, a grocery limit, and limited equipment into three simple
-dinners and one full-package shopping list.
+FridgeFuse is a chat-first meal planner for a student cooking in a dorm. It
+turns a rough pantry, grocery budget, and limited equipment into dinner
+suggestions and an ingredient list. The Shop view compares that list against
+live advertised prices.
 
 Live deployment: Vercel will provide the project URL after the first deploy.
 
@@ -44,41 +45,30 @@ instead of inventing a plan or recipe.
 
 `.env` is gitignored — never commit the real key.
 
+Vercel requests to planning, photo recognition, chat interpretation, live offers,
+and location lookup pass through Vercel BotID's Basic check before they reach
+those services. Enable Vercel OIDC for the project so the server can verify the
+check. BotID uses no extra app secret or CAPTCHA account. Local development
+bypasses BotID; `/api/models` and `/api/failures` answer only on localhost while
+the app runs outside production. Basic checks reduce automated abuse, but do not
+stop deliberate manual use. FridgeFuse has no access code or app-wide request quota.
+
 The Shop tab needs no search key. After you click **Find the cheapest store**, it
-sends only the selected grocery names and the typed city/ZIP area to one endpoint
-that queries each chain through its own live source. Results are cached in the
-server process for six hours.
+sends selected grocery names and the typed search area to `/api/grocery/offers`,
+which queries each chain through its live source. Results are cached in server
+memory for up to six hours; a replaced process starts with an empty cache.
 
-Each response carries `storeEstimates`: a per-store ballpark for the whole list,
-built only from the prices the adapters returned. A store that could not price an
-item lists it under `missing` and the total is labeled partial; no invented price
-enters the total. The Shop compare view merges these totals across batches and
-marks the leading store as a ballpark, not a verified checkout total.
+Each response carries `storeEstimates`: a per-store ballpark built only from
+prices the adapters returned. Missing items make a result partial; no invented
+price enters the total. The Shop view merges batches, applies the quantities the
+student selected, and ranks stores by items priced and then total. Even a complete
+result is not a verified checkout total.
 
-The Shop currently checks ALDI's storefront GraphQL and Fry's through Kroger's
-official Products API. ALDI returns live product names, sizes, and prices; its
-weight-priced produce uses the per-pound price, and packaged goods use the
-package price. Fry's requires the optional Kroger credentials below, and its
-results are scoped to the nearest Fry's location for the search ZIP. The API's
-prices and product sizes carry `store-api` scope. Pickup availability and final
-checkout totals are not verified.
-
-When `KROGER_CLIENT_ID` and `KROGER_CLIENT_SECRET` are set (free registration at
-developer.kroger.com), Fry's prices come from the official Kroger Products API
-scoped to the nearest Fry's location for the search ZIP. That is the exact
-store price with size and promo fields, and it uses the free daily quota
-(10,000 product calls, 1,600 location calls). The client-credentials token is
-cached for its 30-minute life and the location is cached per ZIP; a throttled 5xx
-gets one short retry. Without the credentials the Fry's chain reports no prices;
-it never falls back to a web search. Official prices enter the ballpark with
-`store-api` scope.
-
-ALDI's storefront GraphQL uses the same public operations its web app calls,
-with a guest session cookie. The Shop route enables this source.
-
-Cache state is in memory and therefore resets when a Vercel process is replaced.
-Pickup availability, dietary suitability, and the cheapest complete cart are not
-verified.
+ALDI uses its storefront GraphQL; Fry's uses Kroger's official Products API when
+`KROGER_CLIENT_ID` and `KROGER_CLIENT_SECRET` are set. Without those credentials,
+Fry's returns no prices and the app does not search the web as a fallback. The
+Shop view labels each live source. It does not verify package sizes, pickup
+availability, or checkout totals.
 
 ## Run
 
@@ -118,7 +108,7 @@ a plan is only useful if it respects the equipment in the room and the food the
 student cannot eat.
 
 The welcome wizard runs **once, ever** — three steps the first time the app is
-opened: who you are (name, optional ZIP), what you can cook with, and what you
+opened: who you are (name), what you can cook with, and what you
 cannot eat. It never reappears on later visits; after that, preferences are
 changed only by deliberately opening the profile from the avatar button. Either
 the wizard or a later edit can be dismissed in one click — nothing is mandatory.
@@ -151,9 +141,9 @@ allergy-safety guarantee.
 Behind the profile, the home screen is a conversation, not a constraint form. A
 student can describe their food, budget, time, and equipment in one message or
 add a fridge photo. FridgeFuse keeps a rough pantry in local browser storage and
-opens the finished plan on its own screen. Chat is home; Plan and Shop are one
-tap away in the rail, and the pantry stays open beside the conversation on wide
-screens.
+shows recipe suggestions in Chat. The student adds wanted recipes to Plan one
+at a time. Chat is home; Plan and Shop are one tap away in the rail, and the
+pantry stays open beside the conversation on wide screens.
 
 With `VOYAGER_KEY` configured, the planning flow sends the pantry, constraints,
 and latest request to ASU AIR. Voyager selects verified recipes for the dinners;
@@ -163,10 +153,10 @@ number the model returned; the Shop tab prices that list live.
 
 The demo flow is:
 
-1. Choose “Try a sample pantry.”
-2. See three microwave-safe dinners with use-soon food scheduled first.
-3. Open beginner cooking steps.
-4. Send the shopping list to Shop, where live prices rank the stores.
+1. Choose “Show me an example.”
+2. Review recipe suggestions and directions in Chat; add wanted dinners to Plan.
+3. Review the selected dinners and their ingredient needs in Plan.
+4. Add plan items to Shop, where live prices rank the stores.
 5. Swap a meal without resetting the pantry or budget.
 6. Open the pantry to add food or mark another item “use soon.”
 
@@ -190,13 +180,12 @@ response.
 
 ## Shop tab: cheapest-store comparison
 
-The Shop tab answers the other half of the problem — not “what can I cook” but
-“where do I buy it for the least money.” A student builds a shopping list, shares
-their location, and gets every nearby store ranked by what the whole basket
-actually costs, with distance and a per-item breakdown.
+The Shop tab shows advertised prices for the search area and ranks stores by how
+many items they priced, then by total. It does not report store distances or
+verified checkout costs.
 
-1. Open **Shop** and add items (`eggs, milk, cheese`), or press “Add what my
-   plan needs” to pull the ingredients from the current meal plan.
+1. Open **Shop** and add items (`eggs, milk, cheese`), or press **Add plan items**
+   to pull the ingredients from the current meal plan.
 2. Adjust quantities; the list is saved on the device like the pantry.
 3. Type the search area (Tempe, AZ 85281 by default) or share a location.
 4. Compare — every chain is searched live per item, stores that priced more of
@@ -205,15 +194,17 @@ actually costs, with distance and a per-item breakdown.
 
 ### Showing where the user is
 
-Sharing a fix labels the Shop tab with the area name (`Tempe, Arizona`). The name
-comes from OpenStreetMap's free Nominatim service through `POST /api/geo/describe`.
+Sharing a fix labels the location bar with the area name (`Tempe, Arizona`). The
+name comes from OpenStreetMap's free Nominatim service through
+`POST /api/geo/describe`.
 That call runs server-side, so Nominatim's User-Agent policy is honoured, requests
 are throttled to their ~1/second limit, and the browser never makes a cross-origin
 call. Only coordinates rounded to three decimals (~110 m) are sent, and the request
 carries a literal `allowLookup: true`, which the server requires before it calls the
-third party. If the service is slow or down the label falls back to "Your location",
-the failure is logged like any other external call, and the OpenStreetMap credit sits
-in the Shop fine print rather than under the name.
+third party. The shared fix labels the location bar; price searches still use the
+editable search area. If Nominatim is slow or down the label falls back to "Your
+location". The failure is logged, and the OpenStreetMap credit sits in the Shop
+fine print.
 
 ## Swapping a dinner
 
@@ -254,8 +245,8 @@ was not returned by search.
 - The server does not adapt a source recipe. It uses the verified ingredient set
   and rejects candidates that do not fit the request's time, equipment, and diet.
 - Publisher requests use a process-wide host pacer and bounded per-request
-  checks. Failures are aggregated and exposed through `/api/failures`. There is
-  no search API fallback or model-invented URL fallback.
+  checks. Local development can inspect aggregated failures through
+  `/api/failures`. There is no search API fallback or model-invented URL fallback.
 
 ## Your kitchen data
 
@@ -373,7 +364,8 @@ Run deterministic tests with `npm test`.
   calls this endpoint.
 - `POST /api/geo/describe {lat,lng,allowLookup}` names a location; the third-party
   lookup runs only when `allowLookup` is exactly `true`.
-- `GET /api/failures` returns recent external-service failures.
+- `GET /api/models` and `GET /api/failures` work only from localhost during
+  development. They are unavailable on Vercel deployments.
 
 Prices are advertised web prices or official store-API prices, labeled with their
 scope in the results. Pickup availability is never claimed.
@@ -451,8 +443,8 @@ curl -sS http://localhost:3000/api/grocery/offers \
 # Repeat the identical command to observe the in-process cache indications.
 ```
 
-Vercel functions have an ephemeral filesystem, so
-`/api/failures` is an in-memory/log view and is not durable storage.
+Vercel functions have an ephemeral filesystem, so local `/api/failures` is an
+in-memory/log view and is not durable storage.
 
 The default `vercel.app` URL is enough for a live app. You do not need to buy
 or connect a custom domain.
@@ -465,10 +457,10 @@ still creates the plan; there is no local fallback if Voyager or live recipe
 search fails. A saved recipe request must still have enough verified candidates
 for every requested dinner.
 
-The browser sends pantry names only — no amounts. Shopping covers every
-ingredient the recipes need that the pantry does not have, at one package per
-dinner that uses it. Plan totals use a complete checkout at one store, matching
-the Shop comparison.
+The browser sends pantry names only — no amounts. The Plan lists each missing
+ingredient once and names the dinners that need it. The student chooses Shop
+quantities; live prices are unit prices, and package sizes and checkout totals
+are not verified.
 
 Swaps replace one dinner and recalculate the full shopping list.
 

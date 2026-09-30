@@ -65,8 +65,8 @@ function repairStoredIngredientName(value) {
   return text;
 }
 
-function safeStrings(value, limit = 100) {
-  return Array.isArray(value) ? value.filter((entry) => typeof entry === "string" && entry.trim()).slice(0, limit).map((entry) => entry.slice(0, 500)) : [];
+function safeStrings(value, limit = 100, entryLimit = 500) {
+  return Array.isArray(value) ? value.filter((entry) => typeof entry === "string" && entry.trim()).slice(0, limit).map((entry) => entry.slice(0, entryLimit)) : [];
 }
 
 function safeRecipeUrl(value) {
@@ -101,7 +101,7 @@ function safeMeal(meal) {
     sourceCredit: safeText(meal.sourceCredit), sourceAttribution: safeText(meal.sourceAttribution), sourceLicense: safeText(meal.sourceLicense, 300),
     sourceUnavailable: !sourceUrl || isLegacyRecipeCitation(meal), adaptationNote: safeText(meal.adaptationNote),
     timeMin: safeNumber(meal.timeMin, 0, 180),
-    steps: safeStrings(meal.steps, 30), equip: safeStrings(meal.equip, 20), usesPantry: safeStrings(meal.usesPantry).map(repairStoredIngredientName),
+    steps: safeStrings(meal.steps, 30, 700), equip: safeStrings(meal.equip, 20), usesPantry: safeStrings(meal.usesPantry).map(repairStoredIngredientName),
     needs: safeStrings(meal.needs).map(repairStoredIngredientName), savedAt: safeText(meal.savedAt)
   };
 }
@@ -120,7 +120,7 @@ function sanitizeStoredPlan(plan) {
   return {
     dinners, constraints: plan.constraints ? safeConstraints(plan.constraints) : undefined,
     shoppingList: (Array.isArray(plan.shoppingList) ? plan.shoppingList : []).filter((item) => item && typeof item.item === "string").slice(0, 50).map((item) => ({
-      item: repairStoredIngredientName(item.item), qty: Math.max(1, Math.floor(safeNumber(item.qty, 1, 99))), sharedBy: safeStrings(item.sharedBy)
+      item: repairStoredIngredientName(item.item), sharedBy: safeStrings(item.sharedBy)
     })),
     offLimitsPantry: safeStrings(plan.offLimitsPantry)
   };
@@ -540,8 +540,7 @@ function shoppingListForDinners(dinners) {
   for (const [index, dinner] of dinners.entries()) {
     const mealLabel = `Night ${index + 1}: ${dinner.title}`;
     for (const raw of dinner.needs || []) {
-      // Match server needName() so a selected subset keeps the same shared
-      // ingredient names and dinner counts as a complete server plan.
+      // Match server needName() so a selected subset keeps the same ingredient names.
       const text = String(raw ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
       if (!text || text.length > 80) continue;
       const words = text.split(" ");
@@ -554,17 +553,12 @@ function shoppingListForDinners(dinners) {
             ? last
             : last.endsWith("s") ? last.slice(0, -1) : last;
       const name = singular === last ? text : `${words.slice(0, -1).join(" ")}${words.length > 1 ? " " : ""}${singular}`;
-      const entry = demand.get(name) || { item: name, dinners: 0, sharedBy: [] };
-      entry.dinners += 1;
+      const entry = demand.get(name) || { item: name, sharedBy: [] };
       if (!entry.sharedBy.includes(mealLabel)) entry.sharedBy.push(mealLabel);
       demand.set(name, entry);
     }
   }
-  return [...demand.values()].map(({ item, dinners, sharedBy }) => ({
-    item,
-    qty: Math.min(dinners, 99),
-    sharedBy
-  }));
+  return [...demand.values()];
 }
 
 function renderSuggestionCitation(meal) {
@@ -692,6 +686,7 @@ function removeDinnerFromPlan(index) {
 let interpreting = false;
 
 async function interpretMessage(message) {
+  await window.fridgeFuseBotReady;
   const response = await fetch("/api/chat/interpret", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message, pantry: state.pantry.map(({ name }) => ({ name })) })
@@ -842,12 +837,12 @@ async function buildPlan(request = "") {
   let serverFailure = null;
 
   try {
+    await window.fridgeFuseBotReady;
     const response = await fetch("/api/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         pantry: snapshot.pantry.map((item) => item.name),
-        shoppingLocation: snapshot.location ? { lat: snapshot.location.lat, lng: snapshot.location.lng } : undefined,
         ...options,
         useSoon: soon,
         budget: snapshot.constraints.budget,
@@ -972,15 +967,15 @@ function renderPlan() {
   const dietSummary = String(planConstraints.diet || "").trim();
   $("planSubtitle").textContent = `Built for ${planConstraints.equipment.join(" + ") || "the equipment you have"}, ${planConstraints.maxTimeMin} minutes or less each.${dietSummary ? ` Kept ${dietSummary}.` : ""}`;
   $("tripStatus").classList.add("ready");
-  const packages = (plan.shoppingList || []).reduce((sum, item) => sum + Math.max(1, Number(item.qty) || 1), 0);
-  $("tripLabel").textContent = `${packages} ${packages === 1 ? "item" : "items"} · priced live in Shop`;
+  const ingredientCount = (plan.shoppingList || []).length;
+  $("tripLabel").textContent = `${ingredientCount} ${ingredientCount === 1 ? "ingredient" : "ingredients"} · priced live in Shop`;
 
   const soon = state.pantry.filter((item) => item.soon).map((item) => item.name);
   const shared = (plan.shoppingList || []).filter((item) => (item.sharedBy || []).length > 1);
   const logicParts = [];
   const usedFirst = soon.filter((name) => plan.dinners[0]?.usesPantry?.includes(name));
   if (usedFirst.length) logicParts.push(`The first dinner uses ${usedFirst.join(" and ")}`);
-  if (shared.length) logicParts.push(`${shared.length} purchase${shared.length === 1 ? " works" : "s work"} across multiple dinners`);
+  if (shared.length) logicParts.push(`${shared.length} ingredient${shared.length === 1 ? " is" : "s are"} needed for multiple dinners`);
   logicParts.push("live totals come from the Shop comparison");
   $("planLogic").textContent = logicParts.join(". ") + ".";
 
@@ -1030,15 +1025,14 @@ function renderPlan() {
 
   const shopping = plan.shoppingList || [];
   $("shoppingList").innerHTML = shopping.map((item) => {
-    const qty = Math.max(1, Number(item.qty || 1));
-    const qtyLabel = qty > 1 ? `${qty} × ` : "";
     const sharedBy = Array.isArray(item.sharedBy) ? item.sharedBy : [];
-    const coversLabel = sharedBy.length > 1 ? ` · covers ${sharedBy.length} dinners` : "";
+    const dinnerCount = Math.max(1, sharedBy.length);
+    const neededByLabel = `Needed for ${dinnerCount} ${dinnerCount === 1 ? "dinner" : "dinners"}`;
     return `
     <div class="receipt-row">
       <span class="receipt-item">
         <strong>${escapeHtml(item.item)}</strong>
-        <small>${qtyLabel}${coversLabel.replace(/^ · /, "") || "1 dinner"}</small>
+        <small>${neededByLabel}</small>
       </span>
     </div>
   `;
@@ -1627,6 +1621,7 @@ async function handlePhoto(file) {
 
   try {
     const imageDataUrl = await resizeImageForVision(file);
+    await window.fridgeFuseBotReady;
     const response = await fetch("/api/vision", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1849,6 +1844,7 @@ async function describeCurrentLocation() {
     renderLocation();
   };
   try {
+    await window.fridgeFuseBotReady;
     const response = await fetch("/api/geo/describe", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1907,7 +1903,7 @@ function requestLocation() {
       saveState();
       renderLocation();
       button.disabled = false;
-      toast("Location set. Distances are measured from here.");
+      toast("Location shared. Live price searches still use the Shop search area.");
       describeCurrentLocation();
       invalidateGroceryResults();
       if (state.groceryList.length) compareStores();
@@ -1938,9 +1934,9 @@ async function compareStores() {
   const revision = groceryRevision;
   const button = $("compareButton");
   button.disabled = true;
-  button.textContent = "Checking live prices…";
   const area = $("offerAreaInput").value.trim() || DEFAULT_OFFER_AREA;
   const names = state.groceryList.map((item) => item.name);
+  const requestedQuantities = new Map(state.groceryList.map((item) => [item.name, item.qty]));
   // The server checks every item at each chain and can retry an unresolved
   // query once. Carts over the per-request cap run in sequential batches.
   $("groceryResults").innerHTML = `<p class="results-note">Checking live store pages near ${escapeHtml(area)}. An unresolved item may get one alternate search, so this can take a few seconds.</p>`;
@@ -1949,6 +1945,7 @@ async function compareStores() {
     const results = [];
     for (let index = 0; index < names.length; index += MAX_ADVERTISED_OFFER_ITEMS) {
       const batch = names.slice(index, index + MAX_ADVERTISED_OFFER_ITEMS);
+      await window.fridgeFuseBotReady;
       const response = await fetch("/api/grocery/offers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1961,7 +1958,7 @@ async function compareStores() {
       }
       results.push(result);
     }
-    const estimates = mergeStoreEstimates(results, names);
+    const estimates = mergeStoreEstimates(results, names, requestedQuantities);
     renderLiveComparison({ area, estimates, failures: results.flatMap((result) => result.failures || []) });
   } catch (error) {
     if (revision !== groceryRevision) return;
@@ -1970,19 +1967,26 @@ async function compareStores() {
   } finally {
     comparing = false;
     button.disabled = state.groceryList.length === 0;
-    button.textContent = "Find the cheapest store";
   }
 }
 
 // The server sends one storeEstimates entry per chain per batch. Merging them
 // keeps a full-cart ballpark without a second round of searches.
-function mergeStoreEstimates(results, requestedNames) {
+function mergeStoreEstimates(results, requestedNames, requestedQuantities = new Map()) {
   const requestedCount = requestedNames.length;
+  const quantityFor = (name) => {
+    const value = requestedQuantities?.get?.(name);
+    return Math.max(1, Math.floor(safeNumber(value, 1, MAX_GROCERY_QTY)));
+  };
   const byChain = new Map();
   for (const result of results) {
     for (const estimate of result.storeEstimates || []) {
       const entry = byChain.get(estimate.chain) || { chain: estimate.chain, label: estimate.label, lines: [], missing: [], branch: null };
-      entry.lines.push(...(Array.isArray(estimate.lines) ? estimate.lines : []));
+      entry.lines.push(...(Array.isArray(estimate.lines) ? estimate.lines : []).map((line) => {
+        const selectedQuantity = quantityFor(line.item);
+        const unitPrice = Number(line.price) || 0;
+        return { ...line, selectedQuantity, subtotal: +(unitPrice * selectedQuantity).toFixed(2) };
+      }));
       entry.missing.push(...(Array.isArray(estimate.missing) ? estimate.missing : []));
       entry.branch = entry.branch || estimate.branch || null;
       entry.label = entry.label || estimate.label;
@@ -1997,7 +2001,7 @@ function mergeStoreEstimates(results, requestedNames) {
       itemCount: entry.lines.length,
       requestedCount,
       advertisedCount: entry.lines.length,
-      total: +entry.lines.reduce((sum, line) => sum + (Number(line.price) || 0), 0).toFixed(2),
+      total: +entry.lines.reduce((sum, line) => sum + line.subtotal, 0).toFixed(2),
       complete: requestedCount > 0 && entry.lines.length === requestedCount && missing.length === 0,
     };
   });
@@ -2028,6 +2032,9 @@ function renderStoreEstimates(estimates, area) {
   if (!Array.isArray(estimates) || !estimates.length) return "";
   const cards = estimates.map((estimate, index) => {
     const lines = (Array.isArray(estimate.lines) ? estimate.lines : []).map((line) => {
+      const unitPrice = Number(line.price) || 0;
+      const selectedQuantity = Math.max(1, Number(line.selectedQuantity) || 1);
+      const subtotal = Number.isFinite(Number(line.subtotal)) ? Number(line.subtotal) : +(unitPrice * selectedQuantity).toFixed(2);
       const validTo = safeText(line.validTo, 40).trim();
       const weeklyUntil = validTo && !Number.isNaN(new Date(validTo).getTime())
         ? ` through ${new Date(validTo).toLocaleDateString()}`
@@ -2044,8 +2051,9 @@ function renderStoreEstimates(estimates, area) {
           <div class="pack-note">${escapeHtml(safeText(line.product, 200) || "Advertised package")}</div>
         </td>
         <td>
-          ${escapeHtml(formatMoney(Number(line.price) || 0))}
-          <div class="pack-note">${escapeHtml(priceNote)}</div>
+          ${escapeHtml(formatMoney(unitPrice))}
+          <div class="pack-note">${escapeHtml(priceNote)} per listed unit</div>
+          <div class="pack-note">${selectedQuantity} × ${escapeHtml(formatMoney(unitPrice))} = ${escapeHtml(formatMoney(subtotal))}</div>
         </td>
       </tr>`;
     }).join("");
@@ -2079,7 +2087,7 @@ function renderStoreEstimates(estimates, area) {
       <details class="store-breakdown">
         <summary>Price breakdown</summary>
         <table>
-          <thead><tr><th>Item</th><th>Price</th></tr></thead>
+          <thead><tr><th>Item</th><th>Unit price and selected quantity</th></tr></thead>
           <tbody>${lines}</tbody>
         </table>
       </details>
@@ -2143,11 +2151,8 @@ function addPlanItemsToShop() {
   if (!planItems.length) return 0;
   let added = 0;
   for (const entry of planItems) {
-    const existing = state.groceryList.find((item) => item.name === entry.item.toLowerCase());
-    const required = Math.min(MAX_GROCERY_QTY, Math.max(1, Number(entry.qty) || 1));
-    if (existing) {
-      if (existing.qty < required) { existing.qty = required; added++; }
-    } else if (addGroceryItem(entry.item, required)) added++;
+    const existing = state.groceryList.some((item) => item.name === entry.item.toLowerCase());
+    if (!existing && addGroceryItem(entry.item)) added++;
   }
   saveState();
   renderGroceryList();

@@ -12,7 +12,7 @@ const {
   normalizeLiveRecipeCandidates,
   handlePlanRequest, handleVisionRequest, normalizeVisionResult,
   isValidCoordinate, normalizeIngredient,
-  describeLocation, handleGeoDescribe,
+  describeLocation, handleGeoDescribe, createRequestPacer,
   DIET_RULES, resolveDietRules, findForbiddenTerm, findDietViolations,
   pantryDietConflicts, dietRulesContext, findIngredientConflict,
   EQUIPMENT_OPTIONS,
@@ -103,9 +103,9 @@ const twoDinners = groundShoppingPlan({
   ]
 });
 const eggLine = twoDinners.shoppingList.find((entry) => entry.item === "egg");
-ok(eggLine && eggLine.qty === 2, `two dinners needing eggs share one line with qty 2 (qty=${eggLine?.qty})`);
+ok(eggLine && !Object.prototype.hasOwnProperty.call(eggLine, "qty"), "two dinners needing eggs share one ingredient line without an inferred quantity");
 ok(eggLine.sharedBy.length === 2, "sharedBy names every dinner that needs the ingredient");
-ok(!("pack" in eggLine) && !("packPrice" in eggLine) && twoDinners.totalCost === undefined, "the shopping list carries no package or price");
+ok(!("pack" in eggLine) && !("packPrice" in eggLine) && twoDinners.totalCost === undefined, "the shopping list carries no package, price, or total");
 ok(twoDinners.shoppingList.length === 2, "one shopping line per distinct ingredient");
 
 // ---------- dietary restrictions (enforced server-side, not just prompted) ----------
@@ -179,8 +179,8 @@ const vercelFunction = vercelConfig.functions?.["server.js"] || {};
 ok(vercelConfig.framework === "express", "Vercel uses the Express framework preset");
 ok(vercelConfig.buildCommand === "npm test", "Vercel runs the contract checks during builds");
 ok(
-  vercelFunction.includeFiles === "data/*.json",
-  "Vercel bundles the dietary rules JSON with the API"
+  vercelFunction.includeFiles.includes("data/*.json") && vercelFunction.includeFiles.includes("node_modules/botid/dist/client/core/index.mjs"),
+  "Vercel bundles the dietary rules and BotID client module with the API"
 );
 ok(/geolocation=\(self\)/.test(JSON.stringify(vercelConfig)), "Vercel allows browser geolocation");
 ok(typeof vercelServer === "function" && vercelServer === vercelServer.app, "Vercel receives the Express app export");
@@ -275,7 +275,7 @@ ok(shopIntent.planToShop === true && shopIntent.actions.length === 0 && shopInte
 const notShopIntent = validateInterpretation({ actions: [], requestPlan: true, planToShop: false, clarification: "", swapIndex: null }, "what can I cook");
 ok(notShopIntent.planToShop === false, "a cooking request does not trigger the plan-to-shop copy");
 const clarifiedIntent = validateInterpretation({ actions: [], requestPlan: false, planToShop: true, clarification: "Which list?", swapIndex: null }, "add it");
-ok(clarifiedIntent.planToShop === false && clarifiedIntent.clarification === "Which list?", "a clarification suppresses the plan-to-shop copy");
+ok(clarifiedIntent.planToShop === false && clarifiedIntent.clarification === "Which food did you mean?", "a server-owned clarification suppresses the plan-to-shop copy");
 const chatIntentsSrc = fs.readFileSync("lib/chat-intents.js", "utf8");
 ok(
   /never one merged name/.test(chatIntentsSrc) && chatIntentsSrc.includes("add salmon rice bean spinach to my fridge"),
@@ -542,6 +542,14 @@ ok(!/\bmatching\/total\b|dinners fit/i.test(appJs), "no leftover copy claims a s
 // ---------- location description + third-party lookup gate ----------
 // With no branch catalog, the local description is the coordinate pair; the
 // Nominatim lookup is what supplies a place name.
+let pacerNow = 10000;
+const reserveNominatimStart = createRequestPacer(1100, () => pacerNow);
+ok(
+  [reserveNominatimStart(), reserveNominatimStart(), reserveNominatimStart()].join(",") === "0,1100,2200",
+  "concurrent Nominatim requests reserve distinct one-second start slots"
+);
+pacerNow += 4000;
+ok(reserveNominatimStart() === 0, "an idle Nominatim pacer does not add unnecessary delay");
 const described = describeLocation(33.4242, -111.9281);
 ok(described.text === "Your location" && described.coords === "33.4242, -111.9281" && described.source === "coordinates", "a fix is labeled as the user's location with its coordinates alongside");
 ok(describeLocation(NaN, 5) === null && describeLocation(0, 0) === null, "invalid coordinates produce no description");
@@ -582,8 +590,7 @@ async function runGeoLookupChecks() {
   ok((await callGeo({ lat: 999, lng: "x" }, fakeGeocode)).status === 400, "invalid coordinates are rejected with 400");
 }
 
-// FridgeFuse is for ASU students in the Phoenix metro, so there is no ZIP to
-// ask for: distances run from the catalog origin unless a live fix is shared.
+// The client has no ZIP field; the Shop area is entered directly by the student.
 ok(!/postalCode|welcomeZip|profilePostalCode|useProfileZipButton/.test(appJs), "the client asks for no ZIP code");
 ok(!/ZIP code/i.test(html), "the profile and onboarding forms have no ZIP field");
 ok(!/geo\/postal/.test(appJs) && !/geo\/postal/.test(serverSrc), "the postal lookup endpoint is gone with its only caller");
@@ -1444,8 +1451,8 @@ async function runRouteChecks() {
   }));
   ok(inventedNumbers.statusCode === 200 && inventedNumbers.payload.ok, "a plan with named needs is accepted");
   ok(
-    inventedNumbers.payload.shoppingList.every((entry) => entry.qty === 1 && !("store" in entry) && !("packPrice" in entry)),
-    "the server builds one shopping line per dinner from the model's names, with no model prices"
+    inventedNumbers.payload.shoppingList.every((entry) => !("qty" in entry) && !("store" in entry) && !("packPrice" in entry)),
+    "the server builds quantity-free shopping lines from the model's names, with no model prices"
   );
   ok(inventedNumbers.payload.totalCost === undefined, "no plan total is invented from model numbers");
   ok(
@@ -1512,7 +1519,7 @@ async function runRouteChecks() {
   );
 
   // A celiac must be able to get a plan at all: the substitutes have to price.
-  const celiacRequest = { ...request, pantry: ["rice", "spinach"], useSoon: [], equipment: ["stove", "skillet"], diet: "celiac" };
+  const celiacRequest = { ...request, pantry: ["rice", "spinach"], useSoon: [], equipment: ["stove"], diet: "celiac" };
   const glutenFreePlan = {
     ...validAiPlan,
     dinners: validAiPlan.dinners.map((dinner) => ({
@@ -1564,8 +1571,8 @@ async function runRouteChecks() {
   };
   const celiacBlocked = await callPlan(celiacRequest, async () => aiEnvelope(wheatForCeliac));
   ok(
-    celiacBlocked.statusCode === 502 && /gluten/i.test(celiacBlocked.payload.failure?.message || ""),
-    "flour tortillas in a celiac plan are rejected by the word net, naming the gluten rule"
+    celiacBlocked.statusCode === 502 && /dietary restrictions/i.test(celiacBlocked.payload.failure?.message || ""),
+    "flour tortillas in a celiac plan are rejected by the word net and return a safe public failure"
   );
 
   // Swapping a dinner: the exclusion is on the recipe, not the display title,
@@ -1667,8 +1674,8 @@ async function runRouteChecks() {
   };
   const hiddenStep = await callPlan(veganRequest, async () => aiEnvelope(butterInSteps));
   ok(
-    hiddenStep.statusCode === 502 && /butter/.test(hiddenStep.payload.failure?.message || ""),
-    "a forbidden ingredient in a cooking step is rejected even when the shopping list is clean"
+    hiddenStep.statusCode === 502 && /dietary restrictions/.test(hiddenStep.payload.failure?.message || ""),
+    "a forbidden ingredient in a cooking step is rejected without relaying model text"
   );
 
   let peanutCalls = 0;
@@ -1727,7 +1734,7 @@ async function runRouteChecks() {
   ok(failedRepair.statusCode === 502 && failedRepair.payload.ok === false && !failedRepair.payload.dinners, "failed AI repair returns an error instead of a local plan");
 
   let visionUnavailableCalls = 0;
-  const visionUnavailable = await callVision({ imageDataUrl: "data:image/jpeg;base64,dGVzdA==" }, async () => {
+  const visionUnavailable = await callVision({ imageDataUrl: "data:image/jpeg;base64,/9j/2Q==" }, async () => {
     visionUnavailableCalls++;
     return { ok: false, failure: { status: "no-key", message: "VOYAGER_KEY is required for AI vision." } };
   });
@@ -1774,7 +1781,7 @@ async function runRouteChecks() {
 
   let visionPrompt = "";
   let visionCalls = 0;
-  const vision = await callVision({ imageDataUrl: "data:image/jpeg;base64,dGVzdA==" }, async (messages, options) => {
+  const vision = await callVision({ imageDataUrl: "data:image/jpeg;base64,/9j/2Q==" }, async (messages, options) => {
     visionCalls++;
     visionPrompt += ` ${messages.map((message) => typeof message.content === "string" ? message.content : JSON.stringify(message.content)).join(" ")}`;
     assert.strictEqual(options.model, visionCalls === 1 ? AIR_VISION_MODEL : AIR_VISION_VERIFY_MODEL);
@@ -1835,14 +1842,14 @@ async function runRouteChecks() {
   const twoChosenPlan = vm.runInContext("state.plan", recipeClient);
   ok(
     twoChosenPlan.dinners.length === 2 && twoChosenPlan.shoppingList.map((item) => item.item).sort().join(",") === "bean,carrot,egg" &&
-      twoChosenPlan.shoppingList.find((item) => item.item === "egg").qty === 2 &&
+      !Object.prototype.hasOwnProperty.call(twoChosenPlan.shoppingList.find((item) => item.item === "egg"), "qty") &&
       twoChosenPlan.shoppingList.find((item) => item.item === "egg").sharedBy.length === 2,
     "adding a second suggestion appends it and grounds only the chosen dinners' needs"
   );
   recipeClient.removeDinnerFromPlan(0);
   const reducedPlan = vm.runInContext("state.plan", recipeClient);
   ok(reducedPlan.dinners.length === 1 && reducedPlan.shoppingList.map((item) => item.item).sort().join(",") === "carrot,egg" &&
-    reducedPlan.shoppingList.find((item) => item.item === "egg").qty === 1 &&
+    !Object.prototype.hasOwnProperty.call(reducedPlan.shoppingList.find((item) => item.item === "egg"), "qty") &&
     reducedPlan.shoppingList.find((item) => item.item === "egg").sharedBy.length === 1,
   "removing a dinner also removes its unshared shopping needs and resets shared counts");
   recipeClient.removeDinnerFromPlan(0);
@@ -1999,6 +2006,7 @@ async function runRouteChecks() {
   n += await require("./test-live-recipes")();
   n += await require("./test-curated-recipe-discovery")();
   n += await require("./test-local-offer-ui")();
+  n += await require("./test-api-security")();
   console.log(`\nALL ${n} CHECKS PASSED`);
 }
 

@@ -44,7 +44,7 @@
         <form class="welcome-form" id="welcomeForm">
           <section class="welcome-step" data-step="identity" hidden>
             <h2>First, who are we cooking for?</h2>
-            <p class="step-intro">Your name personalises the app. Prices and store distances are Tempe (85281) — FridgeFuse is built for ASU students in the Phoenix metro.</p>
+            <p class="step-intro">Your name personalises the app. Shop starts with Tempe (85281); you can change the search area whenever you like.</p>
 
             <label class="field">
               <span class="field-label">Your name</span>
@@ -93,7 +93,7 @@
         <img class="brand-mark" src="/logo-mark-gold.png" alt="" width="256" height="456">
         <span>FridgeFuse</span>
       </a>
-      <div class="trip-status" id="tripStatus" aria-label="Current plan summary">
+      <div class="trip-status" id="tripStatus" role="status" aria-label="Current plan summary">
         <span class="trip-dot"></span>
         <span id="tripLabel">No grocery run planned</span>
       </div>
@@ -242,7 +242,7 @@
           </label>
 
           <div class="grocery-actions">
-            <button class="ghost-button" id="fromPlanButton" type="button">Add what my plan needs</button>
+            <button class="ghost-button" id="fromPlanButton" type="button">Add plan items</button>
             <button class="primary-button" id="compareButton" type="button">Find the cheapest store</button>
           </div>
           <p class="grocery-live-note">Live search checks ALDI and Fry's/Kroger when configured, with one bounded alternate search when needed. Results are cached for six hours. Place names © OpenStreetMap contributors.</p>
@@ -420,6 +420,7 @@
     <div class="toast-region" id="toastRegion" aria-live="assertive"></div>
   </div>
 
+  <script src="bot-protection.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

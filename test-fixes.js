@@ -64,10 +64,10 @@ function dinner(title = "Microwave Potato") {
     usesPantry: [], needs: [...r.ingredients], steps: [r.method] };
 }
 const envelope = (dinners) => ({ ok: true, data: { choices: [{ message: { content: JSON.stringify({ dinners }) } }] } });
-async function plan(body, dinners, liveRecipeService = { findRecipes: async () => ({ ok: true, candidates: LIVE_CANDIDATES }) }) {
+async function plan(body, dinners, liveRecipeService = { findRecipes: async () => ({ ok: true, candidates: LIVE_CANDIDATES }) }, chat = async () => envelope(dinners)) {
   let output;
   const res = { code: 200, status(n) { this.code = n; return this; }, json(payload) { output = { status: this.code, payload }; } };
-  await server.handlePlanRequest({ body: { pantry: [], dinners: dinners.length, maxTimeMin: 30, equipment: ["microwave"], ...body } }, res, { chat: async () => envelope(dinners), liveRecipeService });
+  await server.handlePlanRequest({ body: { pantry: [], dinners: dinners.length, maxTimeMin: 30, equipment: ["microwave"], ...body } }, res, { chat, liveRecipeService });
   return output;
 }
 
@@ -82,6 +82,23 @@ async function run() {
     const dairyFree = server.DIET_RULES.find((rule) => rule.id === "dairy-free");
     assert.strictEqual(server.findForbiddenTerm("almond milk", dairyFree), null);
     assert.strictEqual(server.findForbiddenTerm("milk", dairyFree), "milk");
+  });
+  await check("singularized allowed bean names stay vegan-safe without allowing dairy butter or peanuts", () => {
+    const vegan = server.DIET_RULES.find((rule) => rule.id === "vegan");
+    const peanut = server.DIET_RULES.find((rule) => rule.id === "peanut allergy");
+    const planResult = server.groundShoppingPlan({ dinners: [{ title: "Bean stew", needs: ["butter beans"] }] });
+    assert.strictEqual(planResult.shoppingList[0].item, "butter bean");
+    assert.deepStrictEqual(server.findDietViolations({ dinners: [], shoppingList: planResult.shoppingList }, [vegan]), []);
+    assert.strictEqual(server.findForbiddenTerm("peanut butter", vegan), null);
+    assert.strictEqual(server.findForbiddenTerm("unsalted butter", vegan), "butter");
+    assert.strictEqual(server.findForbiddenTerm("peanut butter", peanut), "peanut");
+  });
+  await check("verified candidate ingredients are normalized for shopping while raw facts remain available", () => {
+    const rawGarnish = "1 small bunch coriander plus 1 tbsp chopped coriander leaves, to garnish";
+    const candidate = { ...LIVE_CANDIDATES[0], ingredients: [rawGarnish], rawIngredients: [rawGarnish] };
+    const normalized = server.normalizeLiveRecipeCandidates([candidate], [])[0];
+    assert.deepStrictEqual(normalized.ingredients, ["coriander leaves"]);
+    assert.deepStrictEqual(normalized.rawIngredients, [rawGarnish]);
   });
   await check("equipment mismatch is rejected", async () => {
     const result = await plan({}, [dinner("Peanut Butter Banana Quesadillas")]);
@@ -100,7 +117,8 @@ async function run() {
     assert.strictEqual(result.payload.ok, true);
     assert.deepStrictEqual(result.payload.dinners[0].usesPantry.sort(), ["eggs", "rice"]);
     assert(!result.payload.shoppingList.some((i) => i.item === "eggs" || i.item === "rice"));
-    assert(result.payload.shoppingList.some((i) => i.item === "spinach" && i.qty === 2));
+    const spinach = result.payload.shoppingList.find((i) => i.item === "spinach");
+    assert(spinach && !Object.prototype.hasOwnProperty.call(spinach, "qty") && spinach.sharedBy.length === 2);
   });
   await check("pantry items no recipe wants stay out of the shopping list", async () => {
     const result = await plan({ pantry: ["potatoes"] }, [dinner()]);
@@ -125,10 +143,14 @@ async function run() {
     assert.strictEqual(rejected.payload.ok, false);
   });
   await check("swap preserves other dinners, even when their recipe matches the exclusion", async () => {
-    const previous = [dinner(), dinner(), dinner()];
+    const previous = [dinner(), dinner("Spinach Rice Breakfast Bowls"), dinner("Peanut Butter Banana Smoothie")];
     const replacement = dinner("Peanut Butter Banana Quesadillas");
     replacement.needs = ["tortillas", "peanut butter", "banana"];
-    const result = await plan({ equipment: ["stove", "microwave"], swapIndex: 1, previousDinners: previous, exclude: ["Microwave Potato"] }, [replacement]);
+    const service = {
+      findRecipes: async () => ({ ok: true, candidates: LIVE_CANDIDATES }),
+      verifyUrl: async (url) => ({ ok: true, recipe: LIVE_CANDIDATES.find((entry) => entry.sourceUrl === url) }),
+    };
+    const result = await plan({ equipment: ["stove", "microwave", "blender"], swapIndex: 1, previousDinners: previous, exclude: ["Microwave Potato"] }, [replacement], service);
     assert.strictEqual(result.payload.ok, true);
     assert.strictEqual(result.payload.dinners.length, 3);
     assert.strictEqual(result.payload.dinners[0].title, previous[0].title);
@@ -138,9 +160,20 @@ async function run() {
   });
   await check("unavailable swap returns no replacement plan", async () => {
     const previous = [dinner()];
-    const result = await plan({ swapIndex: 0, previousDinners: previous, exclude: ["Microwave Potato"] }, [dinner()]);
+    let searchRequest;
+    let verifyCalls = 0;
+    let chatCalls = 0;
+    const service = {
+      findRecipes: async (request) => { searchRequest = request; return { ok: true, candidates: [LIVE_CANDIDATES[0]] }; },
+      verifyUrl: async () => { verifyCalls++; return { ok: true, recipe: dinner() }; },
+    };
+    const result = await plan({ swapIndex: 0, previousDinners: previous }, [dinner()], service, async () => { chatCalls++; return envelope([dinner()]); });
     assert.strictEqual(result.status, 422);
     assert(!result.payload.dinners);
+    assert.deepStrictEqual(searchRequest.exclude, [previous[0].sourceRecipe]);
+    assert.deepStrictEqual(searchRequest.excludeUrls, [previous[0].sourceUrl]);
+    assert.strictEqual(verifyCalls, 0);
+    assert.strictEqual(chatCalls, 0);
   });
   await check("cook again requires the requested recipe", async () => {
     const result = await plan({ includeRecipe: "Peanut Butter Banana Quesadillas" }, [dinner()]);
@@ -173,26 +206,71 @@ async function run() {
     const service = {
       findRecipes: async (request) => {
         searchRequest = request;
-        return { ok: true, candidates: [LIVE_CANDIDATES.find((entry) => entry.title === replacement.sourceRecipe)] };
+        return { ok: true, candidates: [
+          LIVE_CANDIDATES.find((entry) => entry.title === replacement.sourceRecipe),
+          LIVE_CANDIDATES.find((entry) => entry.title === retained.sourceRecipe),
+        ] };
       },
       verifyUrl: async (url) => {
         verifiedUrls.push(url);
         return { ok: true, recipe: LIVE_CANDIDATES.find((entry) => entry.sourceUrl === url) };
       }
     };
+    let selectionPrompt = "";
     const result = await plan({
       equipment: ["stove", "microwave"],
       swapIndex: 0,
       previousDinners: [replaced, retained],
-      exclude: [replaced.sourceRecipe]
-    }, [replacement], service);
+      includeRecipe: retained.sourceRecipe,
+    }, [replacement], service, async (messages) => {
+      selectionPrompt = String(messages[0]?.content || "");
+      return envelope([replacement]);
+    });
     assert.deepStrictEqual(verifiedUrls, [retained.sourceUrl]);
-    assert.deepStrictEqual(searchRequest.exclude, [replaced.sourceRecipe]);
+    assert.deepStrictEqual(searchRequest.exclude, [replaced.sourceRecipe, retained.sourceRecipe]);
+    assert.deepStrictEqual(searchRequest.excludeUrls, [replaced.sourceUrl, retained.sourceUrl]);
+    assert.strictEqual(searchRequest.includeRecipe, "");
+    assert(selectionPrompt.includes(replacement.sourceRecipe));
+    assert(!selectionPrompt.includes(retained.sourceRecipe));
     assert.strictEqual(result.payload.ok, true);
     assert.strictEqual(result.payload.dinners.length, 2);
     assert.strictEqual(result.payload.dinners[0].sourceRecipe, replacement.sourceRecipe);
     assert.strictEqual(result.payload.dinners[1].sourceRecipe, retained.sourceRecipe);
+    assert.strictEqual(new Set(result.payload.dinners.map((entry) => entry.sourceUrl)).size, result.payload.dinners.length);
     assert(!result.payload.dinners.some((entry) => entry.sourceRecipe === replaced.sourceRecipe));
+  });
+  await check("malformed retained swap dinners fail before recipe search or AI", async () => {
+    let discoveryCalls = 0;
+    let chatCalls = 0;
+    for (const previousDinners of [
+      [dinner(), null],
+      [dinner(), { ...dinner(), sourceUrl: "javascript:alert(1)" }],
+    ]) {
+      let output;
+      const res = { code: 200, status(n) { this.code = n; return this; }, json(payload) { output = { status: this.code, payload }; } };
+      await server.handlePlanRequest({ body: {
+        pantry: [], dinners: 2, maxTimeMin: 30, equipment: ["microwave"], swapIndex: 0, previousDinners
+      } }, res, {
+        liveRecipeService: { findRecipes: async () => { discoveryCalls++; return { ok: true, candidates: LIVE_CANDIDATES }; } },
+        chat: async () => { chatCalls++; return envelope([dinner()]); }
+      });
+      assert.strictEqual(output.status, 400);
+      assert.strictEqual(output.payload.ok, false);
+    }
+    assert.strictEqual(discoveryCalls, 0);
+    assert.strictEqual(chatCalls, 0);
+  });
+  await check("swap cannot return a recipe URL already used by a retained dinner", async () => {
+    let discoveryCalls = 0;
+    let chatCalls = 0;
+    const duplicatedRetained = [dinner(), dinner(), dinner("Spinach Rice Breakfast Bowls")];
+    const result = await plan({ swapIndex: 2, previousDinners: duplicatedRetained }, [dinner()], {
+      findRecipes: async () => { discoveryCalls++; return { ok: true, candidates: LIVE_CANDIDATES }; },
+      verifyUrl: async (url) => ({ ok: true, recipe: LIVE_CANDIDATES.find((entry) => entry.sourceUrl === url) }),
+    }, async () => { chatCalls++; return envelope([dinner()]); });
+    assert.strictEqual(result.status, 422);
+    assert.strictEqual(discoveryCalls, 0);
+    assert.strictEqual(chatCalls, 0);
   });
   const c = client();
   await c.context.loadPreferences();
@@ -224,30 +302,39 @@ async function run() {
     c.run('state = normaliseState({pantry:[null,{name:7}], savedRecipes:[null,{title:"x",timeMin:"<img src=x onerror=alert(1)>"}]}); renderPantry(); renderSavedRecipes();');
     assert(!c.node("savedRecipeList").innerHTML.includes("<img"));
   });
+  await check("normalization preserves complete publisher direction lines", () => {
+    const longStep = "Step " + "x".repeat(595);
+    const restored = c.run(`normaliseState({plan:{dinners:[{title:"Test",sourceRecipe:"Test Recipe",source:"Example",sourceUrl:"https://example.test/recipe",timeMin:10,steps:[${JSON.stringify(longStep)}]}],shoppingList:[]}}).plan.dinners[0].steps[0]`);
+    assert.strictEqual(restored.length, 600);
+    assert.strictEqual(restored, longStep);
+  });
   await check("non-HTTP recipe links are discarded", () => {
     c.run('state = normaliseState({savedRecipes:[{title:"x",sourceRecipe:"x",source:"x",sourceUrl:"javascript:alert(1)"}]});');
     assert(!c.run('JSON.stringify(state.savedRecipes)').includes("javascript:"));
   });
-  await check("plan without leftovers renders, item counts sum quantities", () => {
+  await check("legacy plan quantities are discarded and the Plan shows ingredient names", () => {
     c.run('state=clone(DEFAULT_STATE);state.plan={dinners:[{title:"Test",steps:[]}],shoppingList:[{item:"eggs",qty:2}],leftovers:[]};renderPlan();');
     assert(!c.node("shoppingList").innerHTML.includes("uses "));
     assert(!c.node("shoppingList").innerHTML.includes("packPrice"));
-    assert(c.node("tripLabel").textContent.startsWith("2 items"));
+    assert(!c.node("shoppingList").innerHTML.includes("2 ×"));
+    assert(c.node("tripLabel").textContent.startsWith("1 ingredient"));
+    const restored = c.run('normaliseState({plan:{dinners:[{title:"Test"}],shoppingList:[{item:"eggs",qty:9,sharedBy:[]}]}}).plan.shoppingList[0]');
+    assert.strictEqual(restored.qty, undefined);
   });
   await check("use-first text only claims actual pantry use", () => {
     c.run('state.pantry=[{name:"rice",soon:true}];renderPlan();');
     assert(!c.node("planLogic").textContent.includes("used first"));
   });
-  await check("importing plan groceries twice is idempotent", () => {
-    c.run('state.groceryList=[];renderGroceryList();');
+  await check("plan ingredients add once without changing manually selected quantities", () => {
+    c.run('state.plan={dinners:[{title:"T"}],shoppingList:[{item:"eggs",qty:9},{item:"rice",qty:7}]};state.groceryList=[{name:"eggs",qty:3}];renderGroceryList();');
     c.node("fromPlanButton").click(); c.node("fromPlanButton").click();
-    assert.strictEqual(c.run("state.groceryList[0].qty"), 2);
+    assert.strictEqual(c.run("state.groceryList.map(i => i.name + ':' + i.qty).join(',')"), "eggs:3,rice:1");
   });
   await check("the plan panel's add-to-shop button fills the same list", () => {
     c.run('state=clone(DEFAULT_STATE);state.plan={dinners:[{title:"T",steps:[]}],shoppingList:[{item:"eggs",qty:2,sharedBy:[]},{item:"rice",qty:1,sharedBy:[]}]};state.groceryList=[];renderGroceryList();');
     assert.strictEqual(c.node("planShopButton").disabled, false);
     c.node("planShopButton").click();
-    assert.strictEqual(c.run("state.groceryList.map(i => i.name + ':' + i.qty).join(',')"), "eggs:2,rice:1");
+    assert.strictEqual(c.run("state.groceryList.map(i => i.name + ':' + i.qty).join(',')"), "eggs:1,rice:1");
     c.run('state.plan=null;renderGroceryList();');
     assert.strictEqual(c.node("planShopButton").disabled, true);
   });
@@ -285,6 +372,7 @@ async function run() {
     let finish;
     c.context.fetch = () => new Promise((resolve) => { finish = resolve; });
     const request = c.context.compareStores();
+    await Promise.resolve();
     c.node("groceryList").handlers.click({ target: { closest: () => ({ dataset: { index: "0", groceryAction: "more" } }) } });
     const message = c.node("groceryResults").innerHTML;
     finish({ ok: true, json: async () => ({ ok: true, options: [], note: "stale response" }) });
@@ -297,7 +385,7 @@ async function run() {
     c.context.interpretMessage = async () => ({ actions: [], requestPlan: false, planToShop: true, clarification: "", swapIndex: null });
     await c.context.handleMessage("add the list to shop");
     c.context.interpretMessage = originalInterpret;
-    assert.strictEqual(c.run("state.groceryList.map(i => i.name + ':' + i.qty).join(',')"), "black beans:2,rice:1");
+    assert.strictEqual(c.run("state.groceryList.map(i => i.name + ':' + i.qty).join(',')"), "black beans:1,rice:1");
   });
   await check("chat pantry updates store names, never amounts", () => {
     c.run('state.pantry=[]; applyChatActions([{type:"pantry_set",name:"eggs",qty:1,soon:false},{type:"pantry_set",name:"spinach",qty:1,soon:true}]);');
@@ -310,6 +398,7 @@ async function run() {
     const pending = [];
     c.context.fetch = (_, options) => new Promise((resolve) => pending.push({ resolve, body: JSON.parse(options.body) }));
     const first = c.context.buildPlan("old"); c.run('state.constraints.diet="vegan"'); const second = c.context.buildPlan("new");
+    await Promise.resolve();
     const response = (title) => ({ ok: true, status: 200, json: async () => ({ ok: true, dinners: [{
       title,
       sourceRecipe: title,
