@@ -94,12 +94,18 @@ function safeConstraints(value = {}) {
 
 function safeMeal(meal) {
   if (!meal || typeof meal !== "object" || typeof meal.title !== "string" || !meal.title.trim()) return null;
-  const sourceUrl = safeRecipeUrl(meal.sourceUrl);
+  const requestedProvenance = ["sourced", "adapted", "generated"].includes(meal.provenanceType) ? meal.provenanceType : "";
+  const provenanceType = requestedProvenance || (meal.sourceRecipe || meal.source || meal.sourceUrl ? "sourced" : "");
+  const generated = provenanceType === "generated";
+  const sourceUrl = generated ? "" : safeRecipeUrl(meal.sourceUrl);
+  const safeSourceRecipe = generated ? "" : safeText(meal.sourceRecipe);
+  const safeSource = generated ? "" : safeText(meal.source);
   return {
-    title: safeText(meal.title), sourceRecipe: safeText(meal.sourceRecipe), source: safeText(meal.source), sourceUrl,
-    sourceUsageMode: safeText(meal.sourceUsageMode), sourceRightsStatus: safeText(meal.sourceRightsStatus),
-    sourceCredit: safeText(meal.sourceCredit), sourceAttribution: safeText(meal.sourceAttribution), sourceLicense: safeText(meal.sourceLicense, 300),
-    sourceUnavailable: !sourceUrl || isLegacyRecipeCitation(meal), adaptationNote: safeText(meal.adaptationNote),
+    title: safeText(meal.title), provenanceType, sourceRecipe: safeSourceRecipe, source: safeSource, sourceUrl,
+    sourceUsageMode: generated ? "" : safeText(meal.sourceUsageMode), sourceRightsStatus: generated ? "" : safeText(meal.sourceRightsStatus),
+    sourceCredit: generated ? "" : safeText(meal.sourceCredit), sourceAttribution: generated ? "" : safeText(meal.sourceAttribution), sourceLicense: generated ? "" : safeText(meal.sourceLicense, 300),
+    sourceUnavailable: generated ? false : !sourceUrl || isLegacyRecipeCitation(meal), adaptationNote: safeText(meal.adaptationNote),
+    timeIsEstimate: meal.timeIsEstimate === true || provenanceType === "adapted" || generated,
     timeMin: safeNumber(meal.timeMin, 0, 180),
     steps: safeStrings(meal.steps, 30, 700), equip: safeStrings(meal.equip, 20), usesPantry: safeStrings(meal.usesPantry).map(repairStoredIngredientName),
     needs: safeStrings(meal.needs).map(repairStoredIngredientName), savedAt: safeText(meal.savedAt)
@@ -108,7 +114,9 @@ function safeMeal(meal) {
 
 function safeSuggestionMeal(meal) {
   const safe = safeMeal(meal);
-  return safe && safe.sourceUrl && !safe.sourceUnavailable && safe.sourceRecipe && safe.source && safe.timeMin > 0 && safe.steps.length
+  const hasGroundedSource = safe && safe.provenanceType !== "generated" && safe.sourceUrl && !safe.sourceUnavailable && safe.sourceRecipe && safe.source;
+  const supportedProvenance = safe && ["generated", "adapted", "sourced"].includes(safe.provenanceType);
+  return safe && supportedProvenance && (safe.provenanceType === "generated" || hasGroundedSource) && safe.timeMin > 0 && safe.steps.length
     ? safe
     : null;
 }
@@ -132,6 +140,7 @@ const clone = typeof structuredClone === "function"
   ? structuredClone
   : (value) => JSON.parse(JSON.stringify(value));
 
+let messageIdSequence = 0;
 let state = loadState();
 let activeView = "chat";
 let visionReviewItems = [];
@@ -152,12 +161,40 @@ function loadState() {
 function normaliseState(stored) {
   if (!stored || typeof stored !== "object" || Array.isArray(stored)) return clone(DEFAULT_STATE);
   const records = (value, max) => Array.isArray(value) ? value.filter((item) => item && typeof item === "object").slice(0, max) : [];
+  const suggestions = (Array.isArray(stored.suggestions) ? stored.suggestions.slice(0, 7) : []).map(safeSuggestionMeal).filter(Boolean);
+  const usedMessageIds = new Set();
+  const messages = records(stored.messages, MAX_MESSAGES).filter((item) => typeof item.text === "string")
+    .map((item, index) => {
+      let id = safeText(item.id, 80);
+      if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id) || usedMessageIds.has(id)) id = `legacy-${index}`;
+      while (usedMessageIds.has(id)) id = `${id}-x`;
+      usedMessageIds.add(id);
+      const attachedSuggestions = item.role === "user" ? [] :
+        (Array.isArray(item.suggestions) ? item.suggestions.slice(0, 7) : []).map(safeSuggestionMeal).filter(Boolean);
+      return {
+        id, role: item.role === "user" ? "user" : "assistant", text: safeText(item.text, 4000),
+        supportingText: safeText(item.supportingText, 4000), tone: item.tone === "error" ? "error" : "",
+        ...(attachedSuggestions.length ? { suggestions: attachedSuggestions } : {})
+      };
+    });
+  if (suggestions.length && !messages.some((message) => message.suggestions?.length)) {
+    const history = [...messages].reverse().filter((message) => message.role === "assistant" && message.tone !== "error");
+    const previousAssistant = history.find((message) =>
+      /\bhere\b.*\bdinner\b.*\bsuggestions?\b/i.test(message.text) ||
+      /found a replacement for dinner/i.test(message.text) ||
+      /add the dinners you want to plan/i.test(message.supportingText)
+    ) || history[0];
+    if (previousAssistant) previousAssistant.suggestions = suggestions;
+  }
+  if (!suggestions.length) {
+    suggestions.push(...([...messages].reverse().find((message) => message.suggestions?.length)?.suggestions || []));
+  }
   const location = stored.location;
   return {
     profile: { displayName: safeText(stored.profile?.displayName, 40), onboarded: stored.profile?.onboarded === true },
     constraints: safeConstraints(stored.constraints),
     plan: sanitizeStoredPlan(stored.plan),
-    suggestions: (Array.isArray(stored.suggestions) ? stored.suggestions.slice(0, 7) : []).map(safeSuggestionMeal).filter(Boolean),
+    suggestions,
     suggestionConstraints: stored.suggestionConstraints ? safeConstraints(stored.suggestionConstraints) : null,
     suggestionPantry: safeStrings(stored.suggestionPantry),
     suggestionOffLimitsPantry: safeStrings(stored.suggestionOffLimitsPantry),
@@ -167,8 +204,7 @@ function normaliseState(stored) {
     pantry: records(stored.pantry, 100).filter((item) => typeof item.name === "string" && item.name.trim())
       .map((item) => ({ name: item.name.trim().toLowerCase().slice(0, 80), soon: item.soon === true })),
     excludedTitles: safeStrings(stored.excludedTitles).slice(-MAX_EXCLUDED),
-    messages: records(stored.messages, MAX_MESSAGES).filter((item) => typeof item.text === "string")
-      .map((item) => ({ role: item.role === "user" ? "user" : "assistant", text: safeText(item.text, 4000), supportingText: safeText(item.supportingText, 4000), tone: item.tone === "error" ? "error" : "" })),
+    messages,
     groceryList: records(stored.groceryList, MAX_GROCERY_ITEMS).filter((item) => typeof item.name === "string" && item.name.trim())
       .map((item) => ({ name: repairStoredIngredientName(item.name).trim().toLowerCase().slice(0, 80), qty: Math.max(1, Math.floor(safeNumber(item.qty, 1, MAX_GROCERY_QTY))) })),
     savedRecipes: records(stored.savedRecipes, MAX_SAVED_RECIPES).map(safeMeal).filter(Boolean),
@@ -238,6 +274,15 @@ function recordMessage(entry) {
   updateChatEmptyState();
 }
 
+function nextMessageId() {
+  let id;
+  do {
+    messageIdSequence += 1;
+    id = "m-" + Date.now().toString(36) + "-" + messageIdSequence.toString(36);
+  } while (state.messages.some((entry) => entry.id === id));
+  return id;
+}
+
 // The greeting and starter prompts center themselves while the chat is empty.
 function updateChatEmptyState() {
   $("chatView").classList.toggle("is-empty", !state.messages?.length);
@@ -287,26 +332,31 @@ function toast(message, type = "") {
   window.setTimeout(() => node.remove(), 4200);
 }
 
-function addUserMessage(text, { record = true } = {}) {
+function addUserMessage(text, { record = true, messageId = "" } = {}) {
+  const entry = { id: messageId || nextMessageId(), role: "user", text };
   const article = document.createElement("article");
   article.className = "message user-message";
-  const displayName = state.profile?.displayName?.trim();
+  article.dataset.messageId = entry.id;
   article.innerHTML = `
     <div class="message-copy">
-      ${displayName
-        ? `<span class="message-author">${escapeHtml(displayName)}</span>`
-        : ""}
       <p>${escapeHtml(text)}</p>
     </div>`;
   $("messages").append(article);
   scrollMessages();
-  if (record) recordMessage({ role: "user", text });
+  if (record) recordMessage(entry);
+  renderRecipeSuggestions();
 }
 
 function addAssistantMessage(text, supportingText = "", options = {}) {
-  const { record = true, tone = "" } = typeof options === "boolean" ? { record: options } : options;
+  const { record = true, tone = "", messageId = "", suggestions = [] } = typeof options === "boolean" ? { record: options } : options;
+  const attachedSuggestions = Array.isArray(suggestions) ? suggestions.map(safeSuggestionMeal).filter(Boolean).slice(0, 7) : [];
+  const entry = {
+    id: messageId || nextMessageId(), role: "assistant", text, supportingText, tone: tone === "error" ? "error" : "",
+    ...(attachedSuggestions.length ? { suggestions: attachedSuggestions } : {})
+  };
   const article = document.createElement("article");
   article.className = `message assistant-message${tone === "error" ? " error-message" : ""}`;
+  article.dataset.messageId = entry.id;
   article.innerHTML = `
     <div class="assistant-symbol" aria-hidden="true">F</div>
     <div class="message-copy">
@@ -315,7 +365,8 @@ function addAssistantMessage(text, supportingText = "", options = {}) {
     </div>`;
   $("messages").append(article);
   scrollMessages();
-  if (record) recordMessage({ role: "assistant", text, supportingText, tone });
+  if (record) recordMessage(entry);
+  renderRecipeSuggestions();
 }
 
 function showThinking() {
@@ -448,6 +499,13 @@ function planningFailureCopy(context) {
   const failure = context?.failure || null;
   const status = failure?.status;
 
+  if (failure?.provider === "asu-air" && status === "timeout") {
+    return {
+      title: "ASU AI API failure",
+      detail: "The ASU AI service timed out before finishing the request. Try again."
+    };
+  }
+
   if (failure?.provider === "asu-air" && failure?.operation === "plan-repair") {
     return {
       title: "AI recipe response rejected",
@@ -466,12 +524,6 @@ function planningFailureCopy(context) {
       return {
         title: "ASU AI response unreadable",
         detail: "The recipe API answered, but its response could not be read. Try again."
-      };
-    }
-    if (status === "timeout") {
-      return {
-        title: "ASU AI API failure",
-        detail: "The recipe API timed out before sending a response. Try again."
       };
     }
     const providerStatus = Number(status);
@@ -530,9 +582,35 @@ function suggestionContextIsCurrent() {
     JSON.stringify(pantry) === JSON.stringify([...state.suggestionPantry].sort());
 }
 
+function activeSuggestionMessage() {
+  let latestUserIndex = -1;
+  let latestBatchIndex = -1;
+  for (let index = 0; index < state.messages.length; index++) {
+    const message = state.messages[index];
+    if (message.role === "user") latestUserIndex = index;
+    if (message.role === "assistant" && message.suggestions?.length) latestBatchIndex = index;
+  }
+  if (latestBatchIndex <= latestUserIndex) return null;
+  const message = state.messages[latestBatchIndex];
+  const sameBatch = state.suggestions.length === message.suggestions.length &&
+    state.suggestions.every((meal, index) => recipeKey(meal) === recipeKey(message.suggestions[index]));
+  return sameBatch ? message : null;
+}
+
 function suggestionFitsConstraints(meal, constraints) {
   return Boolean(constraints) && Number(meal.timeMin) <= Number(constraints.maxTimeMin) &&
     (meal.equip || []).every((item) => constraints.equipment.includes(item));
+}
+
+function renderRecipeCredit(meal, tag = "p") {
+  if (!meal.sourceRecipe || !meal.source) return "";
+  const notice = meal.sourceUsageMode === "publisher-directions-with-link-credit"
+    ? meal.provenanceType === "adapted"
+      ? " AI-authored directions adapt this linked source recipe. Reuse permission has not been verified; credit is not permission."
+      : " Publisher directions are shown with this link and credit. Reuse permission has not been verified; credit is not permission."
+    : "";
+  const credit = meal.sourceCredit || `${meal.sourceRecipe} by ${meal.source}`;
+  return `<${tag} class="meal-source-credit">Credit: ${escapeHtml(credit)}.${notice}</${tag}>`;
 }
 
 function shoppingListForDinners(dinners) {
@@ -562,58 +640,87 @@ function shoppingListForDinners(dinners) {
 }
 
 function renderSuggestionCitation(meal) {
-  return `
-    <a class="meal-source" href="${escapeHtml(meal.sourceUrl)}" target="_blank" rel="noopener noreferrer">Recipe: ${escapeHtml(meal.sourceRecipe)} on ${escapeHtml(meal.source)}</a>
-    <p class="meal-source-credit">Credit: ${escapeHtml(meal.sourceRecipe)} by ${escapeHtml(meal.source)}.${meal.sourceUsageMode === "publisher-directions-with-link-credit" ? " Publisher directions are shown with this link and credit. Reuse permission has not been verified; credit is not permission." : ""}</p>
-    ${(meal.sourceAttribution || meal.sourceLicense) ? `<p class="meal-source-credit">${meal.sourceAttribution ? `Required attribution: ${escapeHtml(meal.sourceAttribution)} ` : ""}${meal.sourceLicense ? `License: ${escapeHtml(meal.sourceLicense)}` : ""}</p>` : ""}`;
+  const generated = meal.provenanceType === "generated";
+  const adapted = meal.provenanceType === "adapted";
+  const label = generated ? "AI-created recipe" : adapted ? "AI adapted recipe" : "";
+  const link = meal.sourceUrl && meal.sourceRecipe && meal.source && !meal.sourceUnavailable
+    ? `<a class="meal-source" href="${escapeHtml(meal.sourceUrl)}" target="_blank" rel="noopener noreferrer">Recipe: ${escapeHtml(meal.sourceRecipe)} on ${escapeHtml(meal.source)}</a>`
+    : "";
+  const provenance = label ? `<p class="meal-source provenance-label">${label}</p>` : "";
+  const credit = renderRecipeCredit(meal);
+  const sourceNotice = (meal.sourceAttribution || meal.sourceLicense)
+    ? `<p class="meal-source-credit">${meal.sourceAttribution ? `Required attribution: ${escapeHtml(meal.sourceAttribution)} ` : ""}${meal.sourceLicense ? `License: ${escapeHtml(meal.sourceLicense)}` : ""}</p>`
+    : "";
+  const adaptation = adapted && meal.adaptationNote ? `<p class="meal-source-credit">${escapeHtml(meal.adaptationNote)}</p>` : "";
+  return `${provenance}${link}${credit}${sourceNotice}${adaptation}`;
+}
+
+function recipeTimeLabel(meal, unit = "min") {
+  const minutes = safeNumber(meal?.timeMin, 0, 180);
+  if (!minutes) return "Time unavailable";
+  return meal?.timeIsEstimate || meal?.provenanceType === "adapted" || meal?.provenanceType === "generated"
+    ? `${minutes} ${unit} · estimated`
+    : `${minutes} ${unit}`;
 }
 
 function renderRecipeSuggestions({ scroll = false } = {}) {
   const host = $("messages");
-  host.querySelector("#recipeSuggestions")?.remove();
-  if (!state.suggestions.length) return;
-  const current = suggestionContextIsCurrent();
-  const swapping = Boolean(state.suggestionSwap);
-  const cardHtml = state.suggestions.map((meal, index) => {
-    const pantry = meal.usesPantry || [];
-    const needs = meal.needs || [];
-    const isInPlan = state.suggestionSwap
-      ? state.plan?.dinners?.[state.suggestionSwap.index] && recipeKey(state.plan.dinners[state.suggestionSwap.index]) === recipeKey(meal)
-      : Boolean(state.plan?.dinners?.some((dinner) => recipeKey(dinner) === recipeKey(meal)));
-    const action = swapping ? (isInPlan ? "Replaced" : "Replace dinner") : (isInPlan ? "In Plan" : "Add to Plan");
-    return `
-      <article class="suggestion-card">
-        <div class="suggestion-heading">
-          <div>
-            <p class="eyebrow">Recipe ${String(index + 1).padStart(2, "0")}</p>
-            <h3>${escapeHtml(meal.title)}</h3>
+  const activeMessage = activeSuggestionMessage();
+  for (const message of state.messages) {
+    if (message.role !== "assistant" || !message.suggestions?.length) continue;
+    const article = [...host.children].find((child) => child.dataset?.messageId === message.id);
+    if (!article) continue;
+    const current = message.id === activeMessage?.id && suggestionContextIsCurrent();
+    const swapping = current && Boolean(state.suggestionSwap);
+    const cardHtml = message.suggestions.map((meal, index) => {
+      const pantry = meal.usesPantry || [];
+      const needs = meal.needs || [];
+      const isInPlan = swapping
+        ? state.plan?.dinners?.[state.suggestionSwap.index] && recipeKey(state.plan.dinners[state.suggestionSwap.index]) === recipeKey(meal)
+        : Boolean(state.plan?.dinners?.some((dinner) => recipeKey(dinner) === recipeKey(meal)));
+      const action = swapping ? (isInPlan ? "Replaced" : "Replace dinner") : (isInPlan ? "In Plan" : "Add to Plan");
+      return `
+        <article class="suggestion-card">
+          <div class="suggestion-heading">
+            <div>
+              <p class="eyebrow">Recipe ${String(index + 1).padStart(2, "0")}</p>
+              <h3>${escapeHtml(meal.title)}</h3>
+            </div>
+            <button type="button" data-suggestion-action="${swapping ? "replace" : "add"}" data-suggestion-message="${escapeHtml(message.id)}" data-index="${index}" ${!current || isInPlan ? "disabled" : ""}>${action}</button>
           </div>
-          <button type="button" data-suggestion-action="${swapping ? "replace" : "add"}" data-index="${index}" ${!current || isInPlan ? "disabled" : ""}>${action}</button>
+          <p class="suggestion-meta">${escapeHtml(recipeTimeLabel(meal, "minutes"))} · ${escapeHtml((meal.equip || []).join(" + ") || "no cooking equipment")}</p>
+          <div class="suggestion-ingredients">
+            <p><strong>From your pantry</strong><span>${pantry.length ? escapeHtml(pantry.join(", ")) : "Nothing"}</span></p>
+            <p><strong>To buy</strong><span>${needs.length ? escapeHtml(needs.join(", ")) : "Nothing"}</span></p>
+          </div>
+          ${renderSuggestionCitation(meal)}
+          <div class="suggestion-directions">
+            <strong>Directions</strong>
+            <ol>${meal.steps.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol>
+          </div>
+        </article>`;
+    }).join("");
+    const suggestionMarkup = `
+      <section class="recipe-suggestions" aria-label="Recipe suggestions">
+        <div class="suggestions-heading">
+          <p class="eyebrow">Made for your kitchen</p>
+          ${current ? "" : "<p class=\"suggestions-stale\">Earlier recipe suggestions are kept here for context. Ask for fresh choices before adding one.</p>"}
         </div>
-        <p class="suggestion-meta">${safeNumber(meal.timeMin, 0, 180)} minutes · ${escapeHtml((meal.equip || []).join(" + ") || "no cooking equipment")}</p>
-        <div class="suggestion-ingredients">
-          <p><strong>From your pantry</strong><span>${pantry.length ? escapeHtml(pantry.join(", ")) : "Nothing"}</span></p>
-          <p><strong>To buy</strong><span>${needs.length ? escapeHtml(needs.join(", ")) : "Nothing"}</span></p>
-        </div>
-        ${renderSuggestionCitation(meal)}
-        <div class="suggestion-directions">
-          <strong>Directions</strong>
-          <ol>${meal.steps.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol>
-        </div>
-      </article>`;
-  }).join("");
-  host.insertAdjacentHTML("beforeend", `
-    <section class="recipe-suggestions" id="recipeSuggestions" aria-label="Recipe suggestions">
-      <div class="suggestions-heading">
-        <p class="eyebrow">Made for your kitchen</p>
-        ${current ? "" : "<p class=\"suggestions-stale\">These choices used older preferences or pantry items. Ask for new choices before adding one.</p>"}
+        ${cardHtml}
+      </section>`;
+    article.innerHTML = `
+      <div class="assistant-symbol" aria-hidden="true">F</div>
+      <div class="message-copy">
+        <p>${escapeHtml(message.text)}</p>
+        ${message.supportingText ? `<p class="message-example">${escapeHtml(message.supportingText)}</p>` : ""}
       </div>
-      ${cardHtml}
-    </section>`);
+      ${suggestionMarkup}`;
+  }
   if (scroll) scrollMessages();
 }
 
-function addSuggestedDinnerToPlan(index) {
+function addSuggestedDinnerToPlan(index, suggestionMessageId = "") {
+  if (suggestionMessageId && activeSuggestionMessage()?.id !== suggestionMessageId) return false;
   const meal = state.suggestions[index];
   if (!meal) return false;
   if (!suggestionContextIsCurrent() || !suggestionFitsConstraints(meal, state.suggestionConstraints)) {
@@ -896,7 +1003,7 @@ async function buildPlan(request = "") {
     const proposed = swapIndex === null ? result.dinners.slice(0, 7) : [result.dinners[swapIndex]].filter(Boolean);
     const suggestions = proposed.map(safeSuggestionMeal).filter((meal) => meal && suggestionFitsConstraints(meal, snapshot.constraints));
     if (!suggestions.length) {
-      addAssistantMessage("I couldn't find a verified recipe for those preferences.", result.note || "Try more time, more equipment, or fewer restrictions.");
+      addAssistantMessage("I couldn't find a recipe suggestion for those preferences.", result.note || "Try more time, more equipment, or fewer restrictions.");
       return;
     }
     state.suggestions = suggestions;
@@ -916,8 +1023,9 @@ async function buildPlan(request = "") {
       : "";
     if (swapIndex !== null) {
       addAssistantMessage(
-        `I found a replacement for dinner ${swapIndex + 1}. Review the publisher link and directions, then choose Replace dinner if you want it.`,
-        offLimitsText.trim()
+        `I found a replacement for dinner ${swapIndex + 1}. Review its recipe details and source information, then choose Replace dinner if you want it.`,
+        offLimitsText.trim(),
+        { suggestions }
       );
       renderRecipeSuggestions({ scroll: true });
       return;
@@ -925,7 +1033,8 @@ async function buildPlan(request = "") {
     const countText = `Here ${suggestions.length === 1 ? "is" : "are"} ${suggestions.length} dinner${suggestions.length === 1 ? " suggestion" : " suggestions"}.`;
     addAssistantMessage(
       `${countText}${soonText}${dietText}${offLimitsText}`,
-      "Add the dinners you want to Plan. Leave the rest here in Chat."
+      "Add the dinners you want to Plan. Leave the rest here in Chat.",
+      { suggestions }
     );
     renderRecipeSuggestions({ scroll: true });
   } catch (error) {
@@ -988,14 +1097,20 @@ function renderPlan() {
         ? `Uses ${pantryUsed.join(", ")} from your pantry`
         : "Built from the same grocery run";
     const steps = (meal.steps || []).map((step) => `<li>${escapeHtml(step)}</li>`).join("");
-    const recipeSource = meal.sourceUnavailable
+    const generated = meal.provenanceType === "generated";
+    const adapted = meal.provenanceType === "adapted";
+    const equipmentLabel = (meal.equip || []).join(" + ") || (generated || adapted ? "no cooking equipment" : planConstraints.equipment[0] || "simple equipment");
+    const recipeSource = generated
+      ? `<span class="meal-source provenance-label">AI-created recipe</span>`
+      : adapted
+      ? `<span class="meal-source provenance-label">AI adapted recipe</span>${meal.sourceUrl && meal.sourceRecipe && meal.source && !meal.sourceUnavailable ? `<a class="meal-source" href="${escapeHtml(meal.sourceUrl)}" target="_blank" rel="noopener noreferrer">Recipe: ${escapeHtml(meal.sourceRecipe)} on ${escapeHtml(meal.source)}</a>` : ""}`
+      : meal.sourceUnavailable
       ? `<span class="meal-source unavailable">Recipe source unavailable — regenerate this plan</span>`
       : meal.sourceRecipe && meal.source && meal.sourceUrl && !isLegacyRecipeCitation(meal)
       ? `<a class="meal-source" href="${escapeHtml(meal.sourceUrl)}" target="_blank" rel="noopener noreferrer">Recipe: ${escapeHtml(meal.sourceRecipe)} on ${escapeHtml(meal.source)}</a>`
       : "";
-    const recipeCredit = !meal.sourceUnavailable && meal.sourceRecipe && meal.source
-      ? `<p class="meal-source-credit">Credit: ${escapeHtml(meal.sourceRecipe)} by ${escapeHtml(meal.source)}.${meal.sourceUsageMode === "publisher-directions-with-link-credit" ? " Publisher directions are shown with this link and credit. Reuse permission has not been verified; credit is not permission." : ""}</p>`
-      : "";
+    const recipeCredit = !meal.sourceUnavailable ? renderRecipeCredit(meal) : "";
+    const adaptationNote = adapted && meal.adaptationNote ? `<p class="meal-source-credit">${escapeHtml(meal.adaptationNote)}</p>` : "";
     const sourceNotice = !meal.sourceUnavailable && (meal.sourceAttribution || meal.sourceLicense)
       ? `<p class="meal-source-credit">${meal.sourceAttribution ? `Required attribution: ${escapeHtml(meal.sourceAttribution)} ` : ""}${meal.sourceLicense ? `License: ${escapeHtml(meal.sourceLicense)}` : ""}</p>`
       : "";
@@ -1004,11 +1119,12 @@ function renderPlan() {
         <div class="meal-day">${mealSequenceLabel(index)}</div>
         <div class="meal-main">
           <h3>${escapeHtml(meal.title)}</h3>
-          <p class="meal-meta">${Number(meal.timeMin) || "—"} min · beginner · ${escapeHtml((meal.equip || []).join(" + ") || planConstraints.equipment[0] || "simple equipment")}</p>
+          <p class="meal-meta">${escapeHtml(recipeTimeLabel(meal))} · beginner · ${escapeHtml(equipmentLabel)}</p>
           <p class="meal-reason">${escapeHtml(reason)}</p>
           ${recipeSource}
           ${recipeCredit}
           ${sourceNotice}
+          ${adaptationNote}
         </div>
         <div class="meal-actions">
           <button data-action="details" data-index="${index}">Steps</button>
@@ -1018,7 +1134,7 @@ function renderPlan() {
         </div>
         <div class="meal-details">
           <strong>How to make it</strong>
-          <ol>${steps || "<li>Verified directions are unavailable. Regenerate this plan to get directions from a live recipe source.</li>"}</ol>
+          <ol>${steps || `<li>${generated || adapted ? "Directions are unavailable. Regenerate this recipe to get directions." : "Verified directions are unavailable. Regenerate this plan to get directions from a live recipe source."}</li>`}</ol>
         </div>
       </article>`;
   }).join("");
@@ -1044,7 +1160,13 @@ function renderPlan() {
 // rebuilt the plan. Saving keeps the recipe itself — its citation, timing and
 // steps — not the plan it happened to appear in.
 function recipeKey(meal) {
-  return normaliseKey(meal?.sourceRecipe || meal?.title);
+  if (["generated", "adapted"].includes(meal?.provenanceType)) {
+    const ingredients = [...(meal.needs || []), ...(meal.usesPantry || [])].map(normaliseKey).filter(Boolean).sort().join(" ");
+    const prefix = meal.provenanceType === "adapted" ? `adapted:${safeRecipeUrl(meal.sourceUrl)}|` : "generated:";
+    return `${prefix}${normaliseKey(meal.title)}|${ingredients}|${normaliseKey((meal.steps || []).join(" "))}`;
+  }
+  const identity = normaliseKey(meal?.sourceUrl || meal?.sourceRecipe || meal?.title);
+  return identity ? `${meal?.provenanceType || "sourced"}:${identity}` : "";
 }
 
 function normaliseKey(value) {
@@ -1074,8 +1196,14 @@ function toggleSavedRecipe(meal) {
       sourceCredit: meal.sourceCredit || "",
       sourceAttribution: meal.sourceAttribution || "",
       sourceLicense: meal.sourceLicense || "",
+      provenanceType: meal.provenanceType || "sourced",
+      adaptationNote: meal.adaptationNote || "",
+      timeIsEstimate: meal.timeIsEstimate === true,
       timeMin: Number(meal.timeMin) || null,
-      steps: Array.isArray(meal.steps) ? meal.steps.slice(0, 12) : [],
+      steps: Array.isArray(meal.steps) ? meal.steps.slice(0, 30) : [],
+      equip: Array.isArray(meal.equip) ? meal.equip.slice(0, 20) : [],
+      usesPantry: Array.isArray(meal.usesPantry) ? meal.usesPantry.slice(0, 100) : [],
+      needs: Array.isArray(meal.needs) ? meal.needs.slice(0, 100) : [],
       savedAt: new Date().toISOString()
     });
     state.savedRecipes = state.savedRecipes.slice(0, MAX_SAVED_RECIPES);
@@ -1099,10 +1227,13 @@ function renderSavedRecipes() {
     <article class="saved-recipe">
       <div class="saved-recipe-main">
         <strong>${escapeHtml(recipe.title)}</strong>
-        <span>${recipe.timeMin ? `${safeNumber(recipe.timeMin, 0, 180)} min · ` : ""}${escapeHtml(recipe.source || "saved recipe")}</span>
+        <span>${recipe.timeMin ? `${escapeHtml(recipeTimeLabel(recipe))} · ` : ""}${escapeHtml(recipe.source || "saved recipe")}</span>
+        ${recipe.provenanceType === "generated" ? `<small class="meal-source provenance-label">AI-created recipe</small>` : recipe.provenanceType === "adapted" ? `<small class="meal-source provenance-label">AI adapted recipe</small>` : ""}
         ${recipe.sourceUrl && !isLegacyRecipeCitation(recipe) ? `<a class="meal-source" href="${escapeHtml(recipe.sourceUrl)}" target="_blank" rel="noopener noreferrer">Recipe: ${escapeHtml(recipe.sourceRecipe || recipe.title)} on ${escapeHtml(recipe.source)}</a>` : ""}
-        ${recipe.sourceRecipe && recipe.source ? `<small class="meal-source-credit">Credit: ${escapeHtml(recipe.sourceRecipe)} by ${escapeHtml(recipe.source)}.${recipe.sourceUsageMode === "publisher-directions-with-link-credit" ? " Publisher directions are shown with this link and credit. Reuse permission has not been verified; credit is not permission." : ""}</small>` : ""}
+        ${renderRecipeCredit(recipe, "small")}
         ${recipe.sourceAttribution || recipe.sourceLicense ? `<small class="meal-source-credit">${recipe.sourceAttribution ? `Required attribution: ${escapeHtml(recipe.sourceAttribution)} ` : ""}${recipe.sourceLicense ? `License: ${escapeHtml(recipe.sourceLicense)}` : ""}</small>` : ""}
+        ${recipe.adaptationNote ? `<small class="meal-source-credit">${escapeHtml(recipe.adaptationNote)}</small>` : ""}
+        ${recipe.steps?.length ? `<details class="saved-recipe-directions"><summary>Directions</summary><ol>${recipe.steps.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol></details>` : ""}
       </div>
       <div class="saved-recipe-actions">
         <button data-saved-action="cook" data-index="${index}">Cook again</button>
@@ -2198,7 +2329,7 @@ $("compareButton").addEventListener("click", compareStores);
 $("messages").addEventListener("click", (event) => {
   const button = event.target.closest("[data-suggestion-action]");
   if (!button || button.disabled) return;
-  addSuggestedDinnerToPlan(Number(button.dataset.index));
+  addSuggestedDinnerToPlan(Number(button.dataset.index), button.dataset.suggestionMessage || "");
 });
 $("offerAreaInput").addEventListener("input", () => {
   groceryRevision += 1;
@@ -2241,11 +2372,20 @@ $("pantryForm").addEventListener("submit", (event) => {
   const value = $("pantryInput").value.trim();
   if (!value) return;
   const items = value.split(",").map((item) => item.trim()).filter(Boolean);
-  items.forEach((item) => addPantryItem(item, false));
+  if (!items.length) return;
+  const addedItems = items.filter((item) => addPantryItem(item, false));
   $("pantryInput").value = "";
   saveState();
   renderPantry();
-  toast(`${items.length === 1 ? titleCase(items[0]) : `${items.length} items`} added`);
+  if (!addedItems.length) {
+    toast("Those items are already in your pantry.");
+  } else if (addedItems.length < items.length) {
+    const addedCount = addedItems.length;
+    const duplicateCount = items.length - addedCount;
+    toast(`${addedCount} ${addedCount === 1 ? "item" : "items"} added; ${duplicateCount} already in your pantry.`);
+  } else {
+    toast(`${items.length === 1 ? titleCase(items[0]) : `${addedItems.length} items`} added`);
+  }
 });
 
 $("pantryList").addEventListener("click", (event) => {
@@ -2342,7 +2482,15 @@ $("savedRecipeList").addEventListener("click", (event) => {
   // matches on, rather than by a title the model is free to reword.
   const named = recipe.sourceRecipe || recipe.title;
   state.excludedTitles = state.excludedTitles.filter((title) => normaliseKey(title) !== normaliseKey(named));
-  planningOptions = { includeRecipe: named };
+  planningOptions = { includeMeal: {
+    title: recipe.title, provenanceType: recipe.provenanceType || "generated", timeMin: recipe.timeMin,
+    timeIsEstimate: recipe.timeIsEstimate, equip: recipe.equip || [], usesPantry: recipe.usesPantry || [], needs: recipe.needs || [], steps: recipe.steps || [],
+    sourceRecipe: recipe.sourceRecipe || "", source: recipe.source || "", sourceUrl: recipe.sourceUrl || "",
+    sourceUsageMode: recipe.sourceUsageMode || "", sourceRightsStatus: recipe.sourceRightsStatus || "",
+    sourceCredit: recipe.sourceCredit || "", sourceAttribution: recipe.sourceAttribution || "", sourceLicense: recipe.sourceLicense || "",
+    adaptationNote: recipe.adaptationNote || ""
+  } };
+  if (recipe.provenanceType !== "generated" && recipe.sourceRecipe) planningOptions.includeRecipe = recipe.sourceRecipe;
   saveState();
   setView("chat");
   addUserMessage(`Put ${named} back in the plan.`);
@@ -2371,8 +2519,10 @@ if (state.messages?.length) {
   $("starterPrompts").hidden = true;
   $("messages").innerHTML = "";
   for (const entry of state.messages) {
-    if (entry.role === "user") addUserMessage(entry.text, { record: false });
-    else addAssistantMessage(entry.text, entry.supportingText || "", { record: false, tone: entry.tone });
+    if (entry.role === "user") addUserMessage(entry.text, { record: false, messageId: entry.id });
+    else addAssistantMessage(entry.text, entry.supportingText || "", {
+      record: false, tone: entry.tone, messageId: entry.id, suggestions: entry.suggestions || []
+    });
   }
 } else if (state.plan) {
   $("starterPrompts").hidden = true;

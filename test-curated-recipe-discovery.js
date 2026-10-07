@@ -286,6 +286,81 @@ async function runCuratedDiscoveryChecks() {
   check(parsedLive.ok && parsedLive.candidates[0].title === "Live Bean Rice" && pageFetches === 1, "the curated adapter parses one fresh Recipe JSON-LD page through the existing verifier");
   check(parsedLive.candidates[0].license.includes("creativecommons") && parsedLive.candidates[0].attribution.includes("CC BY-SA"), "live license and source attribution survive verification on the candidate");
 
+  const rcpPolicy = curatedIndex.sourcePolicies.find((policy) => policy.id === "rcp-wikibooks");
+  const dynamicFixtureIndex = {
+    schemaVersion: 1,
+    sourcePolicies: [{ ...rcpPolicy }],
+    leads: [{ url: "https://recipecontextprotocol.com/recipes/bean-bacon-bake", sourceId: "rcp-wikibooks", leadTags: ["dinner", "stove"] }],
+  };
+  const outsideIndexUrl = "https://recipecontextprotocol.com/recipes/dynamic-unindexed-bowl";
+  let dynamicSearchCalls = 0;
+  const dynamicVerifiedUrls = [];
+  const dynamicService = {
+    async verifyUrl(url, verifyOptions = {}) {
+      dynamicVerifiedUrls.push(url);
+      await verifyOptions.beforeFetch?.(url, 0);
+      return { ok: true, recipe: recipeFor(url, {
+        title: "Freshly Verified Dynamic Bowl", publisher: "Recipe Context Protocol", timeMin: 18,
+      }) };
+    },
+  };
+  const dynamicDiscovery = createCuratedRecipeDiscovery({
+    index: dynamicFixtureIndex,
+    liveRecipeService: dynamicService,
+    dynamicLeadSearch: async ({ pantry, beforeFetch }) => {
+      dynamicSearchCalls++;
+      check(pantry.join(",") === "rice,beans", "dynamic search receives a bounded pantry query");
+      const searchUrl = new URL("https://recipecontextprotocol.com/search");
+      searchUrl.searchParams.set("ingredients", pantry.join(","));
+      searchUrl.searchParams.set("mode", "any");
+      searchUrl.searchParams.set("source", "wikibooks");
+      searchUrl.searchParams.set("limit", "20");
+      await beforeFetch(searchUrl.href);
+      return { ok: true, data: { hits: [
+        { url: "https://evil.example.test/recipes/fake", title: "Untrusted fake hit", total_time_minutes: 5 },
+        { url: outsideIndexUrl, title: "Untrusted hit title", total_time_minutes: 18, matched_ingredients: ["rice"] },
+      ] } };
+    },
+    maxPageFetches: 1, maxPageChecks: 1, maxDynamicLeads: 1, hostDelayMs: 0,
+  });
+  const dynamicResult = await dynamicDiscovery.findRecipes({ pantry: ["rice", "beans"], dinners: 1, maxTimeMin: 20, equipment: ["stove"] });
+  check(dynamicResult.ok && dynamicResult.candidates[0].sourceUrl === outsideIndexUrl &&
+    dynamicResult.candidates[0].title === "Freshly Verified Dynamic Bowl" && dynamicResult.candidates[0].timeMin === 18,
+  "a non-index RCP search URL becomes a candidate only after fresh page verification overrides hit metadata");
+  check(dynamicSearchCalls === 1 && dynamicVerifiedUrls[0] === outsideIndexUrl && dynamicResult.metrics.dynamicSearchFetches === 1,
+    "dynamic search discovers and verifies a URL outside the curated starter list with one bounded search request");
+
+  const failedSearchIndex = dynamicFixtureIndex;
+  let failedSearchCalls = 0;
+  const failedSearchDiscovery = createCuratedRecipeDiscovery({
+    index: failedSearchIndex,
+    liveRecipeService: dynamicService,
+    dynamicLeadSearch: async () => { failedSearchCalls++; return { ok: false, failure: { status: "network-error" } }; },
+    maxPageFetches: 0, maxPageChecks: 0, hostDelayMs: 0,
+  });
+  const failedSearchOne = await failedSearchDiscovery.findRecipes({ pantry: ["rice"], dinners: 1, maxTimeMin: 20, equipment: ["stove"] });
+  const failedSearchTwo = await failedSearchDiscovery.findRecipes({ pantry: ["rice"], dinners: 1, maxTimeMin: 20, equipment: ["stove"] });
+  check(failedSearchCalls === 2 && failedSearchOne.metrics.dynamicSearchStatus === "failed" && failedSearchTwo.metrics.dynamicSearchStatus === "failed",
+    "failed dynamic searches are not cached as empty successful results");
+
+  let fallbackPageCount = 0;
+  const fallbackDiscovery = createCuratedRecipeDiscovery({
+    index: dynamicFixtureIndex,
+    liveRecipeService: {
+      async verifyUrl(url, verifyOptions = {}) {
+        await verifyOptions.beforeFetch?.(url, 0);
+        fallbackPageCount++;
+        if (url === outsideIndexUrl) return { ok: false, failure: { status: "no-recipe-jsonld" } };
+        return { ok: true, recipe: recipeFor(url, { title: "Curated Starter Bowl", publisher: "Recipe Context Protocol" }) };
+      },
+    },
+    dynamicLeadSearch: async () => ({ ok: true, data: { hits: [{ url: outsideIndexUrl, total_time_minutes: 18 }] } }),
+    maxPageFetches: 2, maxPageChecks: 2, maxDynamicLeads: 1, hostDelayMs: 0,
+  });
+  const fallbackResult = await fallbackDiscovery.findRecipes({ pantry: ["rice"], dinners: 1, maxTimeMin: 20, equipment: ["stove"] });
+  check(fallbackResult.ok && fallbackPageCount === 2 && fallbackResult.candidates[0].title === "Curated Starter Bowl",
+    "a failed dynamic page leaves the full curated starter queue available under the same fetch cap");
+
   const escapedPath = await makeDiscovery({
     index: fixtureIndex(1),
     recipeFactory: (url) => recipeFor(url, { finalUrl: "https://recipes.example.test/outside/redirected-recipe" }),

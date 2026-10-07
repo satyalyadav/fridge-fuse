@@ -4,18 +4,65 @@ const vm = require("vm");
 const server = require("./server");
 
 // Exercise the shipped frontend without a browser or network requests.
-function client() {
+function client(storageValue = JSON.stringify({ profile: { onboarded: true } })) {
   const nodes = new Map();
+  const matches = (element, selector) => {
+    if (selector.startsWith("#")) return element.id === selector.slice(1);
+    if (selector.startsWith(".")) return String(element.className || "").split(/\s+/).includes(selector.slice(1));
+    return false;
+  };
+  const descendants = (element, selector) => element.children.flatMap((child) => [
+    ...(matches(child, selector) ? [child] : []),
+    ...descendants(child, selector)
+  ]);
+  let markupSequence = 0;
+  const virtualMarkupNode = (markup) => ({
+    id: String(markup.match(/\bid="([^"]+)"/)?.[1] || ""),
+    className: String(markup.match(/\bclass="([^"]+)"/)?.[1] || ""),
+    innerHTML: markup, dataset: {}, children: [], parentNode: null,
+    remove() {
+      if (!this.parentNode) return;
+      const index = this.parentNode.children.indexOf(this);
+      if (index >= 0) this.parentNode.children.splice(index, 1);
+      this.parentNode = null;
+    }
+  });
   const node = (id = "") => {
     if (nodes.has(id)) return nodes.get(id);
-    const el = { id, value: "", textContent: "", innerHTML: "", hidden: false, dataset: {}, style: {}, children: [], handlers: {},
+    let innerHTML = "";
+    const el = { id, value: "", textContent: "", hidden: false, dataset: {}, style: {}, children: [], handlers: {}, parentNode: null,
+      get innerHTML() { return innerHTML; },
+      set innerHTML(value) {
+        innerHTML = String(value ?? "");
+        for (const child of this.children) child.parentNode = null;
+        this.children = [];
+      },
       classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
       addEventListener(event, fn) { this.handlers[event] = fn; },
-      append(child) { this.children.push(child); }, appendChild(child) { this.append(child); },
-      remove() {}, focus() {}, setAttribute() {}, removeAttribute() {}, scrollTo() {},
-      insertAdjacentHTML(_, html) { this.innerHTML += html; },
+      append(child) {
+        if (child?.parentNode) child.remove();
+        if (child && typeof child === "object") child.parentNode = this;
+        this.children.push(child);
+      }, appendChild(child) { this.append(child); },
+      remove() {
+        if (!this.parentNode) return;
+        const index = this.parentNode.children.indexOf(this);
+        if (index >= 0) this.parentNode.children.splice(index, 1);
+        this.parentNode = null;
+      },
+      focus() {}, setAttribute() {}, removeAttribute() {}, scrollTo() {},
+      insertAdjacentHTML(position, html) {
+        const child = virtualMarkupNode(String(html));
+        child.dataset.markupSequence = String(++markupSequence);
+        child.parentNode = this;
+        if (position === "afterbegin") this.children.unshift(child);
+        else this.children.push(child);
+        innerHTML += String(html);
+      },
       click() { return this.handlers.click?.({ target: this }); },
-      querySelector() { return node("child"); }, querySelectorAll() { return []; }, closest() { return this; }
+      querySelector(selector) { return descendants(this, selector)[0] || node("child"); },
+      querySelectorAll(selector) { return descendants(this, selector); },
+      closest(selector) { return matches(this, selector) ? this : null; }
     };
     nodes.set(id, el);
     return el;
@@ -27,7 +74,7 @@ function client() {
     el.dataset.view = view;
     return el;
   });
-  const storage = { value: JSON.stringify({ profile: { onboarded: true } }) };
+  const storage = { value: storageValue };
   const context = { console, URL, Intl, AbortController, structuredClone,
     setTimeout: () => 0, clearTimeout() {}, requestAnimationFrame: (fn) => fn(),
     document: {
@@ -112,8 +159,14 @@ async function run() {
     assert.strictEqual(result.payload.dinners[0].source, "Food Network");
   });
   await check("pantry-owned ingredients are cooked, not shopped", async () => {
-    const d = dinner("Spinach Rice Breakfast Bowls");
-    const result = await plan({ equipment: ["stove", "microwave"], pantry: ["eggs", "rice"] }, [d, d]);
+    const result = await plan({ equipment: ["stove", "microwave"], pantry: ["eggs", "rice"] }, [
+      { provenanceType: "generated", title: "Spinach Egg Rice Bowl", timeMin: 10, equip: ["microwave"],
+        ingredients: ["eggs", "rice", "spinach"],
+        steps: ["Warm the rice and spinach in a microwave-safe bowl.", "Microwave beaten eggs in a microwave-safe bowl, stirring every 30 seconds, until fully set; serve with the rice and spinach."] },
+      { provenanceType: "generated", title: "Spinach Rice with Beans and Egg", timeMin: 12, equip: ["microwave"],
+        ingredients: ["eggs", "rice", "spinach", "canned black beans"],
+        steps: ["Warm the rice, spinach, and canned black beans in a microwave-safe bowl.", "Microwave beaten eggs in a separate microwave-safe bowl, stirring every 30 seconds, until fully set; serve together."] },
+    ]);
     assert.strictEqual(result.payload.ok, true);
     assert.deepStrictEqual(result.payload.dinners[0].usesPantry.sort(), ["eggs", "rice"]);
     assert(!result.payload.shoppingList.some((i) => i.item === "eggs" || i.item === "rice"));
@@ -132,13 +185,13 @@ async function run() {
     assert.strictEqual(p.totalCost, undefined);
   });
   await check("vegan allows plant milk and rejects dairy milk", async () => {
-    const d = dinner("Peanut Butter Banana Smoothie");
-    d.needs = ["banana", "peanut butter", "almond milk"];
-    d.steps = ["Blend banana, peanut butter and almond milk."];
+    const d = { provenanceType: "generated", title: "Peanut Butter Banana Smoothie", timeMin: 5, equip: ["blender"],
+      ingredients: ["banana", "peanut butter", "almond milk"],
+      steps: ["Blend banana, peanut butter, and almond milk until smooth."] };
     const plant = await plan({ diet: "vegan", equipment: ["blender"] }, [d]);
     assert.strictEqual(plant.payload.ok, true);
     assert(plant.payload.shoppingList.some((i) => i.item === "almond milk"));
-    const dairy = { ...d, needs: ["banana", "peanut butter", "milk"], steps: ["Blend banana, peanut butter and milk."] };
+    const dairy = { ...d, ingredients: ["banana", "peanut butter", "milk"], steps: ["Blend banana, peanut butter, and milk until smooth."] };
     const rejected = await plan({ diet: "vegan", equipment: ["blender"] }, [dairy]);
     assert.strictEqual(rejected.payload.ok, false);
   });
@@ -168,12 +221,12 @@ async function run() {
       verifyUrl: async () => { verifyCalls++; return { ok: true, recipe: dinner() }; },
     };
     const result = await plan({ swapIndex: 0, previousDinners: previous }, [dinner()], service, async () => { chatCalls++; return envelope([dinner()]); });
-    assert.strictEqual(result.status, 422);
+    assert.strictEqual(result.status, 502);
     assert(!result.payload.dinners);
     assert.deepStrictEqual(searchRequest.exclude, [previous[0].sourceRecipe]);
     assert.deepStrictEqual(searchRequest.excludeUrls, [previous[0].sourceUrl]);
     assert.strictEqual(verifyCalls, 0);
-    assert.strictEqual(chatCalls, 0);
+    assert.strictEqual(chatCalls, 2);
   });
   await check("cook again requires the requested recipe", async () => {
     const result = await plan({ includeRecipe: "Peanut Butter Banana Quesadillas" }, [dinner()]);
@@ -430,7 +483,7 @@ async function run() {
       steps: ["<script>first()</script>", "Serve & enjoy"]
     }], shoppingList: [], leftovers: [], totalCost: 0 }) });
     await c.context.buildPlan();
-    const markup = c.node("messages").innerHTML;
+    const markup = c.node("messages").children.map((child) => String(child.innerHTML || "")).join("\n");
     assert(markup.includes('<article class="suggestion-card">'));
     assert(markup.includes('data-suggestion-action="add"') && markup.includes("Add to Plan"));
     assert(markup.includes('href="https://www.budgetbytes.com/published-recipe/"') && markup.includes("Credit: Published &lt;Recipe&gt; by Budget Bytes."));

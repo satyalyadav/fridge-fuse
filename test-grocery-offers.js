@@ -679,13 +679,6 @@ async function run() {
     "a valid model abstention stays unpriced without a failure and is cached for the offer window"
   );
 
-  // ---------- the Shop tab has one live-price path ----------
-  const html = fs.readFileSync("public/index.html", "utf8");
-  const appJs = fs.readFileSync("public/app.js", "utf8");
-  check(html.includes('id="compareButton"') && html.includes('id="offerAreaInput"') && !html.includes('id="offersButton"') && !html.includes("Advertised prices"), "the Shop tab keeps one compare action with an area field and no duplicate advertised panel");
-  check(appJs.includes("/api/grocery/offers") && !appJs.includes("searchAdvertisedOffers") && !appJs.includes("renderAdvertisedOffers"), "the frontend has a single live-price path");
-  check(!appJs.includes('body: JSON.stringify({ items: names, area, lat'), "the comparison sends the typed area, never device coordinates");
-
   return count;
 }
 

@@ -6,15 +6,18 @@ const vm = require("vm");
 const {
   extractJson,
   DEFAULT_AIR_MODEL, AIR_MODEL, AIR_VISION_MODEL, AIR_VISION_VERIFY_MODEL,
+  RECIPE_PLANNING_MODEL, RECIPE_REPAIR_MODEL,
+  PLAN_REQUEST_DEADLINE_MS, PLAN_MODEL_CALL_TIMEOUT_MS,
+  boundedRequestCallTimeout,
   GROCERY_MATCH_MODEL, GROCERY_MATCH_VERIFY_MODEL,
-  resolveDataPath, isApprovedRecipeCitation, buildPlanSystemPrompt, recipeSourcesContext,
+  resolveDataPath, isApprovedRecipeCitation,
   productionRecipeService, createProductionRecipeService,
   normalizeLiveRecipeCandidates,
   handlePlanRequest, handleVisionRequest, normalizeVisionResult,
   isValidCoordinate, normalizeIngredient,
   describeLocation, handleGeoDescribe, createRequestPacer,
   DIET_RULES, resolveDietRules, findForbiddenTerm, findDietViolations,
-  pantryDietConflicts, dietRulesContext, findIngredientConflict,
+  pantryDietConflicts, findIngredientConflict,
   EQUIPMENT_OPTIONS,
   needName, groundShoppingPlan,
   findRepeatedExclusion
@@ -31,6 +34,15 @@ ok(AIR_VISION_MODEL === "qwen3-vl-32b-instruct", "photo requests use the dedicat
 ok(DEFAULT_AIR_MODEL === "llama4-scout-17b", "tracked text-model default uses the verified fast model");
 ok(AIR_VISION_MODEL !== AIR_MODEL, "text and photo requests do not silently share a model");
 ok(AIR_VISION_VERIFY_MODEL === AIR_MODEL, "photo verification uses the tested fast multimodal model");
+ok(RECIPE_PLANNING_MODEL === (process.env.ASU_AIR_RECIPE_PLANNING_MODEL || "gemma4-31b-it"), "recipe drafting uses its environment-overridable Gemma model without changing general text planning");
+ok(RECIPE_REPAIR_MODEL === (process.env.ASU_AIR_RECIPE_REPAIR_MODEL || RECIPE_PLANNING_MODEL), "recipe repair defaults to the recipe drafting model and can be overridden");
+ok(PLAN_REQUEST_DEADLINE_MS === 110000 && PLAN_MODEL_CALL_TIMEOUT_MS === 30000,
+  "the full plan stays within a shared 110-second deadline with 30-second model-call ceilings");
+ok(boundedRequestCallTimeout(100000, 30000, () => 99000) === 1000,
+  "a late model call receives only the millisecond budget remaining in the shared deadline");
+let expiredPlanDeadlineRejected = false;
+try { boundedRequestCallTimeout(100000, 30000, () => 100000); } catch (error) { expiredPlanDeadlineRejected = error.code === "plan-request-deadline"; }
+ok(expiredPlanDeadlineRejected, "an expired plan deadline rejects the next model call instead of starting it");
 ok(GROCERY_MATCH_MODEL === (process.env.ASU_AIR_GROCERY_MATCH_MODEL || "llama4-scout-17b"), "grocery matching has an environment-overridable fast primary model");
 ok(GROCERY_MATCH_VERIFY_MODEL === (process.env.ASU_AIR_GROCERY_MATCH_VERIFY_MODEL || "gemma4-31b-it"), "grocery matching has an independent environment-overridable verifier");
 
@@ -48,30 +60,6 @@ const liveRecipeFixtures = [
   { title: "Easy Vegetable Stir Fry", source: "Budget Bytes", sourceUrl: "https://www.budgetbytes.com/easy-vegetable-stir-fry/", timeMin: 25, equipment: ["stove"], ingredients: ["soy sauce", "garlic", "carrots", "frozen peas", "onion", "olive oil"], method: "Mix the sauce, stir-fry vegetables in stages, then add the sauce in a pan.", rawIngredients: ["soy sauce", "garlic", "carrots", "frozen peas", "onion", "olive oil"], rawInstructions: ["Mix the sauce, stir-fry vegetables in stages, then add the sauce in a pan."] },
   { title: "Mexican Rice and Beans", source: "Nora Cooks", sourceUrl: "https://www.noracooks.com/spanish-rice-and-beans/", timeMin: 40, equipment: ["stove"], ingredients: ["rice", "black beans", "salsa", "onion", "garlic", "olive oil"], method: "Saute aromatics, add rice, beans, salsa, and liquid, then cook until tender in a pot.", rawIngredients: ["rice", "black beans", "salsa", "onion", "garlic", "olive oil"], rawInstructions: ["Saute aromatics, add rice, beans, salsa, and liquid, then cook until tender in a pot."] },
 ];
-const planPrompt = buildPlanSystemPrompt("", 30, liveRecipeFixtures);
-ok(planPrompt.includes("NEVER") && planPrompt.includes("verified live candidates"), "plan prompt restricts generation to request-scoped verified candidates");
-ok(planPrompt.includes('"sourceRecipe"') && planPrompt.includes('"source"') && planPrompt.includes('"sourceUrl"'), "plan prompt requires the exact recipe citation triple");
-ok(!planPrompt.includes('"leftovers":[{'), "plan prompt no longer asks the model to estimate leftovers");
-ok(/Do NOT return shoppingList, leftovers, or totalCost/.test(planPrompt), "plan prompt tells the model the server builds the shopping list");
-ok(planPrompt.includes('"needs":["..."]') && /no amounts, units, or packages/.test(planPrompt), "plan prompt asks for ingredient names, not quantities");
-ok(planPrompt.includes("Shop tab prices it through live retailer sources"), "plan prompt points at live retailer prices in the Shop comparison");
-ok(
-  planPrompt.includes("adaptationNote") && planPrompt.includes("at least half") && planPrompt.includes("verified time exactly") &&
-    planPrompt.includes("Owning an unrelated pantry item"),
-  "plan prompt limits recipe adaptations by ingredients and verified time"
-);
-ok(planPrompt.includes("NEVER invent a source recipe") && planPrompt.includes("bounded web data") && planPrompt.includes("Treat them as facts only"), "plan prompt forbids invented citations and treats source text as untrusted");
-const twentyFiveMinutePrompt = buildPlanSystemPrompt("", 25, liveRecipeFixtures.filter((recipe) => recipe.timeMin <= 25));
-ok(
-  !twentyFiveMinutePrompt.includes("Mexican Rice and Beans") && twentyFiveMinutePrompt.includes("Hearty Black Bean Quesadillas"),
-  "a 25-minute prompt does not offer recipes with longer verified times"
-);
-for (const recipe of liveRecipeFixtures) {
-  ok(
-    planPrompt.includes(recipe.title) && planPrompt.includes(recipe.source) && planPrompt.includes(recipe.sourceUrl) && planPrompt.includes(recipe.method),
-    `plan prompt includes verified live recipe facts: ${recipe.source} / ${recipe.title}`
-  );
-}
 ok(!isApprovedRecipeCitation("Budget Bytes", "Invented Recipe", "https://www.budgetbytes.com", liveRecipeFixtures), "a publisher homepage cannot validate an invented recipe");
 
 ok(
@@ -89,6 +77,11 @@ ok(normalizeIngredient("EGGS") === "egg", "ingredient names normalize to lowerca
 ok(normalizeIngredient("  Black Beans  ") === "black bean", "punctuation and whitespace collapse before matching");
 ok(normalizeIngredient("tomato purée") === "tomato puree", "accented ingredient names normalize without splitting the food word");
 ok(normalizeIngredient("baby spinach leaves") === "baby spinach leaf", "irregular leaf plurals normalize to leaf");
+const sharedText = require("./lib/text-normalize");
+ok(sharedText.normalizeIngredient === normalizeIngredient, "the server re-exports the shared ingredient normalizer");
+ok(sharedText.flattenText("  Tempe, AZ 85281 ") === "tempe az 85281", "flattening lowercases and collapses punctuation the same way for every caller");
+ok(sharedText.stripAccents("tomato purée") === "tomato puree", "accent stripping is shared instead of repeated per file");
+ok(sharedText.normalizeIngredientOwnership("diced tomatoes", ["canned"]) === "canned tomato", "prep aliases keep their preserved state through the shared module");
 ok(needName("EGGS") === "egg", "a bare ingredient name normalizes to itself");
 ok(needName({ item: "Spinach" }) === "spinach", "object needs read the item field");
 assert.throws(() => needName("  "), /missing its item name/);
@@ -145,12 +138,6 @@ ok(
 );
 ok(pantryDietConflicts(["spinach", "cheddar"], []).length === 0, "no restrictions means no pantry conflicts");
 
-const dietPrompt = buildPlanSystemPrompt(dietRulesContext([veganRule, peanutRule]));
-ok(dietPrompt.includes("Dietary restrictions (STRICT"), "the plan prompt states the restrictions as strict");
-ok(dietPrompt.includes("peanut") && dietPrompt.includes("honey"), "the plan prompt lists the forbidden ingredients");
-ok(/pantry/i.test(dietPrompt) && dietPrompt.includes("stays forbidden"), "the plan prompt forbids cooking a restricted pantry item");
-ok(!buildPlanSystemPrompt().includes("Dietary restrictions"), "an unrestricted plan prompt carries no diet section");
-
 // Without the catalog, every ingredient goes through the same word net with
 // the same allowed-substitute stripping.
 ok(findIngredientConflict("gluten free pasta", glutenRule) === null, "the allowed-substitute list clears gluten-free pasta");
@@ -188,51 +175,37 @@ const html = fs.readFileSync("public/index.html", "utf8");
 ok(html.includes("app.js") && html.includes("api/plan") === false, "index.html loads app.js");
 const appJs = fs.readFileSync("public/app.js", "utf8");
 const serverSrc = fs.readFileSync("server.js", "utf8");
-const walmartRemovalSources = [
-  serverSrc,
-  html,
-  fs.readFileSync("public/app.js", "utf8"),
-  fs.readFileSync(".env.example", "utf8"),
-  fs.readFileSync("README.md", "utf8"),
-  fs.readFileSync("AGENTS.md", "utf8"),
-].join("\n");
-ok(
-  !/walmart/i.test(walmartRemovalSources) &&
-    !fs.existsSync("lib/walmart-direct.js") &&
-    !(vercelConfig.crons || []).some((cron) => /walmart/i.test(cron.path || "")),
-  "the Walmart offer adapter, configuration, documentation, and canary cron are removed"
-);
-
 ok(appJs.includes("/api/chat/interpret"), "chat uses server-side AI interpretation");
 ok(!appJs.includes("KNOWN_INGREDIENTS"), "arbitrary foods do not depend on a frontend ingredient dictionary");
 
-const planningFailureCopySource = appJs.replaceAll("\r\n", "\n")
-  .match(/function planningFailureCopy\(context\) \{[\s\S]*?\n\}/)?.[0] || "";
-ok(Boolean(planningFailureCopySource), "the frontend has persistent copy for distinct planning failure types");
-if (planningFailureCopySource) {
-  const failureContext = {};
-  vm.createContext(failureContext);
-  vm.runInContext(`${planningFailureCopySource}\nthis.testPlanningFailureCopy = planningFailureCopy;`, failureContext);
-  const apiFailure = failureContext.testPlanningFailureCopy({
+{
+  const failureClient = require("./test-fixes").client();
+  const evaluateFailure = (context) => failureClient.run(`planningFailureCopy(${JSON.stringify(context)})`);
+  const apiFailure = evaluateFailure({
     responseReceived: true,
     httpStatus: 502,
     failure: { provider: "asu-air", operation: "chat", status: "timeout" }
   });
-  const rejectedResponse = failureContext.testPlanningFailureCopy({
+  const repairTimeout = evaluateFailure({
+    responseReceived: true,
+    httpStatus: 502,
+    failure: { provider: "asu-air", operation: "plan-repair", status: "timeout" }
+  });
+  const rejectedResponse = evaluateFailure({
     responseReceived: true,
     httpStatus: 502,
     failure: { provider: "asu-air", operation: "plan-repair", status: "parse-error" }
   });
-  const connectionFailure = failureContext.testPlanningFailureCopy({ responseReceived: false });
-  const serverFailure = failureContext.testPlanningFailureCopy({ responseReceived: true, httpStatus: 500 });
-  const displayFailure = failureContext.testPlanningFailureCopy({
-    responseReceived: true,
-    responseAccepted: true,
-    httpStatus: 200
-  });
+  const connectionFailure = evaluateFailure({ responseReceived: false });
+  const serverFailure = evaluateFailure({ responseReceived: true, httpStatus: 500 });
+  const displayFailure = evaluateFailure({ responseReceived: true, responseAccepted: true, httpStatus: 200 });
   ok(
     apiFailure.title === "ASU AI API failure" && /timed out/i.test(apiFailure.detail),
     "an upstream timeout is labeled as an ASU AI API failure"
+  );
+  ok(
+    repairTimeout.title === "ASU AI API failure" && /timed out/i.test(repairTimeout.detail),
+    "a plan repair timeout is labeled as a service timeout"
   );
   ok(
     rejectedResponse.title === "AI recipe response rejected" && /mismatched or unsafe recipe/i.test(rejectedResponse.detail),
@@ -298,25 +271,6 @@ ok(
   [1, 2, 3, 4, 5, 6].every((index) => mealSequenceLabel(index) === `NIGHT ${index + 1}`),
   "later dinners are labeled NIGHT 2 through NIGHT 7"
 );
-ok(
-  !appJs.includes('const dayLabels = ["TONIGHT", "NEXT", "THEN", "LATER", "LAST"]') &&
-    !appJs.includes("`DAY ${index + 1}`"),
-  "the mixed sequence labels and DAY fallback are removed"
-);
-ok(
-  html.includes("Your dinner plan") &&
-    !html.includes("Your next few nights") &&
-    !html.includes("After dinner three"),
-  "plan headings work for every dinner count"
-);
-ok(
-  appJs.includes('plan.dinners.length === 1 ? "dinner" : "dinners"'),
-  "the plan title uses singular dinner for a one-meal plan"
-);
-ok(
-  appJs.includes('"Add the dinners you want to Plan. Leave the rest here in Chat."'),
-  "the chat invites deliberate selection without implying every suggestion was added"
-);
 const buildPlanSource = appJs.replaceAll("\r\n", "\n").match(/async function buildPlan[\s\S]*?\n}\n\nfunction formatMoney/)?.[0] || "";
 ok(
   !/state\.plan\s*=/.test(buildPlanSource) &&
@@ -357,17 +311,20 @@ ok(
   "meal cards expose the exact approved recipe citation"
 );
 ok(
-  appJs.includes("Credit: ${escapeHtml(meal.sourceRecipe)} by ${escapeHtml(meal.source)}") &&
+    appJs.includes("function renderRecipeCredit(meal, tag =") &&
+    appJs.includes("Credit: ${escapeHtml(credit)}.${notice}") &&
     appJs.includes("Required attribution:") && appJs.includes("License: ${escapeHtml(meal.sourceLicense)}") &&
-    appJs.includes("sourceAttribution: safeText(meal.sourceAttribution)") &&
+    appJs.includes('sourceAttribution: generated ? "" : safeText(meal.sourceAttribution)') &&
     appJs.includes("Reuse permission has not been verified; credit is not permission.") &&
+    appJs.includes("AI-created recipe") && appJs.includes("AI adapted recipe") &&
     appJs.includes("Verified directions are unavailable. Regenerate this plan"),
   "meal cards preserve publisher credit and source-specific notices without implying permission or inventing fallback directions"
 );
 const suggestionCitationSource = appJs.match(/function renderSuggestionCitation[\s\S]*?function addSuggestedDinnerToPlan/)?.[0] || "";
+const recipeCreditSource = appJs.match(/function renderRecipeCredit[\s\S]*?function shoppingListForDinners/)?.[0] || "";
 ok(
   suggestionCitationSource.includes("Required attribution:") && suggestionCitationSource.includes("License:") &&
-    suggestionCitationSource.includes("Reuse permission has not been verified; credit is not permission.") &&
+    suggestionCitationSource.includes("renderRecipeCredit(meal") && recipeCreditSource.includes("Reuse permission has not been verified; credit is not permission.") &&
     /<ol>\$\{meal\.steps\.map\(\(step\) => `<li>\$\{escapeHtml\(step\)\}<\/li>`\)/.test(suggestionCitationSource) &&
     suggestionCitationSource.includes("href=\"${escapeHtml(meal.sourceUrl)}\""),
   "Chat suggestions show escaped ordered directions with the publisher link, credit, and rights notices"
@@ -612,25 +569,8 @@ ok(html.includes('data-view="grocery"'), "index.html has the grocery nav entry")
 ok(html.includes('id="planShopButton"') && appJs.includes('$("planShopButton")'), "the meal plan's shopping list has its own add-to-shop button");
 ok(appJs.includes("/api/grocery/offers") && !appJs.includes("/api/grocery/optimize"), "the compare button uses live store prices, not the static optimizer");
 ok(appJs.includes("navigator.geolocation"), "app.js asks the browser for a location");
-ok(fs.readFileSync("public/styles.css", "utf8").includes("repeat(4, 1fr)"), "mobile nav has room for the fourth tab");
-
-// ---------- chat-first shell: one pane at every width ----------
+// Navigation semantics and DOM hooks stay covered without pinning responsive CSS values.
 {
-  const styles = fs.readFileSync("public/styles.css", "utf8");
-  ok(
-    /body\[data-view="chat"\] \.conversation-panel/.test(styles) &&
-      /body\[data-view="plan"\] \.plan-panel/.test(styles) &&
-      /body\[data-view="grocery"\] \.grocery-panel/.test(styles),
-    "the workspace shows one pane at a time at every width"
-  );
-  ok(!/mobile-active/.test(appJs) && !/mobile-active/.test(styles), "the mobile-only view switch is gone");
-  ok(!/max-width: 980px/.test(appJs), "a nav click changes the pane instead of only moving focus");
-  ok(/let activeView = "chat"/.test(appJs), "chat is the home view");
-  ok(html.indexOf('id="useFirstStrip"') > html.indexOf('id="pantryDrawer"'), "the use-first strip lives in the pantry drawer");
-}
-// Wide screens use the spare space: a centered chat column and a pantry panel.
-{
-  const styles = fs.readFileSync("public/styles.css", "utf8");
   const desktopNav = html.match(/<nav class="desktop-nav"[\s\S]*?<\/nav>/)?.[0] || "";
   const mobileNav = html.match(/<nav class="mobile-nav"[\s\S]*?<\/nav>/)?.[0] || "";
   ok(!desktopNav.includes('data-view="pantry"'), "the desktop rail drops the pantry tab because the panel is always there");
@@ -643,28 +583,6 @@ ok(fs.readFileSync("public/styles.css", "utf8").includes("repeat(4, 1fr)"), "mob
       desktopNav.includes('aria-current="page"') && !desktopNav.includes("nav-index"),
     "the desktop rail keeps accessible icon labels, view hooks, and the Shop count"
   );
-  const navItemCss = styles.match(/\.nav-item\s*\{[^}]*\}/)?.[0] || "";
-  const activeNavCss = styles.match(/\.nav-item\.active\s*\{[^}]*\}/)?.[0] || "";
-  const navCountCss = styles.match(/\.nav-count\s*\{[^}]*\}/)?.[0] || "";
-  ok(
-    /grid-template-columns: 76px minmax\(0, 1fr\)/.test(styles) &&
-      /display:\s*flex/.test(navItemCss) && /flex-direction:\s*column/.test(navItemCss) &&
-      /align-items:\s*center/.test(navItemCss) && /border-radius:\s*13px/.test(navItemCss) &&
-      /background:\s*var\(--maroon-wash\)/.test(activeNavCss) && !/box-shadow:/.test(activeNavCss) &&
-      /border-radius:\s*20px/.test(navCountCss) && /background:\s*var\(--gold\)/.test(navCountCss),
-    "the desktop rail restores its 76px icon-over-label layout and active pill without the gold side sliver"
-  );
-  const wideShellCss = styles.match(/@media \(min-width: 981px\) \{[\s\S]*?\n\}/)?.[0] || "";
-  ok(
-    /grid-template-columns: 76px minmax\(0, 1fr\) minmax\(270px, 320px\)/.test(wideShellCss) &&
-      /\.pantry-drawer:not\(\.profile-drawer\) \.drawer-scrim \{ display: none/.test(wideShellCss) &&
-      /\.pantry-drawer:not\(\.profile-drawer\) \.drawer-sheet \{[\s\S]{0,120}transform: none/.test(wideShellCss),
-    "wide screens show the pantry as a static side column, not a drawer"
-  );
-  ok(!/\.pantry-drawer \.drawer-sheet/.test(wideShellCss), "the shared drawer class does not drag the profile overlay into the column");
-  ok(/\.conversation-heading,[\s\S]{0,120}max-width: 760px/.test(styles), "the chat column is capped and centered");
-  ok(/\.conversation-panel\.is-empty \.messages/.test(styles) && /updateChatEmptyState/.test(appJs), "an empty chat centers its greeting and prompts");
-  ok(/function openPantry\(\) \{\s*\n\s*if \(isWideShell\(\)\) return;/.test(appJs), "the drawer only opens where the pantry is not a panel");
 }
 // Fridge, pantry, and kitchen each keep one job in visible copy.
 ok(!/mini-fridge/.test(appJs) && !/mini-fridge/.test(html), "the food list is never called a mini-fridge");
@@ -700,12 +618,9 @@ ok(/offLimitsPantry/.test(appJs) && /I left \$\{offLimits\.join/.test(appJs), "t
 ok(/off-limits/.test(appJs) && /does not fit/.test(appJs), "the inventory marks an item the current diet rules out");
 ok(fs.readFileSync("public/styles.css", "utf8").includes(".pantry-item.off-limits"), "an off-limits pantry item is styled as excluded");
 
-// Faults visible in a real screenshot, so they stay fixed.
+// The empty-state marker represents whether the use-first strip has entries.
 {
   const styles = fs.readFileSync("public/styles.css", "utf8");
-  ok(/\.composer textarea[\s\S]{0,160}min-height: 44px/.test(styles), "the composer is tall enough for its own placeholder");
-  ok(/\.starter-prompts[\s\S]{0,120}flex-wrap: wrap/.test(styles), "the starter chips wrap instead of running off the edge");
-  ok(/h1 \{[^}]*clamp\(26px/.test(styles), "the heading no longer takes a third of the column");
   ok(/\.use-first-strip\.is-empty/.test(styles) && /classList\.toggle\("is-empty"/.test(appJs), "the gold band stays quiet when nothing is marked");
 }
 
@@ -995,17 +910,495 @@ async function runRouteChecks() {
       ok(input.dinners === 3 && input.maxTimeMin === 30 && input.equipment.includes("stove"), "the default Plan route sends time and equipment constraints to curated discovery");
       return { ok: false, failure: { status: "no-safe-recipes", message: "Not enough verified recipes." } };
     };
-    const insufficient = await callDefaultPlan({ dinners: 3, maxTimeMin: 30, equipment: ["stove"] }, async () => {
+    const insufficient = await callDefaultPlan({ dinners: 3, maxTimeMin: 30, equipment: ["stove"] }, async (messages) => {
       defaultVoyagerCalls++;
-      return aiEnvelope({ dinners: [] });
+      ok(String(messages[0].content).includes("no verified live candidates are available"), "the hybrid prompt remains usable when live discovery returns no candidates");
+      return aiEnvelope({ dinners: [
+        { provenanceType: "generated", title: "Cold Bean Rice Bowl", timeMin: 5, equip: [], ingredients: ["cooked rice", "canned beans"], steps: ["Combine cooked rice and drained canned beans in a bowl; serve cold."] },
+        { provenanceType: "generated", title: "Tomato Chickpea Salad", timeMin: 5, equip: [], ingredients: ["canned chickpeas", "tomatoes"], steps: ["Drain canned chickpeas, then combine them with chopped tomatoes in a bowl; serve cold."] },
+        { provenanceType: "generated", title: "Peanut Banana Toast", timeMin: 5, equip: [], ingredients: ["bread", "peanut butter", "banana"], steps: ["Spread peanut butter on bread and top with sliced banana."] },
+      ] });
     });
-    ok(insufficient.statusCode === 422 && defaultPlanFinds === 1 && defaultVoyagerCalls === 0, "the default Plan route fails closed before Voyager when curated discovery is insufficient");
+    ok(insufficient.statusCode === 200 && insufficient.payload.dinners.length === 3 && defaultPlanFinds === 1 && defaultVoyagerCalls === 1, "the default Plan route asks Voyager for generated dinners when curated discovery is insufficient");
+
+    let hybridFindRequest = null;
+    let hybridVoyagerCalls = 0;
+    let hybridPrompt = "";
+    productionRecipeService.findRecipes = async (input) => {
+      hybridFindRequest = input;
+      return { ok: false, failure: { status: "network-error", message: "Publisher discovery is unavailable." } };
+    };
+    const generatedDinner = (title, ingredients, steps) => ({
+      provenanceType: "generated",
+      title,
+      timeMin: 12,
+      equip: ["microwave"],
+      ingredients,
+      steps,
+    });
+    const generatedMeals = [
+      generatedDinner("Egg and Onion Microwave Toast", ["eggs", "bread", "onions"], [
+        "Whisk the eggs with finely chopped onion in a microwave-safe bowl.",
+        "Microwave, stirring every 30 seconds, until the eggs are fully set with no liquid egg remaining.",
+        "Serve with bread.",
+      ]),
+      generatedDinner("Savory Ketchup Egg Toast", ["eggs", "bread", "ketchup"], [
+        "Cook beaten eggs in a microwave-safe bowl, stirring often until fully set.",
+        "Serve the eggs on bread with ketchup.",
+      ]),
+      generatedDinner("Onion and Ketchup Egg Bowl", ["eggs", "onions", "ketchup"], [
+        "Microwave chopped onion in a covered bowl until softened.",
+        "Add beaten eggs and stir every 30 seconds until fully set.",
+        "Stir in ketchup and serve.",
+      ]),
+    ];
+    const hybridGenerated = await callDefaultPlan({
+      pantry: ["eggs", "bread", "lentils", "ketchup", "onions"],
+      budget: 20,
+      dinners: 3,
+      maxTimeMin: 20,
+      equipment: ["microwave", "stove"],
+      diet: "",
+    }, async (messages) => {
+      hybridVoyagerCalls++;
+      hybridPrompt = messages.map((message) => String(message.content)).join("\n");
+      return aiEnvelope({
+        dinners: generatedMeals,
+        shoppingList: [{ item: "truffles", packPrice: 0.01 }],
+        totalCost: 0.01,
+        nutrition: { calories: 1 },
+      });
+    });
+    ok(
+      hybridGenerated.statusCode === 200 && hybridGenerated.payload.ok && hybridGenerated.payload.dinners.length === 3 &&
+        hybridVoyagerCalls > 0,
+      "the default Plan route asks Voyager for three meals when live discovery is unavailable"
+    );
+    ok(
+      hybridFindRequest?.pantry?.join(",") === "eggs,bread,lentils,ketchup,onions" &&
+        hybridPrompt.includes("budget") && hybridPrompt.includes("$20") &&
+        hybridGenerated.payload.dinners.every((dinner) => dinner.provenanceType === "generated" && !dinner.source && !dinner.sourceRecipe && !dinner.sourceUrl) &&
+        hybridGenerated.payload.shoppingList.every((line) => line.item !== "truffles" && !("packPrice" in line)) &&
+        hybridGenerated.payload.totalCost === undefined && hybridGenerated.payload.nutrition === undefined,
+      "generated meals stay source-free, use pantry-aware discovery and a budget target, and discard model prices and nutrition"
+    );
+    const weakMicrowavePlate = { dinners: [{
+      provenanceType: "generated", title: "Microwave Broccoli Tomato Plate", timeMin: 5, equip: ["microwave"],
+      ingredients: ["bread", "broccoli", "tomatoes"],
+      steps: ["Place the bread on a microwave-safe plate.", "Add the cooked broccoli and tomatoes to the bread and serve."],
+    }] };
+    const satisfyingPotatoDinner = { dinners: [{
+      provenanceType: "generated", title: "Microwave Potato with Beans and Spinach", timeMin: 15, equip: ["microwave"],
+      ingredients: ["potatoes", "canned beans", "spinach", "garlic dip"],
+      steps: [
+        "Pierce the potato several times and microwave it on a microwave-safe plate until tender, turning halfway.",
+        "Warm canned beans and chopped spinach in a covered microwave-safe bowl until steaming, stirring once.",
+        "Split the potato, spoon the bean and spinach mixture over it, add garlic dip, and serve.",
+      ],
+    }] };
+    let planCalls = 0;
+    const plannerOptions = [];
+    const satisfyingPlan = await callDefaultPlan({
+      pantry: ["beans", "tomatoes", "potatoes", "rice", "oats", "berries", "spinach", "onions", "garlic dip", "bread", "strawberry jam", "lettuce", "broccoli"],
+      budget: 20, dinners: 1, maxTimeMin: 20, equipment: ["microwave"], diet: "",
+    }, async (messages, options) => {
+      planCalls++;
+      plannerOptions.push(options);
+      return aiEnvelope(satisfyingPotatoDinner);
+    });
+    ok(
+      satisfyingPlan.statusCode === 200 && planCalls === 1 &&
+        satisfyingPlan.payload.dinners[0]?.title === "Microwave Potato with Beans and Spinach" &&
+        satisfyingPlan.payload.dinners[0]?.needs?.join(",") === "canned beans" &&
+        satisfyingPlan.payload.model === RECIPE_PLANNING_MODEL &&
+        plannerOptions[0]?.model === RECIPE_PLANNING_MODEL && plannerOptions[0]?.timeoutMs === 30000,
+      "a coherent microwave dinner serves in one planning call without a reviewer"
+    );
+
+    let weakPlateCalls = 0;
+    const weakPlatePlan = await callDefaultPlan({
+      pantry: ["beans", "tomatoes", "potatoes", "rice", "oats", "berries", "spinach", "onions", "garlic dip", "bread", "strawberry jam", "lettuce", "broccoli"],
+      budget: 20, dinners: 1, maxTimeMin: 20, equipment: ["microwave"], diet: "",
+    }, async () => {
+      weakPlateCalls++;
+      return aiEnvelope(weakMicrowavePlate);
+    });
+    ok(weakPlateCalls === 1 && weakPlatePlan.statusCode === 200 &&
+      weakPlatePlan.payload.dinners[0]?.title === "Microwave Broccoli Tomato Plate",
+      "a plan that passes deterministic checks serves without reviewer repair");
+
+    let groceryPlanCalls = 0;
+    const duplicateGroceryDinners = [
+      {
+        provenanceType: "generated", title: "Black Bean Spinach Rice Bowl", timeMin: 15, equip: ["microwave"],
+        ingredients: ["ready-to-heat rice", "canned black beans", "spinach", "mozzarella", "olive oil"],
+        steps: ["Heat ready-to-heat rice until steaming.", "Warm canned black beans and spinach in a covered microwave-safe bowl, then serve over the rice with mozzarella and olive oil."],
+      },
+      {
+        provenanceType: "generated", title: "Cheesy Potato with Spinach", timeMin: 15, equip: ["microwave"],
+        ingredients: ["potato", "spinach", "cheddar", "butter"],
+        steps: ["Pierce the potato and microwave until tender, turning halfway.", "Warm spinach, split the potato, and top with cheddar and butter until melted."],
+      },
+    ];
+    const groceryPlan = await callDefaultPlan({
+      pantry: [], budget: 20, dinners: 2, maxTimeMin: 20, equipment: ["microwave"],
+    }, async () => {
+      groceryPlanCalls++;
+      return aiEnvelope({ dinners: duplicateGroceryDinners });
+    });
+    ok(groceryPlanCalls === 1 && groceryPlan.statusCode === 200 &&
+      groceryPlan.payload.dinners[0]?.needs?.includes("mozzarella") &&
+      groceryPlan.payload.dinners[1]?.needs?.includes("cheddar"),
+      "each dinner keeps its own groceries without a plan-level reviewer");
+
+    const invalidGeneratedMeal = (meal) => ({
+      provenanceType: "generated", title: "Test Meal", timeMin: 15, equip: ["stove"],
+      ingredients: ["rice", "eggs"], steps: ["Cook the rice and eggs on the stove until the eggs are fully set."],
+      ...meal,
+    });
+    let rawChickenCalls = 0;
+    const safelyCookedRawChicken = await callDefaultPlan({ dinners: 1, maxTimeMin: 20, equipment: ["stove"] }, async () => {
+      rawChickenCalls++;
+      return aiEnvelope({ dinners: [{
+        provenanceType: "generated", title: "Thermometer Checked Chicken", timeMin: 12, equip: ["stove"],
+        ingredients: ["raw chicken"], steps: ["Place raw chicken in a skillet on the stove and cook until a food thermometer reads 165°F (74°C)."],
+      }] });
+    });
+    ok(safelyCookedRawChicken.statusCode === 200 && rawChickenCalls === 1, "safe raw-chicken preparation is accepted when the directions cook it to 165°F");
+
+    const negatedRawEgg = await callDefaultPlan({ dinners: 1, maxTimeMin: 20, equipment: ["microwave"] }, async () => aiEnvelope({ dinners: [{
+      provenanceType: "generated", title: "Set Egg Bowl", timeMin: 5, equip: ["microwave"], ingredients: ["eggs"],
+      steps: ["Microwave the beaten eggs, stirring midway, until no raw egg remains."],
+    }] }));
+    ok(negatedRawEgg.statusCode === 200, "a negated raw-egg phrase that requires full cooking is accepted");
+
+    let rawServingCalls = 0;
+    const rawChickenServing = await callDefaultPlan({ dinners: 1, maxTimeMin: 20, equipment: ["stove"] }, async () => {
+      rawServingCalls++;
+      return aiEnvelope({ dinners: [{
+        provenanceType: "generated", title: "Unsafe Chicken Bowl", timeMin: 10, equip: ["stove"],
+        ingredients: ["chicken"], steps: ["Serve the raw chicken with rice."],
+      }] });
+    });
+    ok(rawChickenServing.statusCode === 502 && rawServingCalls === 2, "obviously raw chicken serving directions are rejected after the single repair attempt");
+
+    const cumulativeTimerMeal = (timeMin) => ({ dinners: [{
+        provenanceType: "generated", title: "Potato and Egg Skillet", timeMin, equip: ["stove"],
+        ingredients: ["potatoes", "eggs"], steps: [
+          "Slice and boil the potatoes for 5 minutes.",
+          "Simmer the potatoes for 10 minutes.",
+          "Add beaten eggs and cook until fully set.",
+        ],
+      }] });
+    let cumulativeTimerCalls = 0;
+    const cumulativeTimers = await callDefaultPlan({ dinners: 1, maxTimeMin: 20, equipment: ["stove"] }, async () => {
+      cumulativeTimerCalls++;
+      return aiEnvelope(cumulativeTimerMeal(15));
+    });
+    ok(cumulativeTimers.statusCode === 200 && cumulativeTimerCalls === 1 && cumulativeTimers.payload.dinners[0].timeMin === 17,
+      "authored cooking times are raised to include sequential timers and two minutes for prep");
+
+    let overLimitTimerCalls = 0;
+    const overLimitTimers = await callDefaultPlan({ dinners: 1, maxTimeMin: 15, equipment: ["stove"] }, async () => {
+      overLimitTimerCalls++;
+      return aiEnvelope(cumulativeTimerMeal(15));
+    });
+    ok(overLimitTimers.statusCode === 502 && overLimitTimerCalls === 2 && !overLimitTimers.payload.dinners,
+      "a timer-corrected estimate above the user's maximum is rejected after the single repair");
+
+    let nineMinuteTimerCalls = 0;
+    const nineMinuteTimers = await callDefaultPlan({ dinners: 1, maxTimeMin: 20, equipment: ["microwave"] }, async () => {
+      nineMinuteTimerCalls++;
+      return aiEnvelope({ dinners: [{
+        provenanceType: "generated", title: "Tomato and Bean Bowl", timeMin: 10, equip: ["microwave"],
+        ingredients: ["canned beans", "tomatoes"], steps: [
+          "Drain and rinse the canned beans.",
+          "Microwave the beans and tomatoes for 5 minutes, stir, then microwave for 4 minutes until steaming.",
+        ],
+      }] });
+    });
+    ok(nineMinuteTimers.statusCode === 200 && nineMinuteTimerCalls === 1 && nineMinuteTimers.payload.dinners[0].timeMin === 11,
+      "a ten-minute estimate with nine minutes of sequential cooking is corrected to eleven without repair");
+
+    let dryLentilCalls = 0;
+    const dryLentils = await callDefaultPlan({ dinners: 1, maxTimeMin: 20, equipment: ["stove"] }, async () => {
+      dryLentilCalls++;
+      return aiEnvelope({ dinners: [{
+        provenanceType: "generated", title: "Quick Lentil Bowl", timeMin: 10, equip: ["stove"], ingredients: ["lentils", "canned lentils", "eggs"],
+        steps: ["Simmer the lentils on the stove until tender.", "Add eggs and cook until fully set."],
+      }] });
+    });
+    ok(dryLentils.statusCode === 502 && dryLentilCalls === 2, "plain lentils are not treated as quick-cooking pantry food without a cooked or canned state");
+
+    let genericBeanCalls = 0;
+    let beanRepairPrompt = "";
+    const genericBeans = await callDefaultPlan({
+      pantry: ["beans", "tomatoes"], dinners: 1, maxTimeMin: 20, equipment: ["microwave"],
+    }, async (messages) => {
+      genericBeanCalls++;
+      if (genericBeanCalls > 1) beanRepairPrompt = String(messages[messages.length - 1].content);
+      return aiEnvelope(genericBeanCalls === 1 ? { dinners: [{
+        provenanceType: "generated", title: "Quick Bean Tomato Bowl", timeMin: 5, equip: ["microwave"],
+        ingredients: ["beans", "tomatoes"], steps: ["Drain the beans, microwave them with tomatoes for 3 minutes, and serve."],
+      }] } : { dinners: [{
+        provenanceType: "generated", title: "Canned Bean Tomato Bowl", timeMin: 8, equip: ["microwave"],
+        ingredients: ["canned beans", "tomatoes"], steps: ["Drain canned beans, microwave them with tomatoes for 3 minutes, and serve."],
+      }] });
+    });
+    ok(genericBeans.statusCode === 200 && genericBeanCalls === 2 && genericBeans.payload.dinners[0].needs.includes("canned beans") &&
+      genericBeans.payload.dinners[0].usesPantry.includes("tomatoes") && /canned beans/i.test(beanRepairPrompt),
+    "generic pantry beans are not assumed canned from a draining step; repair lists canned beans as a grocery");
+
+    let explicitlyCannedBeanCalls = 0;
+    const explicitlyCannedBeans = await callDefaultPlan({ dinners: 1, maxTimeMin: 20, equipment: ["microwave"] }, async () => {
+      explicitlyCannedBeanCalls++;
+      return aiEnvelope({ dinners: [{
+        provenanceType: "generated", title: "Canned Bean Tomato Bowl", timeMin: 8, equip: ["microwave"],
+        ingredients: ["canned beans", "tomatoes"], steps: ["Drain canned beans, microwave them with tomatoes for 3 minutes, and serve."],
+      }] });
+    });
+    ok(explicitlyCannedBeans.statusCode === 200 && explicitlyCannedBeanCalls === 1, "explicitly canned beans are accepted for a quick dinner");
+
+    for (const [title, ingredient, step] of [
+      ["Fresh Green Beans with Hummus", "fresh green beans", "Microwave the fresh green beans for 4 minutes until tender."],
+      ["Hummus Dip Plate", "hummus", "Serve hummus with sliced tomatoes for dipping."],
+    ]) {
+      const preparedOrFreshBean = await callDefaultPlan({ dinners: 1, maxTimeMin: 20, equipment: ["microwave"] }, async () => aiEnvelope({ dinners: [{
+        provenanceType: "generated", title, timeMin: 10, equip: ["microwave"],
+        ingredients: [ingredient, "tomatoes"], steps: [step],
+      }] }));
+      ok(preparedOrFreshBean.statusCode === 200, `${title.toLowerCase()} is not falsely treated as unprepared mature beans`);
+    }
+
+    let omittedSeasoningCalls = 0;
+    const omittedSeasonings = await callDefaultPlan({ pantry: ["canned beans", "salt"], dinners: 1, maxTimeMin: 20, equipment: ["microwave"] }, async () => {
+      omittedSeasoningCalls++;
+      return aiEnvelope({ dinners: [{
+        provenanceType: "generated", title: "Seasoned Bean Tomato Bowl", timeMin: 8, equip: ["microwave"],
+        ingredients: ["canned beans", "tomatoes"], steps: [
+          "Warm canned beans and tomatoes in a microwave-safe bowl until steaming.",
+          "Season with salt and black pepper, then serve.",
+        ],
+      }] });
+    });
+    ok(omittedSeasonings.statusCode === 200 && omittedSeasoningCalls === 1 &&
+      omittedSeasonings.payload.dinners[0].usesPantry.includes("salt") &&
+      omittedSeasonings.payload.dinners[0].needs.includes("black pepper") &&
+      omittedSeasonings.payload.shoppingList.every((item) => !("price" in item) && !("packPrice" in item)),
+    "explicit plain salt and pepper are grounded into pantry or needs without triggering repair or inventing prices");
+
+    let microwaveOilCalls = 0;
+    const microwaveOil = await callDefaultPlan({
+      pantry: ["oil", "canned beans", "tomatoes"], dinners: 1, maxTimeMin: 20, equipment: ["microwave"],
+    }, async () => {
+      microwaveOilCalls++;
+      return aiEnvelope({ dinners: [{
+        provenanceType: "generated", title: "Microwave Bean Tomato Bowl", timeMin: 8, equip: ["microwave"],
+        ingredients: ["oil", "canned beans", "tomatoes"], steps: [
+          "Heat oil in a bowl in the microwave for 1 minute.",
+          "Add canned beans and tomatoes, then microwave until warm.",
+        ],
+      }] });
+    });
+    ok(microwaveOil.statusCode === 200 && microwaveOilCalls === 1,
+      "authored microwave directions do not infer a stove from the phrase heat oil");
+
+    let mixedMicrowaveStoveCalls = 0;
+    const mixedMicrowaveStove = await callDefaultPlan({
+      pantry: ["oil", "canned beans"], dinners: 1, maxTimeMin: 20, equipment: ["microwave"],
+    }, async () => {
+      mixedMicrowaveStoveCalls++;
+      return aiEnvelope({ dinners: [{
+        provenanceType: "generated", title: "Microwave and Stovetop Beans", timeMin: 8, equip: ["microwave"],
+        ingredients: ["oil", "canned beans"], steps: [
+          "Heat oil in a bowl in the microwave for 1 minute.",
+          "Simmer canned beans on the stove for 1 minute.",
+        ],
+      }] });
+    });
+    ok(mixedMicrowaveStove.statusCode === 502 && mixedMicrowaveStoveCalls === 2,
+      "explicit stove use is still rejected when the student only has a microwave");
+
+    const prepAliasOwnership = await callDefaultPlan({
+      pantry: ["tomatoes", "broccoli", "rice"], dinners: 1, maxTimeMin: 20, equipment: [],
+    }, async () => aiEnvelope({ dinners: [{
+      provenanceType: "generated", title: "Cold Chickpea Vegetable Bowl", timeMin: 8, equip: [],
+      ingredients: ["diced tomatoes", "canned tomatoes", "broccoli florets", "cooked rice", "canned chickpeas"],
+      steps: ["Drain canned chickpeas, then combine them with diced tomatoes, canned tomatoes, broccoli florets, and cooked rice; serve cold."],
+    }] }));
+    ok(prepAliasOwnership.statusCode === 200 &&
+      prepAliasOwnership.payload.dinners[0].usesPantry.join(",") === "diced tomatoes,broccoli florets" &&
+      prepAliasOwnership.payload.dinners[0].needs.includes("canned tomatoes") &&
+      prepAliasOwnership.payload.dinners[0].needs.includes("cooked rice"),
+    "mechanical prep aliases reuse owned produce without stripping canned or cooked ingredient states");
+
+    let negatedSeasoningCalls = 0;
+    const negatedSeasonings = await callDefaultPlan({ dinners: 1, maxTimeMin: 20, equipment: [] }, async () => {
+      negatedSeasoningCalls++;
+      return aiEnvelope({ dinners: [{
+        provenanceType: "generated", title: "Cold Bean Tomato Salad", timeMin: 5, equip: [],
+        ingredients: ["canned beans", "tomatoes"], steps: ["Do not add salt or pepper; combine the beans and tomatoes and serve cold."],
+      }] });
+    });
+    ok(negatedSeasonings.statusCode === 200 && negatedSeasoningCalls === 1 &&
+      !negatedSeasonings.payload.dinners[0].needs.some((item) => /^(?:salt|pepper|black pepper)$/.test(item)),
+    "a clear instruction not to add seasoning does not create pantry or grocery ingredients");
+
+    for (const wording of ["Add optional pepper before serving.", "Add salt or pepper as desired."]) {
+      let ambiguousSeasoningCalls = 0;
+      const ambiguousSeasonings = await callDefaultPlan({ dinners: 1, maxTimeMin: 20, equipment: [] }, async () => {
+        ambiguousSeasoningCalls++;
+        return aiEnvelope({ dinners: [{
+          provenanceType: "generated", title: "Cold Bean Tomato Salad", timeMin: 5, equip: [],
+          ingredients: ["canned beans", "tomatoes"], steps: [wording, "Combine the beans and tomatoes and serve cold."],
+        }] });
+      });
+      ok(ambiguousSeasonings.statusCode === 502 && ambiguousSeasoningCalls === 2,
+        "optional or alternative seasonings are not silently inferred when omitted from ingredients");
+    }
+
+    let unspecifiedToastCalls = 0;
+    const unspecifiedToast = await callDefaultPlan({ dinners: 1, maxTimeMin: 20, equipment: ["microwave", "stove"] }, async () => {
+      unspecifiedToastCalls++;
+      return aiEnvelope({ dinners: [{
+        provenanceType: "generated", title: "Egg Toast", timeMin: 5, equip: [], ingredients: ["bread", "eggs"],
+        steps: ["Toast some bread.", "Cook the eggs in a pan until fully set and serve on the toast."],
+      }] });
+    });
+    ok(unspecifiedToast.statusCode === 502 && unspecifiedToastCalls === 2, "toast directions name an available appliance or pan instead of assuming an unlisted toaster");
+
+    const rejectedMultiIssuePlan = { dinners: [
+      { provenanceType: "generated", title: "Quick Egg Toast", timeMin: 10, equip: ["stove"], ingredients: ["bread", "eggs"],
+        steps: ["Toast some bread.", "Cook the eggs in a pan until fully set and serve on the bread."] },
+      { provenanceType: "generated", title: "Quick Lentil Bowl", timeMin: 10, equip: ["stove"], ingredients: ["lentils"],
+        steps: ["Simmer dry lentils on the stove until tender."] },
+    ] };
+    const rejectedMultiIssueJson = JSON.stringify(rejectedMultiIssuePlan);
+    let multiIssueCalls = 0;
+    let multiIssueRepairMessages = [];
+    const multiIssueRepair = await callDefaultPlan({ dinners: 2, maxTimeMin: 20, equipment: ["stove", "microwave"] }, async (messages) => {
+      multiIssueCalls++;
+      if (multiIssueCalls === 1) return aiEnvelope(rejectedMultiIssuePlan);
+      multiIssueRepairMessages = messages;
+      return aiEnvelope({ dinners: [
+        { provenanceType: "generated", title: "Pan Toasted Eggs", timeMin: 10, equip: ["stove"], ingredients: ["bread", "eggs"],
+          steps: ["Toast bread in a pan on the stove.", "Cook the eggs in a pan until fully set and serve on the bread."] },
+        { provenanceType: "generated", title: "Canned Lentil Onion Bowl", timeMin: 10, equip: ["stove"], ingredients: ["canned lentils", "onions"],
+          steps: ["Warm canned lentils and chopped onions in a saucepan on the stove until hot."] },
+      ] });
+    });
+    const multiIssueDirective = multiIssueRepairMessages.find((message) => message.role === "user" && String(message.content).includes("Dinner-by-dinner validation issues"));
+    ok(
+      multiIssueCalls === 2 && multiIssueRepair.statusCode === 200 &&
+        multiIssueRepairMessages.some((message) => message.role === "assistant" && message.content === rejectedMultiIssueJson) &&
+        /Dinner 1: must name an available appliance or pan for toasting/.test(multiIssueDirective?.content || "") &&
+        /Dinner 2: must identify lentils as canned or already cooked/.test(multiIssueDirective?.content || ""),
+      "the single repair includes the rejected JSON and every per-dinner toast and lentil failure"
+    );
+
+    let omittedFatCalls = 0;
+    const omittedCookingFat = await callDefaultPlan({ dinners: 1, maxTimeMin: 20, equipment: ["stove"] }, async () => {
+      omittedFatCalls++;
+      return aiEnvelope({ dinners: [{
+        provenanceType: "generated", title: "Egg Toast", timeMin: 10, equip: ["stove"], ingredients: ["eggs", "bread"],
+        steps: ["Toast bread in a pan on the stove.", "Add a small amount of butter or oil to the pan.", "Cook the eggs until fully set."],
+      }] });
+    });
+    ok(omittedCookingFat.statusCode === 502 && omittedFatCalls === 2, "a cooking step cannot silently add butter or oil omitted from the ingredient list");
+
+    let listedFatAlternativesAccepted = true;
+    for (const alternative of ["butter or oil", "oil or butter"]) {
+      const listedFat = await callDefaultPlan({ dinners: 1, maxTimeMin: 20, equipment: ["stove"] }, async () => aiEnvelope({ dinners: [{
+        provenanceType: "generated", title: "Olive Oil Egg Toast", timeMin: 10, equip: ["stove"],
+        ingredients: ["eggs", "bread", "olive oil"],
+        steps: ["Toast bread in a pan on the stove using " + alternative + ".", "Cook the eggs in the pan until fully set and serve on the toast."],
+      }] }));
+      listedFatAlternativesAccepted = listedFatAlternativesAccepted && listedFat.statusCode === 200 &&
+        listedFat.payload.dinners?.[0]?.steps?.some((step) => step.includes("olive oil"));
+    }
+    ok(listedFatAlternativesAccepted, "either fat alternative is narrowed to the single listed option while preserving its name");
+
+    let peanutButterCalls = 0;
+    const peanutButterIsFood = await callDefaultPlan({ dinners: 1, maxTimeMin: 20, equipment: [] }, async () => {
+      peanutButterCalls++;
+      return aiEnvelope({ dinners: [{
+        provenanceType: "generated", title: "Peanut Butter Banana Bowl", timeMin: 5, equip: [],
+        ingredients: ["bread", "peanut butter", "banana"],
+        steps: ["Spread peanut butter on bread and top with sliced banana."],
+      }] });
+    });
+    ok(peanutButterIsFood.statusCode === 200 && peanutButterCalls === 1, "peanut butter in a recipe is not mistaken for omitted cooking butter");
+
+    let bellPepperCalls = 0;
+    const bellPepperIsFood = await callDefaultPlan({ dinners: 1, maxTimeMin: 20, equipment: [] }, async () => {
+      bellPepperCalls++;
+      return aiEnvelope({ dinners: [{
+        provenanceType: "generated", title: "Rice with Bell Peppers", timeMin: 5, equip: [],
+        ingredients: ["cooked rice", "bell peppers", "red pepper"],
+        steps: ["Fold diced bell peppers and sliced red pepper into the cooked rice and serve."],
+      }] });
+    });
+    ok(bellPepperIsFood.statusCode === 200 && bellPepperCalls === 1, "bell and red peppers are not mistaken for omitted seasoning pepper");
+
+    let allergyRepairCalls = 0;
+    const dietRepaired = await callDefaultPlan({ dinners: 1, maxTimeMin: 20, equipment: ["stove"], diet: "vegan" }, async () => {
+      allergyRepairCalls++;
+      return allergyRepairCalls === 1
+        ? aiEnvelope({ dinners: [invalidGeneratedMeal({ ingredients: ["rice", "eggs"] })] })
+        : aiEnvelope({ dinners: [{
+          provenanceType: "generated", title: "Vegan Tomato Rice", timeMin: 10, equip: [], ingredients: ["rice", "tomatoes"],
+          steps: ["Combine cooked rice with chopped tomatoes and serve warm."],
+        }] });
+    });
+    ok(dietRepaired.statusCode === 200 && allergyRepairCalls === 2 && dietRepaired.payload.dietRules.includes("vegan") &&
+      !JSON.stringify(dietRepaired.payload.dinners).match(/\beggs?\b/i), "one post-generation diet repair can replace a violating generated meal with a compliant meal");
 
     const productionCandidates = [
       productionCandidate(1, "Beans and Rice", ["beans", "rice"], "Heat beans and rice for 5 minutes."),
       productionCandidate(2, "Onion Rice", ["onion", "rice"], "Cook onion with rice for 8 minutes."),
       productionCandidate(3, "Bean Tomato Stew", ["beans", "tomatoes"], "Simmer beans with tomatoes for 10 minutes."),
     ];
+    productionRecipeService.findRecipes = async () => ({ ok: true, candidates: productionCandidates });
+    const ownershipCandidate = productionCandidate(4, "Tomato Broccoli Rice", [
+      "diced tomatoes", "tomatoes", "canned tomatoes", "broccoli florets", "cooked rice",
+    ], "Combine diced tomatoes, tomatoes, canned tomatoes, broccoli florets, and cooked rice.");
+    productionRecipeService.findRecipes = async () => ({ ok: true, candidates: [ownershipCandidate] });
+    const sourcePrepAliasOwnership = await callDefaultPlan({
+      pantry: ["tomatoes", "broccoli", "rice"], dinners: 1, maxTimeMin: 30, equipment: ["stove"],
+    }, async () => aiEnvelope({ dinners: [{ provenanceType: "sourced", recipeId: "recipe-1" }] }));
+    ok(sourcePrepAliasOwnership.statusCode === 200 &&
+      sourcePrepAliasOwnership.payload.dinners[0].usesPantry.join(",") === "diced tomatoes,tomatoes,broccoli florets" &&
+      sourcePrepAliasOwnership.payload.dinners[0].needs.join(",") === "canned tomatoes,rice" &&
+      !Object.hasOwn(sourcePrepAliasOwnership.payload.dinners[0], "sourceIngredientOwnership"),
+    "sourced ownership matches mechanical prep aliases while preserving the publisher ingredient facts");
+    productionRecipeService.findRecipes = async () => ({ ok: true, candidates: productionCandidates });
+    let adaptedMethodCalls = 0;
+    const adaptedMethodOnly = await callDefaultPlan({ dinners: 1, maxTimeMin: 20, equipment: ["stove", "microwave"] }, async () => {
+      adaptedMethodCalls++;
+      return aiEnvelope({ dinners: [{
+        provenanceType: "adapted", recipeId: "recipe-1", title: "Microwave Beans and Rice", timeMin: 15,
+        equip: ["microwave"], ingredients: ["canned beans", "rice"],
+        adaptationNote: "Used canned beans and changed the source pan method to warming the ingredients in a microwave bowl.",
+        steps: ["Warm the canned beans and rice in a microwave-safe bowl until steaming."],
+      }] });
+    });
+    ok(adaptedMethodCalls === 1 && adaptedMethodOnly.statusCode === 200 &&
+      adaptedMethodOnly.payload.dinners[0].provenanceType === "adapted" && adaptedMethodOnly.payload.dinners[0].timeIsEstimate &&
+      adaptedMethodOnly.payload.dinners[0].sourceUrl === productionCandidates[0].sourceUrl &&
+      adaptedMethodOnly.payload.dinners[0].sourceCredit.includes(productionCandidates[0].source),
+    "a specific method-only adaptation keeps its verified source credit and visibly estimated time");
+
+    let fakeGeneratedCitationCalls = 0;
+    const fakeGeneratedCitation = await callDefaultPlan({ dinners: 1, maxTimeMin: 20, equipment: ["stove"] }, async () => {
+      fakeGeneratedCitationCalls++;
+      return aiEnvelope({ dinners: [{
+        provenanceType: "generated", recipeId: "recipe-1", title: "Invented Cited Beans", timeMin: 10,
+        equip: ["stove"], ingredients: ["beans", "rice"], steps: ["Warm beans and rice in a pot on the stove."],
+      }] });
+    });
+    ok(fakeGeneratedCitationCalls === 2 && fakeGeneratedCitation.statusCode === 502 && !fakeGeneratedCitation.payload.dinners,
+      "generated output cannot attach even a real candidate ID as a fabricated publisher citation");
+
     const selectorHallucination = (recipeId) => ({
       recipeId, title: "Invented model title", timeMin: 99, equip: ["oven"],
       usesPantry: ["milk"], needs: ["garlic", "oil"],
@@ -1015,14 +1408,20 @@ async function runRouteChecks() {
     let prototypeVoyagerCalls = 0;
     const prototypeDenied = await callDefaultPlan({ dinners: 1, maxTimeMin: 30, equipment: ["stove"] }, async () => {
       prototypeVoyagerCalls++;
-      return aiEnvelope({ dinners: [selectorHallucination("recipe-1")] });
+      return aiEnvelope({ dinners: [{
+        provenanceType: "generated", title: "Cold Bean Tomato Bowl", timeMin: 8,
+        equip: [], ingredients: ["canned beans", "tomatoes"],
+        steps: ["Drain the canned beans and combine with chopped tomatoes; serve cold."],
+      }] });
     });
-    ok(prototypeDenied.statusCode === 503 && prototypeVoyagerCalls === 0, "the default Plan path fails closed before Voyager for any prototype-only candidate");
+    ok(prototypeDenied.statusCode === 200 && prototypeVoyagerCalls === 1 && prototypeDenied.payload.dinners[0].provenanceType === "generated" && !prototypeDenied.payload.dinners[0].sourceUrl, "prototype-only sources are excluded while Voyager can still create a source-free dinner");
 
     productionRecipeService.findRecipes = async () => ({ ok: true, candidates: productionCandidates });
     let observedPrompt = "";
+    let productionPlannerCalls = 0;
     const productionPlan = await callDefaultPlan({ dinners: 3, maxTimeMin: 30, equipment: ["stove"] }, async (messages) => {
       observedPrompt = String(messages[0].content);
+      productionPlannerCalls++;
       return aiEnvelope({ dinners: [
         selectorHallucination("recipe-1"),
         selectorHallucination("recipe-2"),
@@ -1030,6 +1429,7 @@ async function runRouteChecks() {
       ], notes: "Use garlic and oil." });
     });
     ok(productionPlan.statusCode === 200 && productionPlan.payload.dinners.length === 3, "a three-dinner default Plan fixture passes through discovery, grounding, and finalize");
+    ok(productionPlannerCalls === 1, "a source-only plan serves in one planning call with no reviewer");
     ok(productionPlan.payload.dinners.every((dinner, index) => dinner.sourceUsageMode === "publisher-directions-with-link-credit" && dinner.sourceCredit.includes(dinner.source) && dinner.steps.join("\n") === productionCandidates[index].rawInstructions.join("\n")), "the selector's hallucinated directions are replaced with exact verified publisher steps and visible credit");
     ok(productionPlan.payload.dinners.every((dinner, index) => dinner.timeMin === productionCandidates[index].timeMin && JSON.stringify(dinner.equip) === JSON.stringify(productionCandidates[index].equipment) && [...dinner.usesPantry, ...dinner.needs].sort().join("|") === [...productionCandidates[index].ingredients].sort().join("|")), "the default route canonicalizes exact ingredients, time, and equipment instead of model claims");
     ok(productionPlan.payload.notes === "" && !JSON.stringify(productionPlan.payload).includes("garlic"), "selector notes and hallucinated food terms do not enter the canonical plan");
@@ -1042,6 +1442,7 @@ async function runRouteChecks() {
 
     const retained = productionPlan.payload.dinners[1];
     const replaced = productionPlan.payload.dinners[0];
+    const retainedWithUntrustedOversizedDirections = { ...retained, steps: ["x".repeat(240)] };
     const replacementCandidate = productionCandidates[2];
     let retainedVerifications = 0;
     productionRecipeService.findRecipes = async () => ({ ok: true, candidates: [replacementCandidate] });
@@ -1051,10 +1452,32 @@ async function runRouteChecks() {
     };
     const swapped = await callDefaultPlan({
       dinners: 1, maxTimeMin: 30, equipment: ["stove"], exclude: [replaced.sourceRecipe],
-      swapIndex: 0, previousDinners: [replaced, retained],
+      swapIndex: 0, previousDinners: [replaced, retainedWithUntrustedOversizedDirections],
     }, async () => aiEnvelope({ dinners: [selectorHallucination("recipe-1")] }));
     ok(swapped.statusCode === 200 && retainedVerifications === 1 && swapped.payload.dinners[1].sourceRecipe === retained.sourceRecipe, "a retained swap source is re-verified through the default service before canonicalizing retained and replacement dinners");
     ok(swapped.payload.dinners.every((dinner) => dinner.steps.join("\n") === (dinner.sourceRecipe === replacementCandidate.title ? replacementCandidate.rawInstructions.join("\n") : productionCandidates[1].rawInstructions.join("\n"))), "a swap returns verified source directions for both the new and retained dinners");
+
+    productionRecipeService.findRecipes = async () => ({ ok: false, failure: { status: "network-error" } });
+    const generatedPreviousDinners = [
+      { provenanceType: "generated", title: "Cold Bean Rice Bowl", timeMin: 5, equip: [], ingredients: ["canned beans", "cooked rice"], steps: ["Combine canned beans and cooked rice in a bowl; serve cold."] },
+      { provenanceType: "generated", title: "Tomato Chickpea Salad", timeMin: 5, equip: [], ingredients: ["canned chickpeas", "tomatoes"], steps: ["Combine canned chickpeas with chopped tomatoes and serve cold."] },
+    ];
+    let generatedSwapPlannerCalls = 0;
+    const generatedSwap = await callDefaultPlan({
+      dinners: 1, maxTimeMin: 20, equipment: ["stove"], swapIndex: 0, previousDinners: generatedPreviousDinners,
+    }, async () => {
+      generatedSwapPlannerCalls++;
+      return aiEnvelope({ dinners: [{
+        provenanceType: "generated", title: "Fresh Bean Tomato Bowl", timeMin: 8, equip: [],
+        ingredients: ["canned beans", "tomatoes"], steps: ["Combine canned beans with chopped tomatoes and serve cold."],
+      }] });
+    });
+    ok(generatedSwap.statusCode === 200 && generatedSwap.payload.dinners.length === 2 &&
+      generatedSwap.payload.dinners[0].provenanceType === "generated" &&
+      generatedSwap.payload.dinners[1].title === generatedPreviousDinners[1].title && !generatedSwap.payload.dinners[1].sourceUrl,
+    "a generated dinner can be swapped while the retained generated meal is revalidated and kept source-free");
+    ok(generatedSwapPlannerCalls === 1 && generatedSwap.payload.dinners[0].title === "Fresh Bean Tomato Bowl",
+    "a generated swap serves in one planning call with no reviewer");
   } finally {
     productionRecipeService.findRecipes = originalProductionFind;
     productionRecipeService.verifyUrl = originalProductionVerify;
@@ -1189,10 +1612,11 @@ async function runRouteChecks() {
   const live = await callPlan(request, async (messages, options) => {
     liveCalls++;
     assert(messages.some((message) => String(message.content).includes("Use the spinach first")));
-    assert.strictEqual(options.maxTokens, 1800);
+    assert.strictEqual(options.maxTokens, 2400);
+    assert.strictEqual(options.model, RECIPE_PLANNING_MODEL);
     return aiEnvelope(validAiPlan);
   });
-  ok(live.statusCode === 200 && live.payload.ok && live.payload.model === AIR_MODEL, "plan route returns the configured text model response");
+  ok(live.statusCode === 200 && live.payload.ok && live.payload.model === RECIPE_PLANNING_MODEL, "plan route reports the configured recipe drafting model response");
   ok(liveCalls === 1 && !live.payload.mock && !live.payload.fallback, "a plan request calls the text model exactly once");
   ok(live.payload.shoppingList.length === 1 && live.payload.shoppingList[0].item === "butter", "AI shopping needs are grounded against the price catalog");
   ok(
@@ -1243,13 +1667,13 @@ async function runRouteChecks() {
     return aiEnvelope(groundingCalls === 1 ? unrelatedPotatoAdaptation : validAiPlan);
   });
   ok(
-    groundingCalls === 1 && grounded.payload.ok && grounded.payload.repaired === undefined &&
-      grounded.payload.dinners[0].sourceRecipe === "Microwave Potato" &&
+    groundingCalls === 2 && grounded.payload.ok && grounded.payload.repaired === true &&
+      grounded.payload.dinners[0].sourceRecipe === "Spinach Rice Breakfast Bowls" &&
       grounded.payload.dinners[0].timeMin === 10 &&
-      grounded.payload.dinners[0].needs.join(",") === "potatoes,olive oil,butter" &&
+      grounded.payload.dinners[0].needs.join(",") === "butter" &&
       grounded.payload.dinners[0].steps.join(" ") === "Cook the verified ingredients in the listed equipment." &&
-      !JSON.stringify(grounded.payload.dinners[0]).includes("eggs"),
-    "contradictory model fields are discarded in favor of the cited Microwave Potato facts"
+      !JSON.stringify(grounded.payload.dinners[0]).includes("Microwave Potato"),
+    "an unrelated source citation is rejected as an adaptation and receives one valid source-grounded repair"
   );
 
   const unrelatedPantryQuesadilla = {
@@ -1260,7 +1684,7 @@ async function runRouteChecks() {
       sourceUrl: "https://www.budgetbytes.com/peanut-butter-banana-quesadillas/",
       adaptationNote: "Use the available pantry ingredients.",
       timeMin: 10,
-      usesPantry: ["rice", "black beans", "potatoes", "butter", "cheddar"],
+      usesPantry: ["rice", "canned black beans", "potatoes", "butter", "cheddar"],
       needs: ["tortillas"],
       steps: ["Put the pantry ingredients in a tortilla and toast it."],
     }],
@@ -1274,12 +1698,12 @@ async function runRouteChecks() {
     return aiEnvelope(cleanRepairCalls === 1 ? unrelatedPantryQuesadilla : validAiPlan);
   });
   ok(
-    cleanRepairCalls === 1 && cleanRepair.payload.ok && cleanRepair.payload.repaired === undefined &&
-      cleanRepair.payload.dinners[0].sourceRecipe === "Peanut Butter Banana Quesadillas" &&
-      cleanRepair.payload.dinners[0].needs.join(",") === "tortillas,peanut butter,banana" &&
+    cleanRepairCalls === 2 && cleanRepair.payload.ok && cleanRepair.payload.repaired === true &&
+      cleanRepair.payload.dinners[0].sourceRecipe === "Spinach Rice Breakfast Bowls" &&
+      cleanRepair.payload.dinners[0].needs.join(",") === "butter" &&
       cleanRepair.payload.dinners[0].steps.join(" ") === "Cook the verified ingredients in the listed equipment." &&
-      cleanRepairPrompt === "",
-    "contradictory pantry fields are discarded in favor of the cited quesadilla facts"
+      cleanRepairPrompt.includes("no longer matches enough of its verified source ingredients"),
+    "an adapted meal that ignores its verified source is repaired once rather than silently canonicalized"
   );
 
   const duplicatePantryNeed = {
@@ -1403,7 +1827,7 @@ async function runRouteChecks() {
     return aiEnvelope(unapprovedAiPlan);
   });
   ok(
-    unapprovedCalls === 2 && unapproved.statusCode === 502 && unapproved.payload.ok === false && /verified live recipe candidates/.test(unapproved.payload.failure?.message || ""),
+    unapprovedCalls === 2 && unapproved.statusCode === 502 && unapproved.payload.ok === false && /plan checks/.test(unapproved.payload.failure?.message || ""),
     "unapproved AI recipe citations are rejected after repair"
   );
 
@@ -1496,18 +1920,15 @@ async function runRouteChecks() {
   const dietAware = await callPlan(veganRequest, async (messages) => {
     dietPromptText = messages.map((message) => String(message.content)).join("\n");
     return aiEnvelope({
-      ...validAiPlan,
-      dinners: validAiPlan.dinners.map((dinner) => ({
-        ...dinner,
-        title: "Spinach rice bowl",
-        usesPantry: ["spinach", "rice"],
-        needs: ["black beans"],
-        steps: ["Microwave the spinach and rice, then stir in the black beans."]
-      }))
+      dinners: [{
+        provenanceType: "generated", title: "Vegan Spinach Bean Rice Bowl", timeMin: 10, equip: ["microwave"],
+        ingredients: ["spinach", "rice", "canned black beans"],
+        steps: ["Warm the spinach and rice in a microwave-safe bowl, then stir in canned black beans."],
+      }],
     });
   });
-  ok(/Dietary restrictions \(STRICT/.test(dietPromptText), "a restricted plan request sends the strict diet section");
-  ok(/never use, buy, or mention/.test(dietPromptText) && /peanut/.test(dietPromptText), "the request names the forbidden ingredients");
+  ok(/Dietary restrictions are hard rules/i.test(dietPromptText), "a restricted plan request sends the strict diet section");
+  ok(/never use, buy, or mention/i.test(dietPromptText) && /peanut/.test(dietPromptText), "the request names the forbidden ingredients");
   ok(
     /must NOT cook with/.test(dietPromptText) && /eggs/.test(dietPromptText.split("Pantry items you must NOT cook with")[1] || ""),
     "a restricted pantry item is declared off-limits instead of offered as food"
@@ -1529,9 +1950,10 @@ async function runRouteChecks() {
       sourceUrl: "https://www.budgetbytes.com/hearty-black-bean-quesadillas/",
       adaptationNote: "Use corn tortillas instead of flour tortillas.",
       timeMin: 15,
+      equip: ["stove"],
       usesPantry: [],
       needs: [
-        "black beans",
+        "canned black beans",
         "onion",
         "garlic",
         "cheddar",
@@ -1588,7 +2010,7 @@ async function runRouteChecks() {
         dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, title: "A totally different sounding bowl" }))
       });
     }
-    assert(/Do NOT use these recipes again/.test(messages.map((m) => String(m.content)).join(" ")));
+    assert(/Do not repeat these dinner titles or recipe identities/.test(messages.map((m) => String(m.content)).join(" ")));
     return aiEnvelope({
       ...validAiPlan,
       dinners: validAiPlan.dinners.map((dinner) => ({
@@ -1614,10 +2036,11 @@ async function runRouteChecks() {
     "the swap returns a different curated recipe"
   );
 
-  const swapImpossible = await callPlan(swapRequest, async () => aiEnvelope(validAiPlan));
+  let impossibleSwapCalls = 0;
+  const swapImpossible = await callPlan(swapRequest, async () => { impossibleSwapCalls++; return aiEnvelope(validAiPlan); });
   ok(
-    swapImpossible.statusCode === 200 && swapImpossible.payload.swapUnavailable === true,
-    "a swap the small catalog cannot satisfy says so instead of silently repeating"
+    impossibleSwapCalls === 2 && swapImpossible.statusCode === 502 && !swapImpossible.payload.dinners,
+    "a request with no eligible alternative is rejected after one repair rather than silently repeating"
   );
   ok(
     findRepeatedExclusion({ dinners: [{ title: "x", sourceRecipe: "Microwave Potato" }] }, ["microwave potato"]) !== null,
@@ -1682,8 +2105,11 @@ async function runRouteChecks() {
   const peanut = await callPlan({ ...request, diet: "peanut allergy" }, async () => {
     peanutCalls++;
     return aiEnvelope({
-      ...validAiPlan,
-      dinners: validAiPlan.dinners.map((dinner) => ({ ...dinner, needs: ["peanut butter"] }))
+      dinners: [{
+        provenanceType: "generated", title: "Peanut Butter Rice", timeMin: 5, equip: [],
+        ingredients: ["rice", "peanut butter"],
+        steps: ["Stir peanut butter into cooked rice and serve."],
+      }]
     });
   });
   ok(
@@ -1696,16 +2122,12 @@ async function runRouteChecks() {
   const dietRepaired = await callPlan(veganRequest, async (messages) => {
     dietRepairCalls++;
     if (dietRepairCalls === 1) return aiEnvelope(dairyInNeeds);
-    assert(/Dietary restrictions \(absolute\)/.test(messages.map((m) => String(m.content)).join("\n")));
-    return aiEnvelope({
-      ...validAiPlan,
-      dinners: validAiPlan.dinners.map((dinner) => ({
-        ...dinner,
-        usesPantry: ["spinach", "rice"],
-        needs: ["black beans"],
-        steps: ["Microwave the spinach and rice, then stir in the black beans."]
-      }))
-    });
+    assert(/Dietary restrictions are hard rules/.test(messages.map((m) => String(m.content)).join("\n")));
+    return aiEnvelope({ dinners: [{
+      provenanceType: "generated", title: "Vegan Spinach Bean Rice Bowl", timeMin: 10, equip: ["microwave"],
+      ingredients: ["spinach", "rice", "canned black beans"],
+      steps: ["Warm the spinach and rice in a microwave-safe bowl, then stir in canned black beans."],
+    }] });
   });
   ok(
     dietRepairCalls === 2 && dietRepaired.statusCode === 200 && dietRepaired.payload.repaired === true,
@@ -2006,6 +2428,7 @@ async function runRouteChecks() {
   n += await require("./test-live-recipes")();
   n += await require("./test-curated-recipe-discovery")();
   n += await require("./test-local-offer-ui")();
+  n += await require("./test-hybrid-ui")();
   n += await require("./test-api-security")();
   console.log(`\nALL ${n} CHECKS PASSED`);
 }

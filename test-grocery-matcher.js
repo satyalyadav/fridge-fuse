@@ -178,8 +178,22 @@ async function run() {
     },
   }).match(oneInput);
   check(
-    disagreement.ok && disagreement.selected.size === 0 && disagreement.failedPairs[0]?.failure.status === "disagreement",
-    "verifier disagreement leaves the candidate unpriced"
+    disagreement.ok && disagreement.selected.size === 0 && !disagreement.failedPairs.length,
+    "a verifier null on a split vote leaves the candidate unpriced without a disagreement failure"
+  );
+  const splitVote = await createGroceryMatcher({
+    chat: async (messages, options) => {
+      const payload = JSON.parse(messages[1].content);
+      return responseFor(payload, (pair) => options.model === "llama4-scout-17b"
+        ? pair.candidates.map((candidate) => candidate.id)
+        : [pair.candidates[1].id]);
+    },
+  }).match(oneInput);
+  check(
+    splitVote.ok && splitVote.failedPairs.length === 0 &&
+      splitVote.selected.get("microwave rice\u0000frys")?.length === 1 &&
+      splitVote.selected.get("microwave rice\u0000frys")[0] === liveSources[1],
+    "a split vote prices the verifier's pick instead of the primary's broader set"
   );
 
   let rewritePrompt = "";

@@ -339,6 +339,11 @@ button.mobile-pantry-button { display: none; }
   margin: 24px 0 4px 40px;
   max-width: 690px;
 }
+/* Suggestions sit below the intro text at every width. Without wrapping,
+   the message flex row squeezes the cards into a narrow rail beside the
+   copy on desktop instead of using the full column. */
+.message:has(.recipe-suggestions) { flex-wrap: wrap; }
+.message:has(.recipe-suggestions) .recipe-suggestions { flex: 1 1 100%; max-width: none; }
 .suggestions-heading { display: grid; gap: 4px; }
 .suggestions-heading .eyebrow { margin: 0; }
 .suggestions-stale { margin: 0; color: var(--alert); font-size: 12px; line-height: 1.4; }
@@ -1770,16 +1775,6 @@ body[data-welcome-open="true"] { overflow: hidden; }
   border: 1px solid var(--maroon);
   background: var(--maroon);
   color: white;
-}
-
-.message-author {
-  display: block;
-  margin-bottom: 3px;
-  color: var(--maroon-deep);
-  font-family: var(--utility);
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
 }
 
 @media (max-width: 420px) {

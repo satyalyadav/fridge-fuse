@@ -31,17 +31,29 @@ cp .env.example .env
 ```
 
 Then edit `.env` and set `VOYAGER_KEY` to your ASU AIR (Voyager) API key.
-Meal planning ranks the curated URL index and fetches publisher pages directly,
-so it does not need a paid search key.
+Meal planning starts with a bounded curated pool and can use at most one
+pantry-driven RCP `/search` lookup (`source=wikibooks`) per request. Search
+results are cached for five minutes and capped at four fresh recipe URLs per
+request. No client-side or paid search key is needed.
 `ASU_AIR_BASE_URL`, `ASU_AIR_MODEL`, and `ASU_AIR_VISION_MODEL` already have
-working defaults. Text planning uses `llama4-scout-17b`, while photo recognition
+working defaults. General text/chat uses `llama4-scout-17b`, while photo recognition
 uses `qwen3-vl-32b-instruct`. A second, independent photo check uses the faster
 multimodal `llama4-scout-17b` by default; it can be overridden with
 `ASU_AIR_VISION_VERIFY_MODEL`.
+Recipe drafts use the separate `gemma4-31b-it` model by default, while general
+text/chat remains on `ASU_AIR_MODEL`. The one repair also defaults to the recipe
+drafting model and fixes deterministic validation failures. Set
+`ASU_AIR_RECIPE_PLANNING_MODEL` to change the recipe writer, or optionally set
+`ASU_AIR_RECIPE_REPAIR_MODEL` for a separate repair model. The recipe checks enforce
+hard diet, equipment, source, and time constraints. Planning,
+discovery, and verification share a 110-second request deadline; each individual
+planning or repair model call is capped at 30 seconds, with remaining
+request time taking precedence.
 
-`VOYAGER_KEY` is required for meal planning and photo recognition. If it is
-missing, or a publisher page cannot be verified, the endpoint reports an error
-instead of inventing a plan or recipe.
+`VOYAGER_KEY` is required for meal planning and photo recognition. Verified
+publisher recipes remain available when a matching page can be checked. Voyager
+can also adapt a verified recipe or create a new recipe when the source pool
+cannot satisfy the request; generated recipes have no publisher citation.
 
 `.env` is gitignored — never commit the real key.
 
@@ -146,10 +158,19 @@ at a time. Chat is home; Plan and Shop are one tap away in the rail, and the
 pantry stays open beside the conversation on wide screens.
 
 With `VOYAGER_KEY` configured, the planning flow sends the pantry, constraints,
-and latest request to ASU AIR. Voyager selects verified recipes for the dinners;
-publisher pages provide their cooking steps.
-The server turns the ingredient names into a shopping list and drops every
-number the model returned; the Shop tab prices that list live.
+and latest request to ASU AIR. It uses verified publisher recipes when suitable,
+can adapt a verified recipe, and can generate a recipe if no source fits. The
+server checks dietary restrictions and equipment for every result. Generated
+and adapted cooking times are estimates and are labeled in the app.
+For authored recipes, the server raises an estimate when needed to cover sequential
+timers plus two minutes for prep and plating. If that exceeds the requested limit,
+the recipe is rejected; verified publisher times remain exact.
+Quick authored meals must name mature beans as canned or cooked; draining alone
+does not establish their prepared form. Explicitly used plain salt and pepper are
+included in the ingredient list, while optional, negated, or alternative mentions
+are not inferred.
+The server turns ingredient names into a shopping list and discards model-supplied
+shopping lists, quantities, totals, and prices. The Shop tab prices that list live.
 
 The demo flow is:
 
@@ -222,31 +243,29 @@ was not returned by search.
 
 ## Recipe sources
 
-- `data/curated-recipe-leads.json` stores publisher URLs and ranking hints only.
-  The server freshly fetches candidate HTTPS pages with a browser-safe client,
-  follows only manually validated public redirects, and accepts a candidate
-  only when recursive schema.org Recipe JSON-LD supplies its title, ingredients,
-  instructions, and exact time; equipment is inferred from verified directions.
-  Per-request page checks are bounded.
-- Every returned dinner carries an exact `sourceRecipe`, `source`, and
-  `sourceUrl` triple from the verified candidates. Publisher homepages,
-  hallucinated URLs/IDs, snippets, and model timing claims are rejected.
-- Voyager selects recipe IDs only and does not receive publisher directions.
-  The server returns the exact verified JSON-LD ingredients, time, inferred
-  equipment, and ordered publisher directions, alongside the publisher link and
-  visible credit. RCP recipes retain the page's required attribution and license
-  notice. For other listed publishers, reuse permission has not been verified;
-  credit does not grant permission. This is a hackathon display path pending
-  reuse-rights review, not a claim that the source text is legally cleared.
-- Candidate source text is bounded and treated as untrusted evidence. Titles,
-  ingredients, and directions that violate the active diet or contain obvious
-  prompt-injection text are rejected. Voyager sees only the candidate IDs and
-  bounded selection facts; it does not receive publisher directions.
-- The server does not adapt a source recipe. It uses the verified ingredient set
-  and rejects candidates that do not fit the request's time, equipment, and diet.
+- `data/curated-recipe-leads.json` supplies a bounded starter pool of publisher
+  URLs. A request can use at most one pantry-driven RCP `/search` lookup with
+  `source=wikibooks`; results are cached for five minutes and capped at four fresh
+  dynamic URLs per request. Search results are leads only: the server checks
+  exact hosts and paths, fetches public HTTPS pages, and verifies Recipe JSON-LD
+  before a page can ground a dinner.
+- A dinner is marked as sourced, adapted, or generated. Sourced dinners use the
+  verified publisher ingredients and directions with the exact recipe citation.
+  Adapted dinners carry the verified source citation and visible credit, plus an
+  AI-authored adaptation note and directions. Generated dinners have no publisher
+  source or link and are labeled “AI-created recipe.” Adapted and generated
+  cooking times are estimates; the UI labels them.
+- RCP recipes retain the page's required attribution and license notice. For
+  other listed publishers, reuse permission has not been verified; credit does
+  not grant permission. This is a hackathon display path pending reuse-rights
+  review, not a claim that the source text is legally cleared.
+- Candidate source text is bounded and treated as untrusted evidence. The server
+  applies dietary, equipment, and time checks to results, and rejects unsafe
+  pages and source facts. Recipe generation does not create a price catalog or
+  guarantee that the live Shop total fits the profile budget.
 - Publisher requests use a process-wide host pacer and bounded per-request
   checks. Local development can inspect aggregated failures through
-  `/api/failures`. There is no search API fallback or model-invented URL fallback.
+  `/api/failures`. No client-side search key is needed.
 
 ## Your kitchen data
 
@@ -276,15 +295,15 @@ A dinner requires *ingredients*; the plan keeps those separate from prices:
 ```
 
 The model names what each dinner uses; the server turns each name into one
-shopping line, shared across the dinners that need it. Amounts were deliberately
-removed: the model misjudged them and the package math produced false precision,
-so the plan asks for names and claims no leftovers. Do not reintroduce amounts,
+shopping line, shared across the dinners that need it. Ingredient amounts were
+deliberately removed: the model misjudged them and package math produced false
+precision, so the plan asks for names and claims no leftovers. Do not reintroduce amounts,
 units, per-serving bands, or leftover estimates without a design for where
 measured quantities come from.
 
-`shoppingList`, `leftovers`, and `totalCost` are not accepted from the model at
-all. It is asked for dinners and ingredient names; anything with a number in it
-is discarded. Prices come from the live comparison in Shop.
+`shoppingList`, `leftovers`, `totalCost`, and prices are not accepted from the
+model. It is asked for dinner ingredients and may provide estimated cooking times
+for generated or adapted recipes. Prices come from the live comparison in Shop.
 
 ## Dietary restrictions
 
@@ -354,7 +373,10 @@ Run deterministic tests with `npm test`.
 - `POST /api/vision {imageDataUrl}` returns independently verified `confirmed`
   pantry items plus `uncertain` items with bounding boxes for user review.
 - `POST /api/plan` builds the dinner plan and its unpriced shopping list; dinners include
-  `sourceRecipe`, `source`, `sourceUrl`, and (when adapted) `adaptationNote`.
+  `provenanceType` (`sourced`, `adapted`, or `generated`) and `timeIsEstimate`.
+  Sourced and adapted dinners also include the verified `sourceRecipe`, `source`,
+  and `sourceUrl`; adapted dinners include `adaptationNote`. Generated dinners
+  have no source citation.
   The response echoes the `dietRules` that were enforced; a plan that breaks them
   is rejected, not returned.
 - `GET /api/preferences` serves the dietary and equipment catalogs the profile renders.
@@ -377,8 +399,9 @@ scope in the results. Pickup availability is never claimed.
   and photo recognition stay unavailable until the key is configured.
 - `npm test` fails: make sure you ran `npm install` first and did not edit
   `data/diet-rules.json`.
-- Live plans need `VOYAGER_KEY`, a usable curated recipe index, and reachable
-  publisher pages. `/api/health` reports the provider and eligible lead counts.
+- Live plans need `VOYAGER_KEY`; `/api/health` reports the provider and recipe
+  source status. Publisher pages may be unavailable, in which case Voyager can
+  generate a recipe subject to the server's diet and equipment checks.
 - Phone on same WiFi can't reach demo: server binds `0.0.0.0`, use your laptop's LAN IP, e.g. `http://192.168.1.x:3000`.
 
 ## Deploy to Vercel
@@ -424,6 +447,9 @@ ASU_AIR_BASE_URL=https://openai.rc.asu.edu/v1
 ASU_AIR_MODEL=llama4-scout-17b
 ASU_AIR_VISION_MODEL=qwen3-vl-32b-instruct
 ASU_AIR_VISION_VERIFY_MODEL=llama4-scout-17b
+ASU_AIR_RECIPE_PLANNING_MODEL=gemma4-31b-it
+# Optional; defaults to ASU_AIR_RECIPE_PLANNING_MODEL.
+# ASU_AIR_RECIPE_REPAIR_MODEL=
 KROGER_CLIENT_ID=your-kroger-client-id
 KROGER_CLIENT_SECRET=your-kroger-client-secret
 ```
@@ -451,11 +477,12 @@ or connect a custom domain.
 
 ## Planning and the pantry
 
-Plans use request-scoped verified recipe IDs and server-validated equipment,
-ingredients, dietary restrictions, exact source times, and citations. The model
-still creates the plan; there is no local fallback if Voyager or live recipe
-search fails. A saved recipe request must still have enough verified candidates
-for every requested dinner.
+Plans can use verified source recipes, AI adaptations, or generated recipes.
+The server validates ingredients, equipment, and dietary restrictions for all
+returned dinners. Only sourced recipes have exact publisher times; adapted and
+generated times are estimates. There is no local planning fallback if Voyager is
+unavailable. A saved sourced or adapted recipe request keeps its actual source
+title and saved recipe details for validation.
 
 The browser sends pantry names only — no amounts. The Plan lists each missing
 ingredient once and names the dinners that need it. The student chooses Shop

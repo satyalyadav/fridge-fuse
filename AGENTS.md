@@ -49,8 +49,9 @@ a failing test blocks the deploy.
   The pantry is a permanent side panel on wide screens and a drawer on phones.
   `body[data-view]` is the only view switch.
 - `lib/live-recipes.js` — public-page fetch, Recipe JSON-LD verification, and
-  bounded safety filters. `lib/curated-recipe-discovery.js` ranks URL-only leads
-  from `data/curated-recipe-leads.json` before each request's live checks.
+  bounded safety filters. `lib/curated-recipe-discovery.js` combines the bounded
+  starter URLs in `data/curated-recipe-leads.json` with one pantry-driven RCP
+  Wikibooks search (up to four dynamic URLs) before live page checks.
 - `data/diet-rules.json` — dietary restrictions: student phrasings → a word-level
   `forbids` net with per-rule `allows` exceptions and advisory `notes`.
 - `test.js` — one flat script of `ok(...)` assertions, run in-process.
@@ -70,23 +71,35 @@ without changing behavior. Read the failing assertion's regex before "fixing" th
 `RUNTIME_IDS` in `test.js` is the small allowlist for elements created at runtime.
 
 **Voyager is required, not optional.** Planning (`/api/plan`) and photo recognition
-(`/api/vision`) fail loudly without `VOYAGER_KEY` rather than falling back to a local
-plan or demo data. Do not add a fallback that invents plans or prices — earlier
-commits deliberately removed those. Failures go to `reportFailure()` and surface at
-`/api/failures`.
+(`/api/vision`) fail loudly without `VOYAGER_KEY`; there is no local or demo
+planning fallback. Voyager may generate a recipe when no verified source fits,
+but must never supply a grocery price. Failures go to `reportFailure()` and
+surface at `/api/failures`.
 
-**Recipes are grounded to live verified candidates.** Each planning request ranks
-the URL-only curated index, fetches public HTTPS pages, verifies Recipe JSON-LD,
-and applies time/equipment/diet filters before Voyager selects a candidate ID.
-Voyager does not receive publisher directions or write final recipe steps. The
-server uses the exact verified ingredient set and ordered JSON-LD directions,
-then adds the publisher link and visible credit. RCP's page attribution and
-license notice must remain intact. Other listed publishers have no verified reuse
-permission; credit is not permission. This is a hackathon display path pending
-reuse-rights review, not a claim that source text is legally cleared. Unsafe URLs,
-redirects, malformed pages, prompt-injection text, and diet-violating source facts
-are rejected. There is no search API key or Tavily fallback, static recipe
-catalog, or model-invented URL fallback.
+**Recipes can be sourced, adapted, or generated.** Each planning request starts
+from the bounded curated URL pool and uses at most one pantry-driven RCP
+`/search` (`source=wikibooks`) lookup for up to four fresh dynamic URLs. Search
+results are cached for five minutes. Public HTTPS pages are freshly checked for
+Recipe JSON-LD before they can ground a sourced or adapted recipe. Sourced meals
+use the verified ingredients and directions with the publisher citation.
+Adapted meals use a verified source citation and visible credit with AI-authored
+directions and an adaptation note. Generated meals have no publisher source and
+must be labeled as AI-created. Adapted and generated cooking times are estimates
+and must be labeled. The server may raise an authored estimate to cover all stated
+sequential timers plus two minutes for prep and plating; reject it if that exceeds
+the user's limit. Sourced publisher times remain exact. RCP's page attribution
+and license notice must remain intact. Other listed publishers have no verified
+reuse permission; credit is not permission. This is a hackathon display path
+pending reuse-rights review, not a claim that source text is legally cleared.
+Unsafe URLs, redirects, malformed
+pages, prompt-injection text, and diet-violating source facts are rejected.
+Dietary and equipment checks apply to all returned recipes. Recipe generation
+does not imply a live Shop total fits the profile budget.
+For authored dinners of 20 minutes or less, mature beans and chickpeas must be
+named canned or cooked; do not infer preparation from a step that drains them.
+Clearly prepared products such as hummus and bean dip, fresh green beans, and
+bean sprouts are outside this check. Clearly directed plain salt and pepper are
+added to the ingredient list; optional, negated, and alternative mentions are not.
 
 **Dietary restrictions are enforced, not requested.** `data/diet-rules.json` drives
 both the prompt and a post-generation check (`assertPlanRespectsDiet()`) that scans
@@ -160,10 +173,18 @@ chip, or disabled state; "No meal plan yet" as a label is the pattern to avoid.
 
 ## Models
 
-Set via env, defaults in `.env.example`. Text planning uses `llama4-scout-17b`; photo
-recognition uses `qwen3-vl-32b-instruct`; a second independent verification pass uses
-`ASU_AIR_VISION_VERIFY_MODEL` (defaults to the text model). Tests pin all three — the
-split between text and vision models is asserted, not incidental.
+Set via env, defaults in `.env.example`. General text/chat uses `ASU_AIR_MODEL`
+(defaults to `llama4-scout-17b`); photo recognition uses `qwen3-vl-32b-instruct`;
+a second independent verification pass uses `ASU_AIR_VISION_VERIFY_MODEL` (defaults
+to the general text model). Recipe drafting uses `ASU_AIR_RECIPE_PLANNING_MODEL`
+(defaults to `gemma4-31b-it`), and the one allowed repair defaults to that same
+recipe model unless `ASU_AIR_RECIPE_REPAIR_MODEL` overrides it. There is no
+reviewer: plans serve after deterministic checks, and the single repair fixes
+validation failures only. Keep general text and both photo models separate
+from recipe drafting. Tests pin these model roles and their
+request time bounds. `/api/plan` has a shared 110-second deadline including
+discovery and saved-source verification; planner and repair calls each
+have a 30-second ceiling clamped to the time remaining.
 
 Photo recognition is deliberately conservative: an item is auto-added only with a safe
 crop, a whole unobstructed object at high confidence, *and* an independent second pass

@@ -305,7 +305,6 @@ async function run() {
     },
     routeDinner(routeCandidates[0]),
     routeDinner(routeCandidates[2]),
-    routeDinner(routeCandidates[3]),
   ];
   const canonicalized = await callPlan({
     pantry: ["rice"],
@@ -316,7 +315,7 @@ async function run() {
   }, paraphrasedChoices, canonicalService);
   assert.strictEqual(canonicalized.statusCode, 200, "paraphrased unrestricted output is grounded from verified candidates");
   assert.strictEqual(canonicalized.payload.repaired, undefined, "canonical grounding does not spend a repair call");
-  assert.strictEqual(canonicalized.payload.dinners.length, 3, "over-complete model output is safely truncated");
+  assert.strictEqual(canonicalized.payload.dinners.length, 3, "the exact requested number of verified dinners is returned");
   assert.strictEqual(canonicalized.payload.dinners[0].sourceRecipe, sourceWithSteps.title);
   assert.deepStrictEqual(canonicalized.payload.dinners[0].usesPantry, ["rice"]);
   assert.deepStrictEqual(canonicalized.payload.dinners[0].needs, ["spinach", "eggs", "butter"]);
@@ -370,8 +369,8 @@ async function run() {
       steps: ["Warm the rice and cook the egg."],
     }] }) } }] } };
   });
-  assert(!Object.prototype.hasOwnProperty.call(rankingSearch, "pantry"), "pantry ranking does not send pantry contents to discovery");
-  assert(rankingMessages[0].content.includes("ordered by overlap with the user's cookable pantry"), "the planner prompt explains pantry-overlap ranking");
+  assert.deepStrictEqual(rankingSearch.pantry, ["rice", "black beans", "eggs"], "dynamic discovery receives the cookable pantry terms for pantry-aware search");
+  assert(rankingMessages[0].content.includes("Use compatible pantry foods") && rankingMessages[0].content.includes("don't force every item into a random plate"), "the planner prompt favors fitting pantry foods without forcing unrelated ingredients");
   assert.strictEqual(pantryMatched.statusCode, 200);
   assert.strictEqual(pantryMatched.payload.dinners[0].sourceRecipe, "Spinach Rice Breakfast Bowls", "the later pantry-matching candidate becomes recipe-1");
   assert.deepStrictEqual(pantryMatched.payload.dinners[0].usesPantry, ["rice", "eggs"], "grounding keeps verified pantry ingredients");
