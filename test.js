@@ -2234,7 +2234,7 @@ async function runRouteChecks() {
 
   ok(clientSaid.length > 0, "public/app.js runs end to end against a stub DOM");
   ok(
-    clientSaid.some((line) => /Here are 2 dinner suggestions/.test(line)),
+    clientSaid.some((line) => /2 of 3 dinners work with your kitchen/.test(line)),
     `a successful plan reaches the chat (said: ${JSON.stringify(clientSaid)})`
   );
   ok(
