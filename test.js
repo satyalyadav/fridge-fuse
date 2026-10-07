@@ -1216,8 +1216,12 @@ async function runRouteChecks() {
         ],
       }] });
     });
-    ok(mixedMicrowaveStove.statusCode === 502 && mixedMicrowaveStoveCalls === 2,
-      "explicit stove use is still rejected when the student only has a microwave");
+    ok(mixedMicrowaveStove.statusCode === 200 && mixedMicrowaveStoveCalls === 2 &&
+      mixedMicrowaveStove.payload.requestedCount === 1 && mixedMicrowaveStove.payload.readyCount === 0 &&
+      mixedMicrowaveStove.payload.optionalCount === 1 && mixedMicrowaveStove.payload.incompleteCount === 0 &&
+      mixedMicrowaveStove.payload.dinners.length === 1 && mixedMicrowaveStove.payload.dinners[0].available === false &&
+      mixedMicrowaveStove.payload.dinners[0].missingEquipment.includes("stove") && mixedMicrowaveStove.payload.shoppingList.length === 0,
+    "a safe dinner that needs an unavailable stove is returned as an equipment advisory without grocery items");
 
     const prepAliasOwnership = await callDefaultPlan({
       pantry: ["tomatoes", "broccoli", "rice"], dinners: 1, maxTimeMin: 20, equipment: [],
