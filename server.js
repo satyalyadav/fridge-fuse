@@ -22,6 +22,7 @@ const {
 } = require("./lib/api-security");
 const { createGroceryOffersService } = require("./lib/grocery-offers");
 const { createGroceryMatcher } = require("./lib/grocery-matcher");
+const { extractDinnerCount } = require("./lib/chat-intents");
 const { flattenText: normalizeDietText, normalizeIngredient, normalizeIngredientOwnership } = require("./lib/text-normalize");
 const { createCuratedRecipeDiscovery, instructionTimeConflict } = require("./lib/curated-recipe-discovery");
 const {
@@ -1840,7 +1841,11 @@ async function handlePlanRequest(req, res, options = {}) {
   const offLimitsCtx = offLimitsPantry.length
     ? ` Pantry items you must NOT cook with or mention (they break the diet): ${offLimitsPantry.join(", ")}.`
     : "";
-  const requestedCount = swapping ? 1 : asDinners(dinners, 3);
+  const extractedDinnerCount = swapping ? { dinnerCount: null, unsupported: false } : extractDinnerCount(request);
+  if (extractedDinnerCount.unsupported) {
+    return res.status(400).json({ ok: false, failure: { message: "I can plan 1 to 7 dinners at a time. Choose a count in that range." } });
+  }
+  const requestedCount = swapping ? 1 : extractedDinnerCount.dinnerCount || asDinners(dinners, 3);
   const previousNames = swapping ? previousDinners.flatMap((dinner) => [dinner.sourceRecipe, dinner.title]) : [];
   const effectiveIncludeRecipe = swapping ? "" : String(includeRecipe || "");
   const safeExclude = [...new Map([...asStringArray(exclude, []), ...previousNames]
@@ -1985,12 +1990,12 @@ async function handlePlanRequest(req, res, options = {}) {
     return res.status(aiFailureStatus(out.failure)).json({ ok: false, failure: publicPlanFailure(out.failure, dietRules) });
   }
 
-  const finalize = (parsed) => {
+  const finalize = (parsed, { allowIncomplete = false } = {}) => {
     if (includedMeal) {
       const includeTitle = normalizeDietText(includedMeal.title);
       const position = parsed.dinners.findIndex((dinner) => normalizeDietText(dinner.title) === includeTitle);
-      if (position < 0) throw new Error(`The plan did not include saved dinner "${includedMeal.title}"`);
-      parsed.dinners[position] = includedMeal;
+      if (position < 0 && !allowIncomplete) throw new Error(`The plan did not include saved dinner "${includedMeal.title}"`);
+      if (position >= 0) parsed.dinners[position] = includedMeal;
     }
     let finalDinners = parsed.dinners;
     if (swapping) {
@@ -2007,7 +2012,7 @@ async function handlePlanRequest(req, res, options = {}) {
     assertPlanRespectsDiet(owned, dietRules);
     const priced = groundShoppingPlan(owned);
     assertPlanRespectsDiet(priced, dietRules);
-    if (effectiveIncludeRecipe && !priced.dinners.some((dinner) =>
+    if (!allowIncomplete && effectiveIncludeRecipe && !priced.dinners.some((dinner) =>
       normalizeDietText(dinner.sourceRecipe) === normalizeDietText(effectiveIncludeRecipe) ||
       normalizeDietText(dinner.title) === normalizeDietText(effectiveIncludeRecipe))) {
       throw new Error(`The plan did not include ${effectiveIncludeRecipe}`);
@@ -2016,6 +2021,342 @@ async function handlePlanRequest(req, res, options = {}) {
   };
 
   const content = out.data?.choices?.[0]?.message?.content;
+  if (!swapping) {
+    const validationOptions = {
+      candidates: selectionCandidates, pantry: cookablePantry,
+      equipment: safeEquipment, maxTimeMin: safeMaxTimeMin, dietRules,
+    };
+    const allSupportedEquipment = EQUIPMENT_OPTIONS.map((option) => option.id);
+    const slots = Array.from({ length: requestedCount }, (_, index) => ({
+      index, raw: undefined, meal: null, strictValid: false,
+      optionalFallback: null, optionalFallbackMissing: [], initialOptionalFallback: null,
+      initialOptionalFallbackMissing: [], issues: [], globalIssues: [], pinned: false, retained: false,
+    }));
+    let rawDinners = null;
+    let shapeIssue = "";
+    try {
+      const response = extractJson(String(content || ""));
+      if (response && typeof response === "object" && !Array.isArray(response) && Array.isArray(response.dinners)) {
+        rawDinners = response.dinners;
+        if (rawDinners.length !== requestedCount) {
+          shapeIssue = `The draft returned ${rawDinners.length} dinners; exactly ${requestedCount} were requested.`;
+        }
+      } else {
+        shapeIssue = `The draft did not contain a dinners array for the requested ${requestedCount}-dinner plan.`;
+      }
+    } catch {
+      shapeIssue = `The draft could not be read as JSON for the requested ${requestedCount}-dinner plan.`;
+    }
+
+    const slotIssueDetails = (raw, slotIndex, directError = "") => {
+      const source = JSON.stringify({ dinners: [raw] });
+      const diagnostics = hybridDinnerValidationIssues(source, validationOptions);
+      const details = diagnostics.map((issue) => String(issue).replace(/^Dinner\s+\d+\b:?\s*/i, "").trim());
+      if (directError) details.push(String(directError).replace(/^Dinner\s+\d+\b:?\s*/i, "").trim());
+      return [...new Set(details.filter(Boolean))].map((detail) => `Dinner ${slotIndex + 1}: ${detail}`);
+    };
+    const assessRawDinner = (raw, slotIndex) => {
+      const parsedContent = JSON.stringify({ dinners: [raw] });
+      let directError = "";
+      try {
+        const meal = parseHybridAiPlan(parsedContent, 1, validationOptions).dinners[0];
+        assertPlanRespectsDiet({ dinners: [meal] }, dietRules);
+        return { strictValid: true, meal, issues: [] };
+      } catch (error) {
+        directError = error.message || "Dinner failed validation";
+      }
+
+      let optionalFallback = null;
+      let optionalFallbackMissing = [];
+      try {
+        const relaxed = parseHybridAiPlan(parsedContent, 1, {
+          ...validationOptions, equipment: allSupportedEquipment,
+        }).dinners[0];
+        assertPlanRespectsDiet({ dinners: [relaxed] }, dietRules);
+        const missing = [...new Set((relaxed.equip || []).filter((tool) =>
+          !recipeFitsEquipment({ equipment: [tool] }, safeEquipment)
+        ))];
+        if (missing.length) {
+          optionalFallback = relaxed;
+          optionalFallbackMissing = missing;
+        }
+      } catch {
+        // Relaxed validation only makes equipment optional; every other check still applies.
+      }
+      return {
+        strictValid: false, meal: null, issues: slotIssueDetails(raw, slotIndex, directError),
+        optionalFallback, optionalFallbackMissing,
+      };
+    };
+
+    if (Array.isArray(rawDinners)) {
+      slots.forEach((slot) => {
+        if (slot.index >= rawDinners.length) {
+          slot.issues.push(`Dinner ${slot.index + 1}: no dinner was returned for this slot.`);
+          return;
+        }
+        slot.raw = rawDinners[slot.index];
+        const result = assessRawDinner(slot.raw, slot.index);
+        Object.assign(slot, result);
+        slot.initialOptionalFallback = result.optionalFallback;
+        slot.initialOptionalFallbackMissing = result.optionalFallbackMissing;
+      });
+    } else {
+      slots.forEach((slot) => slot.issues.push(`Dinner ${slot.index + 1}: no dinner could be read from the draft.`));
+    }
+
+    let includedMealSlot = -1;
+    if (includedMeal) {
+      const includeTitle = normalizeDietText(includedMeal.title);
+      includedMealSlot = slots.findIndex((slot) => normalizeDietText(slot.raw?.title) === includeTitle);
+      if (includedMealSlot < 0) includedMealSlot = requestedCount - 1;
+      const slot = slots[includedMealSlot];
+      slot.meal = includedMeal;
+      slot.strictValid = true;
+      slot.optionalFallback = null;
+      slot.optionalFallbackMissing = [];
+      slot.initialOptionalFallback = null;
+      slot.initialOptionalFallbackMissing = [];
+      slot.issues = [];
+      slot.pinned = true;
+    }
+
+    let includeRecipeSlot = -1;
+    const slotMatchesIncludeRecipe = (slot) => {
+      const meal = slot.strictValid ? slot.meal : slot.optionalFallback;
+      return !!meal && (normalizeDietText(meal.sourceRecipe) === normalizeDietText(effectiveIncludeRecipe) ||
+        normalizeDietText(meal.title) === normalizeDietText(effectiveIncludeRecipe));
+    };
+    if (effectiveIncludeRecipe && !slots.some(slotMatchesIncludeRecipe)) {
+      includeRecipeSlot = includedMealSlot >= 0
+        ? slots.findIndex((slot, index) => index !== includedMealSlot && !slot.pinned)
+        : requestedCount - 1;
+      if (includeRecipeSlot < 0) includeRecipeSlot = requestedCount - 1;
+      const slot = slots[includeRecipeSlot];
+      if (!slot.pinned) {
+        slot.strictValid = false;
+        slot.meal = null;
+        slot.optionalFallback = null;
+        slot.optionalFallbackMissing = [];
+        slot.issues.push(`Dinner ${includeRecipeSlot + 1}: must include the requested verified recipe "${effectiveIncludeRecipe}".`);
+      }
+    }
+
+    slots.forEach((slot) => { slot.retained = slot.strictValid && !slot.pinned; });
+
+    const checkCombinedSlots = () => {
+      const titles = new Set();
+      const sources = new Set();
+      const signatures = new Set();
+      const consider = (slot, meal, optional) => {
+        slot.globalIssues = [];
+        const titleKey = normalizeDietText(meal.title);
+        const sourceKey = meal.sourceUrl ? normalizeRecipeWords(meal.sourceUrl) : "";
+        const signature = `${[...(meal.usesPantry || []), ...(meal.needs || [])].map(normalizeIngredient).sort().join("|")}\n${(meal.steps || []).map(normalizeDietText).join("|")}`;
+        const repeated = findRepeatedExclusion({ dinners: [meal] }, safeExclude);
+        if (repeated) slot.globalIssues.push(`Dinner ${slot.index + 1}: ${repeated.replace(/^dinner 1\s*/i, "")}`);
+        if (titleKey && titles.has(titleKey)) slot.globalIssues.push(`Dinner ${slot.index + 1}: repeats another dinner title.`);
+        if (sourceKey && sources.has(sourceKey)) slot.globalIssues.push(`Dinner ${slot.index + 1}: repeats a verified recipe source.`);
+        if (meal.provenanceType !== "sourced" && signatures.has(signature)) {
+          slot.globalIssues.push(`Dinner ${slot.index + 1}: repeats another generated meal.`);
+        }
+        if (slot.globalIssues.length) {
+          slot.issues.push(...slot.globalIssues);
+          if (optional) {
+            slot.optionalFallback = null;
+            slot.optionalFallbackMissing = [];
+          } else {
+            slot.strictValid = false;
+            slot.meal = null;
+            slot.retained = false;
+          }
+          return false;
+        }
+        if (titleKey) titles.add(titleKey);
+        if (sourceKey) sources.add(sourceKey);
+        if (meal.provenanceType !== "sourced") signatures.add(signature);
+        return true;
+      };
+      const strictSlots = [...slots].filter((slot) => slot.strictValid)
+        .sort((left, right) => (left.pinned ? 0 : left.retained ? 1 : 2) - (right.pinned ? 0 : right.retained ? 1 : 2) || left.index - right.index);
+      for (const slot of strictSlots) consider(slot, slot.meal, false);
+
+      // Advisory recipes enter only after every ready dinner has claimed its identity.
+      const optionalSlots = slots.filter((slot) => !slot.strictValid && (slot.optionalFallback || slot.initialOptionalFallback))
+        .sort((left, right) => left.index - right.index);
+      for (const slot of optionalSlots) {
+        const fallbacks = [
+          { meal: slot.optionalFallback, missing: slot.optionalFallbackMissing },
+          { meal: slot.initialOptionalFallback, missing: slot.initialOptionalFallbackMissing },
+        ].filter((entry, index, all) => entry.meal && all.findIndex((candidate) => candidate.meal === entry.meal) === index);
+        for (const fallback of fallbacks) {
+          if (!consider(slot, fallback.meal, true)) continue;
+          slot.optionalFallback = fallback.meal;
+          slot.optionalFallbackMissing = fallback.missing;
+          break;
+        }
+      }
+    };
+    checkCombinedSlots();
+
+    const failedIndices = () => slots.filter((slot) => !slot.strictValid && !slot.pinned).map((slot) => slot.index);
+    const initialFailedIndices = failedIndices();
+    const shouldRepair = initialFailedIndices.length > 0;
+    let repaired = false;
+    let repairFailure = null;
+
+    if (shouldRepair) {
+      const originalContent = String(content || "").slice(0, 20000);
+      const targetedContext = `Replace only these failed dinner slots, in this order: ${initialFailedIndices.map((index) => index + 1).join(", ")}. Return exactly ${initialFailedIndices.length} replacement dinners. Keep every other validated dinner unchanged. The source candidates keep their original recipeId numbering; do not renumber them.`;
+      const retainedDinners = slots.filter((slot) => slot.strictValid || slot.pinned).map((slot) => {
+        const meal = slot.pinned ? includedMeal : slot.meal;
+        return `slot ${slot.index + 1}: ${JSON.stringify(meal?.title || "")} ${meal?.sourceUrl ? `(${meal.sourceUrl})` : ""}`;
+      });
+      const slotDetails = initialFailedIndices.flatMap((index) => {
+        const slot = slots[index];
+        return [
+          `Slot ${index + 1} draft: ${JSON.stringify(slot.raw === undefined ? null : slot.raw)}`,
+          ...(slot.issues.length ? slot.issues : [`Dinner ${index + 1}: did not pass validation.`]),
+        ];
+      });
+      const repairContext = [
+        shapeIssue ? `Plan shape issue: ${shapeIssue}` : "",
+        targetedContext,
+        retainedDinners.length ? `Do not repeat or change these retained recipes:\n${retainedDinners.map((entry) => `- ${entry}`).join("\n")}` : "",
+        slotDetails.length ? `Dinner-by-dinner validation issues; fix all of these:\n${slotDetails.map((issue) => `- ${issue}`).join("\n")}` : "",
+      ].filter(Boolean).join("\n\n");
+      let repair;
+      try {
+        repair = await chat([
+          { role: "system", content: systemMessage },
+          { role: "user", content: userContext },
+          { role: "assistant", content: originalContent },
+          { role: "user", content: `Repair only the failed dinner slots. Keep every validated dinner and the exact included saved dinner unchanged. Fix all listed issues. When a dinner requires unavailable equipment, rewrite its cooking method to use available equipment or choose another dinner; never merely change its equipment label. Do not reuse an excluded dinner or claim unverified recipe facts. Return a JSON object with a dinners array containing exactly the requested replacement dinners in the stated order. Keep source recipeId numbering aligned with the original verified candidate list.\n\n${repairContext}\n\nOriginal requirements: ${userContext}` },
+        ], { maxTokens: Math.max(2600, requestedCount * 1400), model: RECIPE_REPAIR_MODEL, timeoutMs: getRequestCallTimeout(PLAN_MODEL_CALL_TIMEOUT_MS) });
+      } catch (error) {
+        repairFailure = {
+          status: error.code === "plan-request-deadline" ? "timeout" : error.code || "error",
+          message: error.message || "The repair request failed.",
+        };
+      }
+      if (repair && !repair.ok) repairFailure = repair.failure || { status: "error", message: "The repair request failed." };
+
+      if (repair?.ok && initialFailedIndices.length) {
+        try {
+          const repairResponse = extractJson(String(repair.data?.choices?.[0]?.message?.content || ""));
+          const repairDinners = Array.isArray(repairResponse?.dinners) ? repairResponse.dinners : [];
+          let replacements = null;
+          if (repairDinners.length === initialFailedIndices.length) {
+            replacements = initialFailedIndices.map((_, replacementIndex) => repairDinners[replacementIndex]);
+          } else if (repairDinners.length === requestedCount) {
+            replacements = initialFailedIndices.map((slotIndex) => repairDinners[slotIndex]);
+          }
+          if (replacements) {
+            initialFailedIndices.forEach((slotIndex, replacementIndex) => {
+              const slot = slots[slotIndex];
+              if (slot.pinned) return;
+              const result = assessRawDinner(replacements[replacementIndex], slotIndex);
+              slot.raw = replacements[replacementIndex];
+              slot.strictValid = result.strictValid;
+              slot.retained = false;
+              slot.meal = result.meal;
+              slot.issues = result.issues;
+              if (result.strictValid) {
+                slot.optionalFallback = null;
+                slot.optionalFallbackMissing = [];
+              } else if (result.optionalFallback) {
+                slot.optionalFallback = result.optionalFallback;
+                slot.optionalFallbackMissing = result.optionalFallbackMissing;
+              }
+            });
+            repaired = true;
+          } else if (initialFailedIndices.length) {
+            repairFailure = { status: "parse-error", message: `Repair did not return ${initialFailedIndices.length} replacement dinners or a complete ${requestedCount}-dinner plan.` };
+          }
+        } catch (error) {
+          repairFailure = { status: "parse-error", message: `Could not read repaired dinner slots: ${error.message}` };
+        }
+      }
+      if (repairFailure) {
+        reportFailure("asu-air", "plan-repair", { ...repairFailure, initialMessage: shapeIssue || "Dinner validation failed." });
+      }
+    }
+
+    checkCombinedSlots();
+    if (effectiveIncludeRecipe && !slots.some(slotMatchesIncludeRecipe)) {
+      const optionalInclude = slots.find((slot) => !slot.pinned && slot.initialOptionalFallback &&
+        (normalizeDietText(slot.initialOptionalFallback.sourceRecipe) === normalizeDietText(effectiveIncludeRecipe) ||
+          normalizeDietText(slot.initialOptionalFallback.title) === normalizeDietText(effectiveIncludeRecipe)));
+      if (optionalInclude) {
+        optionalInclude.strictValid = false;
+        optionalInclude.meal = null;
+        optionalInclude.retained = false;
+        optionalInclude.optionalFallback = optionalInclude.initialOptionalFallback;
+        optionalInclude.optionalFallbackMissing = optionalInclude.initialOptionalFallbackMissing;
+        checkCombinedSlots();
+      }
+    }
+    if (includedMeal && (!slots[includedMealSlot]?.strictValid ||
+        normalizeDietText(slots[includedMealSlot]?.meal?.title) !== normalizeDietText(includedMeal.title))) {
+      return res.status(422).json({ ok: false, failure: { message: "The saved dinner conflicts with another required dinner and cannot be included safely." } });
+    }
+    if (effectiveIncludeRecipe && !slots.some(slotMatchesIncludeRecipe)) {
+      return res.status(422).json({ ok: false, failure: { message: `The plan did not include ${effectiveIncludeRecipe}.` } });
+    }
+
+    const availableSlots = slots.filter((slot) => slot.strictValid || slot.optionalFallback);
+    if (!availableSlots.length) {
+      const failure = reportFailure("asu-air", "plan-repair", {
+        status: repairFailure?.status || "validation-error",
+        message: repairFailure?.message || slots.flatMap((slot) => slot.issues).slice(0, 4).join("; ") || "No dinner passed validation.",
+      });
+      return res.status(aiFailureStatus(failure)).json({ ok: false, failure: publicPlanFailure(failure, dietRules) });
+    }
+
+    try {
+      const returnedCards = availableSlots.map((slot) => ({
+        meal: slot.strictValid ? slot.meal : slot.optionalFallback,
+        slot: slot.index + 1,
+      }));
+      const finalizedCards = finalize({ dinners: returnedCards.map((entry) => entry.meal), notes: "" }, { allowIncomplete: true });
+      const finalDinners = finalizedCards.dinners;
+      const cardByTitle = new Map(returnedCards.map((entry) => [normalizeDietText(entry.meal.title), entry]));
+      const dinnersWithAvailability = finalDinners.map((meal) => {
+        const source = cardByTitle.get(normalizeDietText(meal.title));
+        const missingEquipment = [...new Set((meal.equip || []).filter((tool) =>
+          !recipeFitsEquipment({ equipment: [tool] }, safeEquipment)
+        ))];
+        return {
+          ...meal,
+          suggestionSlot: source?.slot || 0,
+          available: missingEquipment.length === 0,
+          missingEquipment,
+        };
+      }).sort((left, right) => left.suggestionSlot - right.suggestionSlot);
+      const readyDinners = dinnersWithAvailability.filter((meal) => meal.available);
+      const readyOwned = reconcilePantryOwnership({ dinners: readyDinners, notes: "" }, cookablePantry);
+      assertPlanRespectsDiet(readyOwned, dietRules);
+      const readyShoppingPlan = groundShoppingPlan(readyOwned);
+      assertPlanRespectsDiet(readyShoppingPlan, dietRules);
+      const incompleteSlots = slots.filter((slot) => !slot.strictValid && !slot.optionalFallback).map((slot) => slot.index + 1);
+      const response = {
+        ok: true, model: repaired ? RECIPE_REPAIR_MODEL : RECIPE_PLANNING_MODEL,
+        diet: safeDiet, dietRules: dietRules.map((rule) => rule.id), offLimitsPantry,
+        requestedCount, readyCount: readyDinners.length,
+        optionalCount: dinnersWithAvailability.length - readyDinners.length,
+        incompleteCount: incompleteSlots.length, incompleteSlots,
+        ...readyShoppingPlan, dinners: dinnersWithAvailability,
+      };
+      if (repaired) response.repaired = true;
+      return res.json(response);
+    } catch (error) {
+      const failure = reportFailure("asu-air", "plan-repair", {
+        status: "validation-error", message: `The validated dinner results could not be combined safely: ${error.message}`,
+      });
+      return res.status(aiFailureStatus(failure)).json({ ok: false, failure: publicPlanFailure(failure, dietRules) });
+    }
+  }
+
   try {
     const parsed = parseHybridAiPlan(content, requestedCount, {
       candidates: selectionCandidates,

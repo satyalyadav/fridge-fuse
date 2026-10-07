@@ -108,7 +108,8 @@ function safeMeal(meal) {
     timeIsEstimate: meal.timeIsEstimate === true || provenanceType === "adapted" || generated,
     timeMin: safeNumber(meal.timeMin, 0, 180),
     steps: safeStrings(meal.steps, 30, 700), equip: safeStrings(meal.equip, 20), usesPantry: safeStrings(meal.usesPantry).map(repairStoredIngredientName),
-    needs: safeStrings(meal.needs).map(repairStoredIngredientName), savedAt: safeText(meal.savedAt)
+    needs: safeStrings(meal.needs).map(repairStoredIngredientName), savedAt: safeText(meal.savedAt),
+    suggestionSlot: Number.isInteger(meal.suggestionSlot) && meal.suggestionSlot >= 1 && meal.suggestionSlot <= 7 ? meal.suggestionSlot : 0
   };
 }
 
@@ -440,14 +441,13 @@ function preferenceMentions(message, options) {
   return mentions;
 }
 
-function parseMessage(message) {
+function parseMessage(message, dinnerCount = null) {
   const lower = message.toLowerCase();
   const budget = lower.match(/\$(\d+(?:\.\d{1,2})?)|(\d+(?:\.\d{1,2})?)\s*(?:dollars|bucks)/);
   if (budget) state.constraints.budget = Number(budget[1] || budget[2]);
 
-  const NUMBER_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7 };
-  const dinners = lower.match(/\b([1-7]|one|two|three|four|five|six|seven)\s+(?:easy\s+)?(?:dinners?|meals?|nights?)\b/);
-  if (dinners) state.constraints.dinners = NUMBER_WORDS[dinners[1]] ?? Number(dinners[1]);
+  const dinners = Number.isInteger(dinnerCount) && dinnerCount >= 1 && dinnerCount <= 7;
+  if (dinners) state.constraints.dinners = dinnerCount;
 
   const time = lower.match(/\b(\d{1,3})\s*(?:minutes?|mins?)\b/);
   if (time) state.constraints.maxTimeMin = Number(time[1]);
@@ -593,6 +593,15 @@ function suggestionFitsConstraints(meal, constraints) {
     (meal.equip || []).every((item) => constraints.equipment.includes(item));
 }
 
+function missingSuggestionEquipment(meal, constraints) {
+  if (!constraints) return [...new Set(meal?.equip || [])];
+  return [...new Set((meal?.equip || []).filter((item) => !constraints.equipment.includes(item)))];
+}
+
+function suggestionEquipmentLabel(id) {
+  return PREFERENCES.equipment.find((option) => option.id === id)?.label || id;
+}
+
 function renderRecipeCredit(meal, tag = "p") {
   if (!meal.sourceRecipe || !meal.source) return "";
   const notice = meal.sourceUsageMode === "publisher-directions-with-link-credit"
@@ -663,21 +672,27 @@ function renderRecipeSuggestions({ scroll = false } = {}) {
     if (!article) continue;
     const current = message.id === activeMessage?.id && suggestionContextIsCurrent();
     const swapping = current && Boolean(state.suggestionSwap);
+    const anyOptional = message.suggestions.some((meal) => missingSuggestionEquipment(meal, state.constraints).length > 0);
     const cardHtml = message.suggestions.map((meal, index) => {
       const pantry = meal.usesPantry || [];
       const needs = meal.needs || [];
+      const missingEquipment = missingSuggestionEquipment(meal, state.constraints);
+      const optional = missingEquipment.length > 0;
       const isInPlan = swapping
         ? state.plan?.dinners?.[state.suggestionSwap.index] && recipeKey(state.plan.dinners[state.suggestionSwap.index]) === recipeKey(meal)
         : Boolean(state.plan?.dinners?.some((dinner) => recipeKey(dinner) === recipeKey(meal)));
       const action = swapping ? (isInPlan ? "Replaced" : "Replace dinner") : (isInPlan ? "In Plan" : "Add to Plan");
+      const warning = optional
+        ? `<p class="suggestion-equipment-warning" role="note"><strong>Needs more equipment:</strong> ${escapeHtml(missingEquipment.map(suggestionEquipmentLabel).join(", "))}. This recipe cannot be added until that equipment is available.</p>`
+        : "";
       return `
         <article class="suggestion-card">
           <div class="suggestion-heading">
             <div>
-              <p class="eyebrow">Recipe ${String(index + 1).padStart(2, "0")}</p>
+              <p class="eyebrow">Recipe ${String(meal.suggestionSlot || index + 1).padStart(2, "0")}</p>
               <h3>${escapeHtml(meal.title)}</h3>
             </div>
-            <button type="button" data-suggestion-action="${swapping ? "replace" : "add"}" data-suggestion-message="${escapeHtml(message.id)}" data-index="${index}" ${!current || isInPlan ? "disabled" : ""}>${action}</button>
+            <button type="button" data-suggestion-action="${swapping ? "replace" : "add"}" data-suggestion-message="${escapeHtml(message.id)}" data-index="${index}" ${!current || isInPlan || optional ? "disabled" : ""}>${action}</button>
           </div>
           <p class="suggestion-meta">${escapeHtml(recipeTimeLabel(meal, "minutes"))} · ${escapeHtml((meal.equip || []).join(" + ") || "no cooking equipment")}</p>
           <div class="suggestion-ingredients">
@@ -685,6 +700,7 @@ function renderRecipeSuggestions({ scroll = false } = {}) {
             <p><strong>To buy</strong><span>${needs.length ? escapeHtml(needs.join(", ")) : "Nothing"}</span></p>
           </div>
           ${renderSuggestionCitation(meal)}
+          ${warning}
           <div class="suggestion-directions">
             <strong>Directions</strong>
             <ol>${meal.steps.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol>
@@ -694,7 +710,7 @@ function renderRecipeSuggestions({ scroll = false } = {}) {
     const suggestionMarkup = `
       <section class="recipe-suggestions" aria-label="Recipe suggestions">
         <div class="suggestions-heading">
-          <p class="eyebrow">Made for your kitchen</p>
+          <p class="eyebrow">${anyOptional ? "Dinner ideas" : "Made for your kitchen"}</p>
           ${current ? "" : "<p class=\"suggestions-stale\">Earlier recipe suggestions are kept here for context. Ask for fresh choices before adding one.</p>"}
         </div>
         ${cardHtml}
@@ -714,6 +730,7 @@ function addSuggestedDinnerToPlan(index, suggestionMessageId = "") {
   if (suggestionMessageId && activeSuggestionMessage()?.id !== suggestionMessageId) return false;
   const meal = state.suggestions[index];
   if (!meal) return false;
+  if (missingSuggestionEquipment(meal, state.suggestionConstraints).length) return false;
   if (!suggestionContextIsCurrent() || !suggestionFitsConstraints(meal, state.suggestionConstraints)) {
     renderRecipeSuggestions();
     toast("These choices used older preferences. Ask for new choices before adding one.", "error");
@@ -887,7 +904,9 @@ async function handleMessage(message) {
     }
     if (parsed.clarification) { addAssistantMessage(parsed.clarification); return; }
     const confirmation = applyChatActions(parsed.actions);
-    parseMessage(clean);
+    parseMessage(clean, parsed.requestPlan && parsed.swapIndex === null && !parsed.unsupportedDinnerCount
+      ? parsed.dinnerCount
+      : null);
     if (parsed.planToShop) {
       const planItems = state.plan?.shoppingList || [];
       if (!planItems.length) {
@@ -902,6 +921,11 @@ async function handleMessage(message) {
     if (confirmation) addAssistantMessage(confirmation);
     if (!parsed.requestPlan) {
       if (!confirmation && !parsed.planToShop) addAssistantMessage("Preferences noted. Ask me to build a meal plan when you want one.");
+      setView("chat");
+      return;
+    }
+    if (parsed.unsupportedDinnerCount) {
+      addAssistantMessage("I can plan 1 to 7 dinners at a time. Choose a count in that range.");
       setView("chat");
       return;
     }
@@ -991,8 +1015,13 @@ async function buildPlan(request = "") {
       return;
     }
     const swapIndex = Number.isInteger(options.swapIndex) ? options.swapIndex : null;
-    const proposed = swapIndex === null ? result.dinners.slice(0, 7) : [result.dinners[swapIndex]].filter(Boolean);
-    const suggestions = proposed.map(safeSuggestionMeal).filter((meal) => meal && suggestionFitsConstraints(meal, snapshot.constraints));
+    const requestedCount = Number.isInteger(result.requestedCount) && result.requestedCount >= 1 && result.requestedCount <= 7
+      ? result.requestedCount
+      : snapshot.constraints.dinners;
+    const proposed = swapIndex === null ? result.dinners.slice(0, requestedCount) : [result.dinners[swapIndex]].filter(Boolean);
+    const suggestions = proposed.map(safeSuggestionMeal).filter((meal) => meal &&
+      Number(meal.timeMin) <= Number(snapshot.constraints.maxTimeMin) &&
+      (swapIndex === null || suggestionFitsConstraints(meal, snapshot.constraints)));
     if (!suggestions.length) {
       addAssistantMessage("I couldn't find a recipe suggestion for those preferences.", result.note || "Try more time, more equipment, or fewer restrictions.");
       return;
@@ -1021,7 +1050,16 @@ async function buildPlan(request = "") {
       renderRecipeSuggestions({ scroll: true });
       return;
     }
-    const countText = `Here ${suggestions.length === 1 ? "is" : "are"} ${suggestions.length} dinner${suggestions.length === 1 ? " suggestion" : " suggestions"}.`;
+    const readyCount = suggestions.filter((meal) => suggestionFitsConstraints(meal, snapshot.constraints)).length;
+    const optionalCount = suggestions.length - readyCount;
+    const missingCount = Math.max(0, requestedCount - suggestions.length);
+    const countText = optionalCount || missingCount
+      ? [
+        `${readyCount} of ${requestedCount} dinners work with your kitchen.`,
+        optionalCount ? `${optionalCount} ${optionalCount === 1 ? "dinner needs" : "dinners need"} extra equipment.` : "",
+        missingCount ? `${missingCount} more ${missingCount === 1 ? "dinner still needs" : "dinners still need"} a safe recipe.` : "",
+      ].filter(Boolean).join(" ")
+      : `Here ${suggestions.length === 1 ? "is" : "are"} ${suggestions.length} dinner${suggestions.length === 1 ? " suggestion" : " suggestions"}.`;
     addAssistantMessage(
       `${countText}${soonText}${dietText}${offLimitsText}`,
       "Add the dinners you want to Plan. Leave the rest here in Chat.",

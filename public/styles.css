@@ -379,6 +379,17 @@ button.mobile-pantry-button { display: none; }
 .suggestion-directions > strong { color: var(--ink); }
 .suggestion-directions ol { margin: 6px 0 0; padding-left: 19px; }
 .suggestion-directions li { margin: 4px 0; }
+.suggestion-equipment-warning {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--gold-edge);
+  border-left: 4px solid var(--maroon);
+  background: var(--gold-soft);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.suggestion-equipment-warning strong { color: var(--maroon-deep); }
 .error-message .assistant-symbol {
   border-color: var(--alert);
   background: #fff1ef;
