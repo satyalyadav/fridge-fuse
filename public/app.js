@@ -315,11 +315,6 @@ function titleCase(value) {
   return String(value || "").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function capitalize(value) {
-  const text = String(value || "");
-  return text ? text[0].toUpperCase() + text.slice(1) : text;
-}
-
 function mealSequenceLabel(index) {
   return index === 0 ? "TONIGHT" : `NIGHT ${index + 1}`;
 }
@@ -410,7 +405,6 @@ function clausesOf(text) {
 }
 const HAVE_NEG = /\b(dont|doesnt|didnt|never) have\b|\bdo not have\b|\bno longer have\b/i;
 const NEG_WORD = /\b(dont|doesnt|didnt|cant|cannot|not|no|without|lacking|never|neither|nor)\b|\brid of\b/i;
-const AFFIRM_WORD = /\bhave\b|\bve\b|\bgot\b|\bwith\b|\bkeep\b|\bkept\b|\bbought\b|\bonly\b|\bjust\b|\bstill\b/i;
 
 function wordsBefore(text, index, n) {
   // Normalize apostrophes first so "don't" becomes one "dont" token.
@@ -421,9 +415,6 @@ function wordsBefore(text, index, n) {
 function negatedBefore(clause, matchIndex) {
   if (NEG_WORD.test(wordsBefore(clause, matchIndex, 3))) return true;
   return HAVE_NEG.test(clause.slice(0, matchIndex).toLowerCase());
-}
-function affirmedBefore(clause, matchIndex) {
-  return AFFIRM_WORD.test(wordsBefore(clause, matchIndex, 2));
 }
 function clauseMentionIndex(clause, name) {
   const m = clause.match(new RegExp(`\\b${name.replaceAll(" ", "\\s+")}\\b`, "i"));
@@ -1854,62 +1845,6 @@ function addGroceryItem(name, qty = 1) {
   }
   state.groceryList.push({ name: normalized, qty: Math.min(Math.max(1, qty), MAX_GROCERY_QTY) });
   return true;
-}
-
-function safeOfferUrl(value) {
-  try {
-    const url = new URL(String(value || ""));
-    return url.protocol === "http:" || url.protocol === "https:" ? url.href : "";
-  } catch {
-    return "";
-  }
-}
-
-function offerTimestamp(value) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "time unavailable" : date.toLocaleString();
-}
-
-function safeOfferBranch(value) {
-  if (!value || typeof value !== "object") return null;
-  const id = safeText(value.id, 120).trim();
-  const name = safeText(value.name, 240).trim();
-  const address = safeText(value.address, 400).trim();
-  const url = safeOfferUrl(value.url);
-  return {
-    id,
-    name,
-    address,
-    url,
-    valid: Boolean(id && name && url)
-  };
-}
-
-function localOfferDetails(source) {
-  const branch = safeOfferBranch(source?.branch);
-  const offerUrl = safeOfferUrl(source?.url);
-  const price = Number(source?.price);
-  const priced = Boolean(offerUrl) && Number.isFinite(price) && price > 0;
-  const retailer = safeText(source?.retailer, 80).trim();
-  if (source?.scope === "branch-advertised" && branch?.valid && priced) {
-    return { kind: "branch", branch, offerUrl, price, retailer, valid: true };
-  }
-  // A retailer-advertised price is the chain's advertised web price. It is
-  // shown with its own label because pickup at a nearby branch is not verified.
-  if (source?.scope === "retailer-advertised" && priced) {
-    return { kind: "retailer", branch: null, offerUrl, price, retailer, valid: true };
-  }
-  // The Kroger API returns the exact price for the selected store, not a page.
-  if (source?.scope === "store-api" && priced) {
-    return { kind: "retailer", branch: null, offerUrl, price, retailer, storeApi: true, valid: true };
-  }
-  return { kind: "none", branch, offerUrl, price: null, retailer, valid: false };
-}
-
-function redactUnverifiedPriceText(value) {
-  return safeText(value, 700)
-    .replace(/\$\s*\d{1,4}(?:,\d{3})*(?:\.\d{2})?/g, "[price omitted]")
-    .replace(/\b\d{1,4}(?:,\d{3})*\.\d{2}\b/g, "[price omitted]");
 }
 
 function renderGroceryList() {

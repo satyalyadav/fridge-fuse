@@ -39,11 +39,11 @@ a failing test blocks the deploy.
 
 ## Layout
 
-- `server.js` (~1100 lines) — the entire backend: Express app, Voyager/ASU AIR proxy,
+- `server.js` — the entire backend: Express app, Voyager/ASU AIR proxy,
   meal-plan grounding, live-offer service wiring, geocoding. Exports the `app`
   itself (so Vercel detects an Express deployment) with named helpers attached via
   `Object.assign` for tests.
-- `public/` — `index.html`, `app.js` (~1300 lines), `styles.css`. Plain DOM, no
+- `public/` — `index.html`, `app.js`, `styles.css`. Plain DOM, no
   bundler; `app.js` is served as-is. One view shows at a time at every width:
   Chat is home, Plan opens when a build finishes, Shop is the comparison view.
   The pantry is a permanent side panel on wide screens and a drawer on phones.
